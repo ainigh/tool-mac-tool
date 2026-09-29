@@ -1,0 +1,26 @@
+import Foundation
+import XCTest
+@testable import ToolCore
+
+final class ReleaseTests: XCTestCase {
+    func testVersionsCompareNumberByNumber() {
+        XCTAssertLessThan(Version("0.1.9")!, Version("0.1.12")!)
+        XCTAssertLessThan(Version("v0.1")!, Version("0.1.1")!)
+        XCTAssertEqual(Version("v1.2.0")!, Version("1.2")!)
+        XCTAssertNil(Version("dev"))
+        XCTAssertNil(Version("1.2-beta"))
+    }
+
+    func testDecodesGitHubsAnswer() throws {
+        let json = """
+        {"tag_name": "v0.1.14", "body": "Faster", "html_url": "https://github.com/o/r/releases/tag/v0.1.14",
+         "assets": [{"name": "ToolMacTool.zip", "browser_download_url": "https://github.com/o/r/releases/download/v0.1.14/ToolMacTool.zip", "size": 1}]}
+        """
+        let r = try Release.decode(Data(json.utf8))
+        XCTAssertEqual(r.version, Version("0.1.14"))
+        XCTAssertEqual(r.asset(named: "ToolMacTool.zip")?.browserDownloadURL.lastPathComponent, "ToolMacTool.zip")
+        XCTAssertTrue(r.isNewer(than: "0.1.9"))
+        XCTAssertFalse(r.isNewer(than: "0.1.14"))
+        XCTAssertFalse(r.isNewer(than: "0.0.0-dev"))
+    }
+}
