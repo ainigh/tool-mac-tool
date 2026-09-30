@@ -11,7 +11,8 @@ struct MenuView: View {
             HStack {
                 Text("Tools").font(.headline)
                 Spacer()
-                Text("v\(Updater.currentVersion)").font(.caption).foregroundStyle(.secondary)
+                Text("v\(Updater.currentVersion)" + (Updater.currentCommit.map { " · \($0.prefix(7))" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)
@@ -96,17 +97,19 @@ struct UpdateRow: View {
 
     var body: some View {
         switch updater.state {
-        case .available(let version):
-            MenuButton(title: "Update to v\(version)", symbol: "arrow.down.circle.fill", tint: .accentColor) {
+        case .available(let update):
+            MenuButton(title: update.release.map { "Update to \($0.tag)" } ?? "Update (build \(update.commit.short) here)",
+                       symbol: "arrow.down.circle.fill", detail: update.commit.title, tint: .accentColor) {
                 updater.install()
             }
-        case .installing:
-            MenuButton(title: "Updating…", symbol: "arrow.triangle.2.circlepath", busy: true) {}
+        case .installing(let step):
+            MenuButton(title: step, symbol: "arrow.triangle.2.circlepath", busy: true) {}
         case .checking:
             MenuButton(title: "Checking for updates…", symbol: "arrow.clockwise", busy: true) {}
         case .upToDate:
-            MenuButton(title: "Check for updates", symbol: "arrow.clockwise",
-                       detail: "Up to date") { updater.check(userInitiated: true) }
+            MenuButton(title: "Check for updates", symbol: "arrow.clockwise", detail: "Up to date") {
+                updater.check(userInitiated: true)
+            }
         case .failed(let why):
             MenuButton(title: "Check for updates", symbol: "arrow.clockwise", detail: why) {
                 updater.check(userInitiated: true)

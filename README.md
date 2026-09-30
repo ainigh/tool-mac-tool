@@ -3,32 +3,44 @@
 A wrench icon in the macOS menu bar with a dropdown of small tools. New tools get added over time;
 the app updates itself from GitHub.
 
-It's a native Mac app (Swift, SwiftUI and AppKit). You never build it: GitHub Actions builds it on
-every push and publishes a release when something lands on `main`. Install and updates download
-that release.
+It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
+builds it on every push and publishes a release when something lands on `main`. When GitHub hasn't
+built a version, the app builds it on your Mac by itself.
 
 ## Install
 
-You need gh (GitHub's command line tool) signed in, since the repository is private. Glass's installer 
-already set that up. Paste this in Terminal:
+Paste this in Terminal:
 
 ```bash
-gh api -H "Accept: application/vnd.github.raw" repos/ainigh/tool-mac-tool/contents/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ainigh/tool-mac-tool/main/install.sh | bash
 ```
 
-No gh yet? Run `brew install gh && gh auth login` first.
+It downloads the latest release into `~/Applications` and opens it. If there's no release yet, it
+builds from the source instead. That needs Apple's command line tools, which Homebrew installs; if
+they're missing, run `xcode-select --install`. `TMT_BRANCH=name` installs another branch, built
+here.
 
-The app goes into `~/Applications` and opens. It adds itself to your login items the first time
-it runs. You can turn that off in the menu under **Open at login**.
+The app adds itself to your login items the first time it runs. You can turn that off in the menu
+under **Open at login**.
 
 The first time a tool reads Downloads or writes to the Desktop, macOS asks whether to allow it.
 Click **Allow**. The app is ad-hoc signed and not notarized, so macOS may ask again after an update.
 
 ## Update
 
-Open the menu and choose **Check for updates**. The app also checks at launch and every 6 hours.
-When a newer release is out, the icon turns solid and the menu shows **Update to vX**. Clicking
-it downloads the release, replaces the app and reopens it. Running the install line again works too.
+The app follows the `main` branch. It checks at launch, every 6 hours, and when you choose
+**Check for updates**. When `main` has a commit this copy wasn't built from, the icon turns solid
+and the menu offers the update, with the commit's title under it:
+
+- **Update to v0.1.N**: GitHub already built that commit. The app downloads it, swaps itself and
+  reopens.
+- **Update (build abc1234 here)**: GitHub hasn't built it, either because the build is still
+  running or because Actions is off. The app downloads that commit's source, builds it for this
+  Mac, swaps itself and reopens. This takes a minute or two. The build output goes to
+  `~/Library/Logs/ToolMacTool/update.log`.
+
+The menu header shows the version and the commit you're on. Running the install line again works
+too.
 
 ## The tools
 
@@ -69,11 +81,11 @@ always-on-top panel: an `NSPanel` with a clear background and SwiftUI's material
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic, plus version and release parsing (testable anywhere)
+Sources/ToolCore/             the tools' logic, plus GitHub release and commit parsing (testable anywhere)
 Sources/ToolMacTool/          App.swift (menu bar), MenuView, HUD, Updater, Tools (the registry)
-scripts/build-app.sh          builds ToolMacTool.app / .zip (universal, ad-hoc signed)
+scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)
 .github/workflows/build.yml   test + build on every push; release on main
-install.sh                    download the latest release into ~/Applications
+install.sh                    install the latest release (or build main) into ~/Applications
 ```
 
 `swift test` runs the ToolCore tests on macOS or Linux.

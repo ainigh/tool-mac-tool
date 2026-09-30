@@ -2,30 +2,55 @@ import AppKit
 import Foundation
 import ToolCore
 
-/// Checks GitHub for a newer release (at launch and every 6 hours) and installs it in place.
+/// Keeps the app on the newest commit of `main`: checks at launch and every 6 hours, and installs
+/// on request.
 ///
-/// The repository is private, so it asks GitHub through the `gh` command (signed in with
-/// `gh auth login`, as the installer does). If the repository is ever public, it works without gh.
+/// Installing takes GitHub's prebuilt copy when there's a release made from that exact commit.
+/// Otherwise it downloads the source and builds it here with Apple's command line tools, which
+/// Homebrew already installed. So an update never has to wait for GitHub Actions.
+///
+/// It talks to GitHub through `gh` when it's installed (signed in: works for private repos too),
+/// else directly (public repo).
 @MainActor
 final class Updater: ObservableObject {
     static let repo = "ainigh/tool-mac-tool"
+    static let branch = "main"
     static let assetName = "ToolMacTool.zip"
+
     nonisolated static var currentVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0-dev"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    /// The commit this copy was built from (build-app.sh writes it into Info.plist).
+    nonisolated static var currentCommit: String? {
+        Bundle.main.object(forInfoDictionaryKey: "ToolMacToolCommit") as? String
+    }
+
+    struct Update: Equatable {
+        var commit: Commit
+        /// A release made from this commit, if GitHub built one.
+        var release: Release?
     }
 
     enum State: Equatable {
-        case idle, checking, upToDate, installing
-        case available(String)
+        case idle, checking, upToDate
+        case available(Update)
+        case installing(String)
         case failed(String)
     }
 
     @Published private(set) var state: State = .idle
-    private var latest: Release?
 
     var hasUpdate: Bool {
         if case .available = state { return true }
         return false
+    }
+
+    private var busy: Bool {
+        switch state {
+        case .checking, .installing: return true
+        default: return false
+        }
     }
 
     func start() {
@@ -39,20 +64,16 @@ final class Updater: ObservableObject {
     }
 
     func check(userInitiated: Bool) {
-        if state == .checking || state == .installing { return }
+        if busy { return }
         state = .checking
         Task.detached {
             let outcome: State
-            var release: Release?
             do {
-                let r = try Self.fetchLatest()
-                release = r
-                outcome = r.isNewer(than: Self.currentVersion) ? .available(r.version?.description ?? r.tag) : .upToDate
+                outcome = try Self.findUpdate().map { .available($0) } ?? .upToDate
             } catch {
                 outcome = .failed(error.localizedDescription)
             }
             await MainActor.run {
-                self.latest = release
                 // A quiet background check that fails shouldn't leave an error in the menu.
                 if case .failed = outcome, !userInitiated {
                     self.state = .idle
@@ -64,15 +85,103 @@ final class Updater: ObservableObject {
     }
 
     func install() {
-        guard let release = latest, hasUpdate else { return }
-        state = .installing
+        guard case .available(let update) = state else { return }
+        state = .installing("Updating…")
         Task.detached {
             do {
-                try Self.install(release)
+                try Self.install(update) { step in
+                    Task { @MainActor in self.state = .installing(step) }
+                }
             } catch {
+                Self.log("update failed: \(error.localizedDescription)")
                 await MainActor.run { self.state = .failed("Update failed: \(error.localizedDescription)") }
             }
         }
+    }
+
+    // MARK: - What's new
+
+    nonisolated static func findUpdate() throws -> Update? {
+        let head = try Commit.decode(api("repos/\(repo)/commits/\(branch)"))
+        if let mine = currentCommit, head.sha.hasPrefix(mine) || mine.hasPrefix(head.sha) { return nil }
+        // A copy with no commit recorded (an early build) updates to whatever main has.
+        let release = try? Release.decode(api("repos/\(repo)/releases/latest"))
+        let prebuilt = release.flatMap { $0.target == head.sha && $0.asset(named: assetName) != nil ? $0 : nil }
+        return Update(commit: head, release: prebuilt)
+    }
+
+    // MARK: - Installing
+
+    nonisolated static func install(_ update: Update, step: @escaping (String) -> Void) throws {
+        let fm = FileManager.default
+        let app = Bundle.main.bundleURL
+        guard app.pathExtension == "app" else { throw Problem("this copy isn't an app bundle (a dev build?)") }
+        // On the app's own volume, so the swap at the end is a rename.
+        let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
+        defer { try? fm.removeItem(at: work) }
+
+        let newApp: URL
+        if let release = update.release {
+            step("Downloading \(release.tag)…")
+            newApp = try downloadPrebuilt(release, into: work)
+        } else {
+            newApp = try buildFromSource(update.commit, in: work, step: step)
+        }
+        let newID = Bundle(url: newApp)?.bundleIdentifier
+        guard newID != nil, newID == Bundle.main.bundleIdentifier else {
+            throw Problem("the new copy isn't \(app.lastPathComponent)")
+        }
+        _ = try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
+
+        step("Restarting…")
+        _ = try fm.replaceItemAt(app, withItemAt: newApp)
+        log("updated to \(update.commit.short) (\(update.release == nil ? "built here" : "prebuilt"))")
+        // Start the new copy once this one has quit.
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+        relaunch.arguments = ["-c", "while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", app.path]
+        try relaunch.run()
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
+    nonisolated static func downloadPrebuilt(_ release: Release, into work: URL) throws -> URL {
+        let zip = work.appendingPathComponent(assetName)
+        if let gh = ghPath() {
+            try run(gh, ["release", "download", release.tag, "--repo", repo, "--pattern", assetName,
+                         "--dir", work.path, "--clobber"])
+        } else if let asset = release.asset(named: assetName) {
+            try download(asset.browserDownloadURL, to: zip)
+        }
+        let unpacked = work.appendingPathComponent("unpacked")
+        try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
+        try run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path])
+        return unpacked.appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
+    }
+
+    /// Downloads the commit's source and runs scripts/build-app.sh on it (for this Mac only).
+    nonisolated static func buildFromSource(_ commit: Commit, in work: URL,
+                                            step: (String) -> Void) throws -> URL {
+        guard (try? run("/usr/bin/xcode-select", ["-p"])) != nil else {
+            throw Problem("building needs Apple's command line tools: run xcode-select --install in Terminal")
+        }
+        step("Downloading \(commit.short)…")
+        let tarball = work.appendingPathComponent("source.tar.gz")
+        if let gh = ghPath() {
+            try run(gh, ["api", "repos/\(repo)/tarball/\(commit.sha)"], to: tarball)
+        } else {
+            try download(URL(string: "https://codeload.github.com/\(repo)/tar.gz/\(commit.sha)")!, to: tarball)
+        }
+        let src = work.appendingPathComponent("source")
+        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try run("/usr/bin/tar", ["-xzf", tarball.path, "-C", src.path, "--strip-components", "1"])
+
+        step("Building \(commit.short) (a minute or two)…")
+        log("building \(commit.short) in \(src.path)")
+        let base = currentVersion.split(separator: "-").first.map(String.init) ?? "0.1"
+        try run("/bin/bash", [src.appendingPathComponent("scripts/build-app.sh").path],
+                env: ["VERSION": "\(base)-\(commit.short)", "COMMIT": commit.sha, "UNIVERSAL": "0"],
+                in: src, logOutput: true)
+        return src.appendingPathComponent("build").appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
     }
 
     // MARK: - GitHub
@@ -82,100 +191,100 @@ final class Updater: ObservableObject {
         init(_ message: String) { errorDescription = message }
     }
 
-    nonisolated static func fetchLatest() throws -> Release {
-        if let gh = ghPath() {
-            let out = try run(gh, ["api", "repos/\(repo)/releases/latest"])
-            return try Release.decode(out)
+    /// GET https://api.github.com/<path>
+    nonisolated static func api(_ path: String) throws -> Data {
+        if let gh = ghPath(), let data = try? run(gh, ["api", path]) {
+            return data
         }
-        // No gh: only works if the repository is public.
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
+        var req = URLRequest(url: URL(string: "https://api.github.com/\(path)")!)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        let (data, response) = try syncFetch(req)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw Problem("GitHub needs you signed in: install gh (brew install gh), then run gh auth login")
-        }
-        return try Release.decode(data)
+        let (data, response) = try fetch(req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 404 { throw Problem("GitHub can't see \(repo): if it's private, sign in with gh auth login") }
+        if status == 403 { throw Problem("GitHub's hourly limit: try again later, or sign in with gh auth login") }
+        guard status == 200 else { throw Problem("GitHub answered \(status)") }
+        return data
     }
 
-    /// Downloads the release, swaps it in for this app, and starts the new one.
-    nonisolated static func install(_ release: Release) throws {
-        let fm = FileManager.default
-        let app = Bundle.main.bundleURL
-        guard app.pathExtension == "app" else { throw Problem("this copy isn't an app bundle (a dev build?)") }
-        guard let asset = release.asset(named: assetName) else { throw Problem("the release has no \(assetName)") }
-
-        // On the app's own volume, so the swap below is a rename.
-        let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: app, create: true)
-        defer { try? fm.removeItem(at: work) }
-        let zip = work.appendingPathComponent(assetName)
-        if let gh = ghPath() {
-            _ = try run(gh, ["release", "download", release.tag, "--repo", repo, "--pattern", assetName,
-                             "--dir", work.path, "--clobber"])
-        } else {
-            let (data, response) = try syncFetch(URLRequest(url: asset.browserDownloadURL))
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Problem("download failed") }
-            try data.write(to: zip)
-        }
-
-        let unpacked = work.appendingPathComponent("unpacked")
-        try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)
-        _ = try run("/usr/bin/ditto", ["-x", "-k", zip.path, unpacked.path])
-        let newApp = unpacked.appendingPathComponent(app.lastPathComponent)
-        let newID = Bundle(url: newApp)?.bundleIdentifier
-        guard newID != nil, newID == Bundle.main.bundleIdentifier else {
-            throw Problem("the download doesn't contain \(app.lastPathComponent)")
-        }
-        _ = try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
-        _ = try fm.replaceItemAt(app, withItemAt: newApp)
-
-        // Start the new copy once this one has quit.
-        let relaunch = Process()
-        relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
-        relaunch.arguments = ["-c", "while kill -0 \(getpid()) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", app.path]
-        try relaunch.run()
-        DispatchQueue.main.async { NSApp.terminate(nil) }
+    nonisolated static func download(_ url: URL, to file: URL) throws {
+        let (data, response) = try fetch(URLRequest(url: url))
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Problem("download failed: \(url)") }
+        try data.write(to: file)
     }
-
-    // MARK: - Helpers
 
     /// gh from Homebrew (apps started from Finder don't get the Terminal's PATH).
     nonisolated static func ghPath() -> String? {
         ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"].first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    // MARK: - Helpers
+
+    /// ~/Library/Logs/ToolMacTool/update.log: what updates did, and a build's output.
+    nonisolated static var logURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/ToolMacTool/update.log")
+    }
+
+    nonisolated static func log(_ line: String) {
+        let url = logURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let text = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile()
+            h.write(Data(text.utf8))
+            try? h.close()
+        } else {
+            try? Data(text.utf8).write(to: url)
+        }
+    }
+
+    /// Runs a program and returns its output (or writes it to `to`). Throws with the last line of
+    /// its errors if it fails. `logOutput` also copies everything it prints into update.log.
     @discardableResult
-    nonisolated static func run(_ tool: String, _ args: [String]) throws -> Data {
+    nonisolated static func run(_ tool: String, _ args: [String], env extra: [String: String] = [:],
+                                in dir: URL? = nil, to file: URL? = nil, logOutput: Bool = false) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: tool)
         p.arguments = args
+        if let dir { p.currentDirectoryURL = dir }
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         env["GH_PROMPT_DISABLED"] = "1"
+        env.merge(extra) { $1 }
         p.environment = env
         let out = Pipe(), err = Pipe()
-        p.standardOutput = out
+        if let file {
+            FileManager.default.createFile(atPath: file.path, contents: nil)
+            p.standardOutput = try FileHandle(forWritingTo: file)
+        } else {
+            p.standardOutput = out
+        }
         p.standardError = err
         try p.run()
         // Read both while it runs, so a full pipe can't stall it.
         var errData = Data()
         let errReader = Thread { errData = err.fileHandleForReading.readDataToEndOfFile() }
         errReader.start()
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let data = file == nil ? out.fileHandleForReading.readDataToEndOfFile() : Data()
         p.waitUntilExit()
         while !errReader.isFinished { Thread.sleep(forTimeInterval: 0.01) }
+        let name = (tool as NSString).lastPathComponent
+        if logOutput {
+            log("\(name) \(args.joined(separator: " "))\n\(String(decoding: data, as: UTF8.self))\(String(decoding: errData, as: UTF8.self))")
+        }
         if p.terminationStatus != 0 {
-            let msg = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n").last ?? ""
-            let name = (tool as NSString).lastPathComponent
+            let lines = String(decoding: errData.isEmpty ? data : errData, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+            let msg = logOutput ? (lines.last(where: { $0.contains("error") }) ?? lines.last ?? "") : (lines.last ?? "")
             if name == "gh", msg.contains("auth login") || msg.contains("401") {
                 throw Problem("gh isn't signed in: run gh auth login in Terminal")
             }
-            throw Problem(msg.isEmpty ? "\(name) failed (\(p.terminationStatus))" : msg)
+            let tail = msg.isEmpty ? "\(name) failed (\(p.terminationStatus))" : msg
+            throw Problem(logOutput ? "\(tail) (details in \(logURL.path))" : tail)
         }
         return data
     }
 
-    nonisolated static func syncFetch(_ req: URLRequest) throws -> (Data, URLResponse) {
+    nonisolated static func fetch(_ req: URLRequest) throws -> (Data, URLResponse) {
         let sem = DispatchSemaphore(value: 0)
         var result: Result<(Data, URLResponse), Error> = .failure(Problem("no answer"))
         URLSession.shared.dataTask(with: req) { data, response, error in

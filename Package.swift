@@ -1,14 +1,14 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-let package = Package(
-    name: "ToolMacTool",
-    platforms: [.macOS(.v13)],
-    targets: [
-        // The tools' logic: Foundation only, so it's tested on any machine (swift test).
-        .target(name: "ToolCore"),
-        // The menu bar app: SwiftUI + AppKit.
-        .executableTarget(name: "ToolMacTool", dependencies: ["ToolCore"]),
-        .testTarget(name: "ToolCoreTests", dependencies: ["ToolCore"]),
-    ]
-)
+// The tools' logic: Foundation only, so it's tested on any machine (swift test).
+var targets: [Target] = [
+    .target(name: "ToolCore"),
+    .testTarget(name: "ToolCoreTests", dependencies: ["ToolCore"]),
+]
+#if os(macOS)
+// The menu bar app: SwiftUI + AppKit, so only on the Mac.
+targets.append(.executableTarget(name: "ToolMacTool", dependencies: ["ToolCore"]))
+#endif
+
+let package = Package(name: "ToolMacTool", platforms: [.macOS(.v13)], targets: targets)

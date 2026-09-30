@@ -38,12 +38,15 @@ public struct Release: Decodable, Equatable {
     }
 
     public let tag: String
+    /// The commit (or branch) the release was made from; CI passes the commit's sha.
+    public let target: String?
     public let notes: String?
     public let page: URL?
     public let assets: [Asset]
 
     enum CodingKeys: String, CodingKey {
         case tag = "tag_name"
+        case target = "target_commitish"
         case notes = "body"
         case page = "html_url"
         case assets
@@ -62,4 +65,33 @@ public struct Release: Decodable, Equatable {
         guard let mine = Version(current), let theirs = version else { return false }
         return theirs > mine
     }
+}
+
+/// The newest commit on a branch (GET /repos/{owner}/{repo}/commits/{branch}).
+public struct Commit: Decodable, Equatable {
+    public let sha: String
+    public let message: String
+
+    struct Details: Decodable { let message: String }
+
+    enum CodingKeys: String, CodingKey { case sha, commit }
+
+    public init(sha: String, message: String) {
+        self.sha = sha
+        self.message = message
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sha = try c.decode(String.self, forKey: .sha)
+        message = try c.decode(Details.self, forKey: .commit).message
+    }
+
+    public static func decode(_ data: Data) throws -> Commit {
+        try JSONDecoder().decode(Commit.self, from: data)
+    }
+
+    public var short: String { String(sha.prefix(7)) }
+    /// The first line of the message.
+    public var title: String { message.components(separatedBy: "\n").first ?? message }
 }
