@@ -7,34 +7,58 @@ struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: Updater
 
-    static let columns = Array(repeating: GridItem(.fixed(76), spacing: 6), count: 4)
+    static let tile: CGFloat = 76
+    static let gap: CGFloat = 6
+    static let perRow = 4
+    static let columns = Array(repeating: GridItem(.fixed(tile), spacing: gap), count: perRow)
+    static let width: CGFloat = 12 + tile * CGFloat(perRow) + gap * CGFloat(perRow - 1) + 12
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(Tools.sections.enumerated()), id: \.element.id) { index, section in
-                    if index > 0 { Divider().padding(.vertical, 8) }
-                    SectionHeader(title: section.title)
-                    LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 6) {
-                        ForEach(section.tools) { tool in
-                            ToolTile(tool: tool, running: model.running.contains(tool.id),
-                                     result: model.results[tool.id]) { model.run(tool) }
-                        }
-                    }
-                }
-            }
-            .padding(12)
-
+            ToolGrid(model: model).padding(12)
             if let last = model.lastResult {
                 ResultStrip(tool: last.tool, result: last.result)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
-
             Divider()
             BottomBar(model: model, updater: updater)
         }
-        .frame(width: 12 + 4 * 76 + 3 * 6 + 12)
+        .frame(width: Self.width)
+    }
+}
+
+/// Every section: its title, its tiles, and a divider before the next one.
+struct ToolGrid: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Tools.sections) { section in
+                if section.id != Tools.sections.first?.id {
+                    Divider().padding(.vertical, 8)
+                }
+                SectionGrid(section: section, model: model)
+            }
+        }
+    }
+}
+
+struct SectionGrid: View {
+    let section: ToolSection
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeader(title: section.title)
+            LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
+                ForEach(section.tools) { tool in
+                    ToolTile(tool: tool, running: model.running.contains(tool.id), result: model.results[tool.id]) {
+                        model.run(tool)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -87,7 +111,7 @@ struct ToolTile: View {
                     .lineLimit(2)
                     .frame(height: 26, alignment: .top)
             }
-            .frame(width: 76, height: 84)
+            .frame(width: MenuView.tile, height: 84)
             .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(hover ? Color.primary.opacity(0.08) : .clear))

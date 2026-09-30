@@ -13,9 +13,9 @@ import ToolCore
 /// else directly (public repo).
 @MainActor
 final class Updater: ObservableObject {
-    static let repo = "ainigh/tool-mac-tool"
-    static let branch = "main"
-    static let assetName = "ToolMacTool.zip"
+    nonisolated static let repo = "ainigh/tool-mac-tool"
+    nonisolated static let branch = "main"
+    nonisolated static let assetName = "ToolMacTool.zip"
 
     nonisolated static var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
