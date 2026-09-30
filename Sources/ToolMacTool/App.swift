@@ -41,6 +41,13 @@ final class AppModel: ObservableObject {
 
     let updater = Updater()
 
+    /// The tool that ran most recently, and how it went.
+    var lastResult: (tool: Tool, result: Result)? {
+        guard let last = results.max(by: { $0.value.at < $1.value.at }),
+              let tool = Tools.all.first(where: { $0.id == last.key }) else { return nil }
+        return (tool, last.value)
+    }
+
     init() {
         updater.start()
         // Start at login from the first launch; the menu has a switch to turn it off.

@@ -1,7 +1,9 @@
 # Tool Mac Tool
 
-A wrench icon in the macOS menu bar with a dropdown of small tools. New tools get added over time;
-the app updates itself from GitHub.
+A wrench icon in the macOS menu bar. Clicking it opens a panel of tool tiles, grouped into sections
+with a divider between them. A strip under the tiles shows how the last run went. The bar at the
+bottom holds updates (with the version you're on), **Open at login** and **Quit**. Hover over a
+tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
 
 It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
 builds it on every push and publishes a release when something lands on `main`. When GitHub hasn't
@@ -9,10 +11,12 @@ built a version, the app builds it on your Mac by itself.
 
 ## Install
 
+The repository may be private, so this goes through gh (GitHub's command line tool) signed in.
+Glass's installer already set that up; otherwise run `brew install gh && gh auth login` first.
 Paste this in Terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ainigh/tool-mac-tool/main/install.sh | bash
+gh api -H "Accept: application/vnd.github.raw" repos/ainigh/tool-mac-tool/contents/install.sh | bash
 ```
 
 It downloads the latest release into `~/Applications` and opens it. If there's no release yet, it
@@ -20,8 +24,8 @@ builds from the source instead. That needs Apple's command line tools, which Hom
 they're missing, run `xcode-select --install`. `TMT_BRANCH=name` installs another branch, built
 here.
 
-The app adds itself to your login items the first time it runs. You can turn that off in the menu
-under **Open at login**.
+The app adds itself to your login items the first time it runs. To turn that off, click the sunrise
+button (**Open at login**) in the bottom bar.
 
 The first time a tool reads Downloads or writes to the Desktop, macOS asks whether to allow it.
 Click **Allow**. The app is ad-hoc signed and not notarized, so macOS may ask again after an update.
@@ -29,17 +33,18 @@ Click **Allow**. The app is ad-hoc signed and not notarized, so macOS may ask ag
 ## Update
 
 The app follows the `main` branch. It checks at launch, every 6 hours, and when you choose
-**Check for updates**. When `main` has a commit this copy wasn't built from, the icon turns solid
-and the menu offers the update, with the commit's title under it:
+the ↻ button in the bottom bar. When `main` has a commit this copy wasn't built from, the icon turns solid
+and the bottom bar shows an **Update** button (hover over it for the commit's title):
 
 - **Update to v0.1.N**: GitHub already built that commit. The app downloads it, swaps itself and
   reopens.
-- **Update (build abc1234 here)**: GitHub hasn't built it, either because the build is still
+- **Update (build here)**: GitHub hasn't built it, either because the build is still
   running or because Actions is off. The app downloads that commit's source, builds it for this
   Mac, swaps itself and reopens. This takes a minute or two. The build output goes to
   `~/Library/Logs/ToolMacTool/update.log`.
 
-The menu header shows the version and the commit you're on. Running the install line again works
+The app talks to GitHub through gh, so it works while the repository is private, as long as gh is
+signed in. The bottom bar shows the version and the commit you're on. Running the install line again works
 too.
 
 ## The tools
@@ -69,9 +74,11 @@ The zip stays in Downloads. A card fades in under the menu bar showing what happ
 
 1. Write the logic in `Sources/ToolCore/`, which uses only Foundation. Add tests in
    `Tests/ToolCoreTests/`.
-2. In `Sources/ToolMacTool/Tools.swift`, add a `Tool` (title, subtitle, SF Symbol, and a `run`
-   that returns a message) and put it in `Tools.all`.
-3. Push. CI tests and builds it. Merging to `main` publishes the release, and the menu offers
+2. In `Sources/ToolMacTool/Tools.swift`, add a `Tool`. It needs a short name for the tile, a
+   title and description for the tooltip, an SF Symbol, and a `run` that returns a message. Put
+   it in a section of `Tools.sections`, or add a new section; each section gets its own titled
+   grid.
+3. Push. CI tests and builds it. Merging to `main` publishes the release, and the panel offers
    the update.
 
 Tools can have their own windows. `HUD.swift` shows how to make a borderless, transparent,
