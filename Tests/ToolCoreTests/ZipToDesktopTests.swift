@@ -232,3 +232,70 @@ final class RunTests: XCTestCase {
         XCTAssertEqual(r.summary, "Notes-v3.zip → Desktop/Notes (1 added)")
     }
 }
+
+final class PlanTests: XCTestCase {
+    var root: URL!
+    let fm = FileManager.default
+
+    override func setUpWithError() throws {
+        root = fm.temporaryDirectory.appendingPathComponent("plan-\(UUID().uuidString)")
+        for d in ["Downloads", "Desktop/MyApp", "Desktop/Website"] {
+            try fm.createDirectory(at: root.appendingPathComponent(d), withIntermediateDirectories: true)
+        }
+    }
+
+    override func tearDownWithError() throws { try? fm.removeItem(at: root) }
+
+    func tool(listing: [String: [String]]) -> ZipToDesktop {
+        ZipToDesktop(downloads: root.appendingPathComponent("Downloads"), desktop: root.appendingPathComponent("Desktop"),
+                     scratch: root.appendingPathComponent("scratch"),
+                     unzip: { _, _ in }, trash: { _ in },
+                     list: { zip in
+                         guard let l = listing[zip.lastPathComponent] else { throw ZipToDesktop.Failure.unzipFailed("bad") }
+                         return l
+                     })
+    }
+
+    func file(_ name: String, minutesAgo: Double) throws -> URL {
+        let url = root.appendingPathComponent("Downloads").appendingPathComponent(name)
+        try Data("x".utf8).write(to: url)
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-minutesAgo * 60)], ofItemAtPath: url.path)
+        return url
+    }
+
+    func testRecentZipsAreNewestFirstAndOnlyZips() throws {
+        let t = tool(listing: [:])
+        // On the Mac a file's date includes when it was added (now), so the files are dated in the
+        // future and we look from an hour ahead: "a.zip" arrived 5 minutes before that moment.
+        let now = Date().addingTimeInterval(3600)
+        _ = try file("old.zip", minutesAgo: -30)
+        _ = try file("a.zip", minutesAgo: -55)
+        _ = try file("b.zip", minutesAgo: -58)
+        _ = try file("photo.jpg", minutesAgo: -59)
+        XCTAssertEqual(try t.recentZips(within: 10 * 60, now: now).map(\.lastPathComponent), ["b.zip", "a.zip"])
+    }
+
+    func testPlanFindsTheFolderAndTheWrapper() throws {
+        let t = tool(listing: ["MyApp-main.zip": ["MyApp-main/", "MyApp-main/a.txt", "MyApp-main/src/b.txt", "__MACOSX/._a.txt"]])
+        let p = t.plan(for: try file("MyApp-main.zip", minutesAgo: 1))
+        XCTAssertEqual(p.target, "MyApp")
+        XCTAssertFalse(p.exact)
+        XCTAssertEqual(p.wrapper, "MyApp-main")
+        XCTAssertEqual(p.files, 2)
+        XCTAssertEqual(p.destination, "→ Desktop/MyApp (name contains it)")
+    }
+
+    func testPlanUsesTheInnerFolderName() throws {
+        let t = tool(listing: ["download.zip": ["Website/index.html"]])
+        let p = t.plan(for: try file("download.zip", minutesAgo: 1))
+        XCTAssertEqual(p.target, "Website")
+        XCTAssertTrue(p.exact)
+    }
+
+    func testPlanWithoutAMatchOrAListing() throws {
+        let p = tool(listing: [:]).plan(for: try file("Other.zip", minutesAgo: 1))
+        XCTAssertNil(p.target)
+        XCTAssertNil(p.files)
+        XCTAssertEqual(p.destination, "no matching Desktop folder")
+    }
+}

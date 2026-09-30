@@ -16,11 +16,6 @@ struct MenuView: View {
     var body: some View {
         VStack(spacing: 0) {
             ToolGrid(model: model).padding(12)
-            if let last = model.lastResult {
-                ResultStrip(tool: last.tool, result: last.result)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
             Divider()
             BottomBar(model: model, updater: updater)
         }
@@ -53,10 +48,11 @@ struct SectionGrid: View {
             SectionHeader(title: section.title)
             LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                 ForEach(section.tools) { tool in
-                    ToolTile(tool: tool, running: model.running.contains(tool.id), result: model.results[tool.id]) {
-                        model.run(tool)
-                    }
+                    ToolTile(tool: tool) { model.open(tool) }
                 }
+            }
+            if section.extra == .recentZips {
+                RecentZipsList(zips: model.zips)
             }
         }
     }
@@ -75,36 +71,22 @@ struct SectionHeader: View {
     }
 }
 
-/// A square tile: the tool's icon, its name under it, a spinner while it runs and a small badge
-/// for how it last went. Hover for the full name and what it does.
+/// A square tile: the tool's icon and its name under it. Hover for the full name and what it does.
 struct ToolTile: View {
     let tool: Tool
-    let running: Bool
-    let result: AppModel.Result?
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                ZStack(alignment: .topTrailing) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.gradient)
-                        if running {
-                            ProgressView().controlSize(.small).tint(.white)
-                        } else {
-                            Image(systemName: tool.symbol).font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
-                        }
-                    }
-                    .frame(width: 40, height: 40)
-                    if let result, !running {
-                        Image(systemName: result.ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .font(.system(size: 13))
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, result.ok ? Color.green : Color.orange)
-                            .offset(x: 5, y: -5)
-                    }
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.gradient)
+                    Image(systemName: tool.symbol).font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
                 }
+                .frame(width: 40, height: 40)
+                .scaleEffect(hover ? 1.06 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hover)
                 Text(tool.name)
                     .font(.system(size: 10.5))
                     .multilineTextAlignment(.center)
@@ -117,35 +99,8 @@ struct ToolTile: View {
                 .fill(hover ? Color.primary.opacity(0.08) : .clear))
         }
         .buttonStyle(.plain)
-        .disabled(running)
         .onHover { hover = $0 }
         .help("\(tool.title)\n\n\(tool.subtitle)")
-    }
-}
-
-/// How the most recent run went, under the grid.
-struct ResultStrip: View {
-    let tool: Tool
-    let result: AppModel.Result
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: result.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(result.ok ? .green : .orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tool.name).font(.caption).fontWeight(.semibold)
-                Text(result.message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-            if let reveal = result.reveal {
-                IconButton(symbol: "folder", help: "Show in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([reveal])
-                }
-            }
-        }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
     }
 }
 

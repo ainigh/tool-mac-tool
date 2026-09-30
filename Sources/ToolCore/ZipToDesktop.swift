@@ -20,16 +20,20 @@ public struct ZipToDesktop {
     public var unzip: (_ zip: URL, _ into: URL) throws -> Void
     /// Moves a replaced item out of the way (the Trash on the Mac).
     public var trash: (URL) throws -> Void
+    /// The paths inside a zip, without unzipping it (for the preview).
+    public var list: (URL) throws -> [String]
     public var fileManager = FileManager.default
 
     public init(downloads: URL, desktop: URL, scratch: URL,
                 unzip: @escaping (URL, URL) throws -> Void = ZipToDesktop.systemUnzip,
-                trash: @escaping (URL) throws -> Void = ZipToDesktop.systemTrash) {
+                trash: @escaping (URL) throws -> Void = ZipToDesktop.systemTrash,
+                list: @escaping (URL) throws -> [String] = ZipToDesktop.systemList) {
         self.downloads = downloads
         self.desktop = desktop
         self.scratch = scratch
         self.unzip = unzip
         self.trash = trash
+        self.list = list
     }
 
     /// The real folders: ~/Downloads, ~/Desktop, and a scratch folder in Caches.
@@ -86,8 +90,13 @@ public struct ZipToDesktop {
 
     // MARK: - Running it
 
+    /// The latest download, if it's a zip.
     public func run() throws -> Report {
-        let zip = try latestZip()
+        try run(zip: latestZip())
+    }
+
+    /// One particular zip.
+    public func run(zip: URL) throws -> Report {
         let work = scratch.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: work) }
@@ -134,6 +143,74 @@ public struct ZipToDesktop {
         if Self.partialExtensions.contains(ext) { throw Failure.stillDownloading(name: newest.lastPathComponent) }
         if ext != "zip" { throw Failure.notZip(name: newest.lastPathComponent) }
         return newest
+    }
+
+    // MARK: - Looking before running
+
+    /// What running a zip would do, worked out from its name and listing (nothing is unzipped).
+    public struct Plan: Equatable, Identifiable {
+        public var zip: URL
+        public var added: Date
+        public var size: Int64
+        /// The Desktop folder it goes into, if exactly one matches.
+        public var target: String?
+        public var exact: Bool
+        /// The folders that tie, when more than one matches.
+        public var ambiguous: [String]
+        /// The one folder the zip wraps everything in, if any.
+        public var wrapper: String?
+        /// How many files it holds (folders not counted); nil if it couldn't be read.
+        public var files: Int?
+
+        public var id: URL { zip }
+
+        /// Where it would go, in a few words.
+        public var destination: String {
+            if let target { return "→ Desktop/\(target)" + (exact ? "" : " (name contains it)") }
+            if !ambiguous.isEmpty { return "matches \(ambiguous.joined(separator: ", ")): pick by renaming one" }
+            return "no matching Desktop folder"
+        }
+    }
+
+    /// Zips in Downloads that arrived in the last `seconds`, newest first.
+    public func recentZips(within seconds: TimeInterval, now: Date = Date()) throws -> [URL] {
+        try visibleChildren(of: downloads)
+            .filter { $0.pathExtension.lowercased() == "zip" && !isFolder($0) }
+            .map { ($0, date($0)) }
+            .filter { now.timeIntervalSince($0.1) <= seconds }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+    }
+
+    public func plan(for zip: URL) -> Plan {
+        let entries = try? list(zip)
+        var wrapper: String?
+        if let entries {
+            let tops = Set(entries.compactMap { $0.split(separator: "/").first.map(String.init) }
+                .filter { $0 != "__MACOSX" && $0 != ".DS_Store" })
+            if tops.count == 1, let top = tops.first, entries.contains(where: { $0.hasPrefix(top + "/") }) {
+                wrapper = top
+            }
+        }
+        let zipName = zip.deletingPathExtension().lastPathComponent
+        let folders = (try? desktopFolders()) ?? []
+        var plan = Plan(zip: zip, added: date(zip), size: size(zip), target: nil, exact: false, ambiguous: [],
+                        wrapper: wrapper,
+                        files: entries.map { $0.filter { !$0.hasSuffix("/") && !$0.hasPrefix("__MACOSX/") }.count })
+        switch Self.match(names: [zipName] + (wrapper.map { [$0] } ?? []), folders: folders) {
+        case .found(let name, let exact)?:
+            plan.target = name
+            plan.exact = exact
+        case .ambiguous(let names)?:
+            plan.ambiguous = names
+        case nil:
+            break
+        }
+        return plan
+    }
+
+    func size(_ url: URL) -> Int64 {
+        ((try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     static let partialExtensions: Set<String> = ["crdownload", "download", "part", "partial", "opdownload"]
@@ -279,6 +356,21 @@ public struct ZipToDesktop {
             let msg = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             throw Failure.unzipFailed(msg.isEmpty ? "exit code \(p.terminationStatus)" : msg)
         }
+    }
+
+    /// `zipinfo -1`: one path per line.
+    public static func systemList(_ zip: URL) throws -> [String] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
+        p.arguments = ["-1", zip.path]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        if p.terminationStatus != 0 { throw Failure.unzipFailed("can't read \(zip.lastPathComponent)") }
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
     }
 
     public static func systemTrash(_ url: URL) throws {
