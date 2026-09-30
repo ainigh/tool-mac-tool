@@ -7,7 +7,7 @@
 # The repository may be private, so everything comes through gh, signed in to GitHub (this sets
 # gh up if it's missing). It takes the latest release that GitHub built. If there isn't one (or
 # TMT_FROM_SOURCE=1), it downloads the source of main (TMT_BRANCH=name for another branch) and
-# builds it here with Apple's command line tools.
+# builds it here with Apple's command line tools. The app then follows that branch for updates.
 set -euo pipefail
 
 REPO="ainigh/tool-mac-tool"
@@ -54,7 +54,7 @@ if [[ -z "$app" ]]; then
   gh api "repos/$REPO/tarball/$sha" > "$tmp/src.tar.gz"
   tar -xzf "$tmp/src.tar.gz" -C "$tmp/src" --strip-components 1
   say "Building (a minute or two)"
-  (cd "$tmp/src" && VERSION="0.1-${sha:0:7}" COMMIT="$sha" UNIVERSAL=0 scripts/build-app.sh)
+  (cd "$tmp/src" && VERSION="0.1-${sha:0:7}" COMMIT="$sha" BRANCH="$BRANCH" UNIVERSAL=0 scripts/build-app.sh)
   app="$tmp/src/build/$NAME.app"
 fi
 

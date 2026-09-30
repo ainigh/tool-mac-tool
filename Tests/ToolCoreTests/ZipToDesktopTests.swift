@@ -32,6 +32,16 @@ final class MatchTests: XCTestCase {
         XCTAssertEqual(ZipToDesktop.match(names: ["ab"], folders: ["ab"]), .found("ab", exact: true))
     }
 
+    func testContainedNamesMatchWholeWordsOnly() {
+        XCTAssertNil(ZipToDesktop.match(names: ["newsletter-q3"], folders: ["new"]))
+        XCTAssertNil(ZipToDesktop.match(names: ["chart-data"], folders: ["art"]))
+        XCTAssertNil(ZipToDesktop.match(names: ["whatsapp-backup"], folders: ["app"]))
+        XCTAssertNil(ZipToDesktop.match(names: ["MyAppNext"], folders: ["MyApp"]))
+        XCTAssertEqual(ZipToDesktop.match(names: ["old docs v2 final"], folders: ["docs v2"]),
+                       .found("docs v2", exact: false))
+        XCTAssertEqual(ZipToDesktop.match(names: ["MyApp_main.v2"], folders: ["MyApp"]), .found("MyApp", exact: false))
+    }
+
     func testTieIsAmbiguous() {
         XCTAssertEqual(ZipToDesktop.match(names: ["alpha-gamma"], folders: ["alpha", "gamma"]),
                        .ambiguous(["alpha", "gamma"]))
@@ -103,41 +113,11 @@ final class RunTests: XCTestCase {
         (try? Data(contentsOf: desktop.appendingPathComponent(path))).flatMap { String(data: $0, encoding: .utf8) }
     }
 
-    func runTool() throws -> ZipToDesktop.Report {
-        try tool().run()
-    }
-
-    func testLatestFileMustBeAZip() throws {
-        try download("MyApp.zip", age: 100)
-        try write(downloads.appendingPathComponent("photo.jpg"), "jpg")
-        try setAge(downloads.appendingPathComponent("photo.jpg"), -100)
-        XCTAssertThrowsError(try tool().latestZip()) { e in
-            XCTAssertEqual(e as? ZipToDesktop.Failure, .notZip(name: "photo.jpg"))
-        }
-    }
-
-    func testFoldersAndHiddenFilesAreIgnored() throws {
-        let zip = try download("MyApp.zip", age: 100)
-        try fm.createDirectory(at: downloads.appendingPathComponent("NewFolder"), withIntermediateDirectories: true)
-        try setAge(downloads.appendingPathComponent("NewFolder"), -100)
-        try write(downloads.appendingPathComponent(".DS_Store"), "x")
-        try setAge(downloads.appendingPathComponent(".DS_Store"), -200)
-        XCTAssertEqual(try tool().latestZip().lastPathComponent, zip.lastPathComponent)
-    }
-
-    func testStillDownloading() throws {
-        try download("MyApp.zip", age: 100)
-        try write(downloads.appendingPathComponent("Big.zip.crdownload"), "x")
-        try setAge(downloads.appendingPathComponent("Big.zip.crdownload"), -100)
-        XCTAssertThrowsError(try tool().latestZip()) { e in
-            XCTAssertEqual(e as? ZipToDesktop.Failure, .stillDownloading(name: "Big.zip.crdownload"))
-        }
-    }
-
-    func testEmptyDownloads() {
-        XCTAssertThrowsError(try tool().latestZip()) { e in
-            XCTAssertEqual(e as? ZipToDesktop.Failure, .noFiles(folder: "Downloads"))
-        }
+    /// Runs the newest zip in Downloads.
+    func runTool(_ t: ZipToDesktop? = nil) throws -> ZipToDesktop.Report {
+        let t = t ?? tool()
+        let newest = try t.recentZips(within: .infinity, now: .distantFuture).first
+        return try t.run(zip: XCTUnwrap(newest))
     }
 
     func testMergesIntoContainedMatchAndTrashesReplacedFiles() throws {
@@ -190,6 +170,60 @@ final class RunTests: XCTestCase {
         XCTAssertEqual(read("Website/index.html"), "new")
     }
 
+    func testHiddenFilesBesideAFolderMeanItIsNotAWrapper() throws {
+        // Both ways of looking agree: .gitignore counts, so "src" isn't the one folder in it.
+        try fm.createDirectory(at: desktop.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try download("download.zip", [".gitignore": "x", "src/a.txt": "new"], age: 0)
+        XCTAssertThrowsError(try runTool()) { e in
+            XCTAssertEqual(e as? ZipToDesktop.Failure, .noMatch(zip: "download.zip"))
+        }
+        XCTAssertNil(ZipToDesktop.wrapper(in: [".gitignore", "src/", "src/a.txt"]))
+        XCTAssertEqual(ZipToDesktop.wrapper(in: [".DS_Store", "__MACOSX/._src", "src/", "src/a.txt"]), "src")
+    }
+
+    func testDotfilesAreMovedToo() throws {
+        try fm.createDirectory(at: desktop.appendingPathComponent("MyApp"), withIntermediateDirectories: true)
+        try download("MyApp.zip", [".env": "secret", "index.html": "new", "._index.html": "junk"], age: 0)
+        let r = try runTool()
+        XCTAssertEqual(read("MyApp/.env"), "secret")
+        XCTAssertEqual(r.added.sorted(), [".env", "index.html"])
+    }
+
+    func testStoppingPartwayReportsWhatWasDone() throws {
+        try write(desktop.appendingPathComponent("MyApp/a.txt"), "old")
+        try write(desktop.appendingPathComponent("MyApp/b.txt"), "old")
+        try download("MyApp.zip", ["a.txt": "new", "b.txt": "new"], age: 0)
+        var t = tool()
+        var calls = 0
+        let trashed = self.trashed
+        t.trash = { url in
+            calls += 1
+            if calls == 2 { throw CocoaError(.fileWriteNoPermission) }
+            try FileManager.default.moveItem(at: url, to: trashed.appendingPathComponent(url.lastPathComponent))
+        }
+        XCTAssertThrowsError(try runTool(t)) { e in
+            guard case .interrupted(let done, _)? = e as? ZipToDesktop.Failure else { return XCTFail("\(e)") }
+            XCTAssertEqual(done.replaced, ["a.txt"])
+            XCTAssertTrue(e.localizedDescription.hasPrefix("Stopped partway into Desktop/MyApp after 0 added, 1 replaced"),
+                          e.localizedDescription)
+        }
+        XCTAssertEqual(read("MyApp/a.txt"), "new")
+        XCTAssertEqual(read("MyApp/b.txt"), "old")
+    }
+
+    func testRefusesPathsThatPointOutside() throws {
+        try fm.createDirectory(at: desktop.appendingPathComponent("MyApp"), withIntermediateDirectories: true)
+        try download("MyApp.zip", ["a.txt": "new"], age: 0)
+        var t = tool()
+        t.list = { _ in ["a.txt", "../../.zshrc"] }
+        t.unzip = { _, _ in XCTFail("shouldn't unzip") }
+        XCTAssertThrowsError(try runTool(t)) { e in
+            XCTAssertEqual(e as? ZipToDesktop.Failure, .unsafePaths(name: "MyApp.zip", example: "../../.zshrc"))
+        }
+        XCTAssertTrue(ZipToDesktop.isUnsafe("/etc/passwd"))
+        XCTAssertFalse(ZipToDesktop.isUnsafe("a..b/c.txt"))
+    }
+
     func testNoMatchTouchesNothing() throws {
         try write(desktop.appendingPathComponent("Other/a.txt"), "mine")
         try write(desktop.appendingPathComponent("MyApp.txt"), "a file, not a folder")
@@ -227,7 +261,7 @@ final class RunTests: XCTestCase {
 
         var t = ZipToDesktop(downloads: downloads, desktop: desktop, scratch: root.appendingPathComponent("scratch"))
         t.trash = { _ in XCTFail("nothing to replace") }
-        let r = try t.run()
+        let r = try runTool(t)
         XCTAssertEqual(read("Notes/today.md"), "hello")
         XCTAssertEqual(r.summary, "Notes-v3.zip → Desktop/Notes (1 added)")
     }
@@ -290,6 +324,22 @@ final class PlanTests: XCTestCase {
         let p = t.plan(for: try file("download.zip", minutesAgo: 1))
         XCTAssertEqual(p.target, "Website")
         XCTAssertTrue(p.exact)
+    }
+
+    func testPlanFromAKeptListing() throws {
+        let zip = try file("download.zip", minutesAgo: 1)
+        let t = tool(listing: [:])     // reading it would fail: the listing passed in is used
+        let p = t.plan(for: zip, entries: ["Website/", "Website/a.html", ".DS_Store"], folders: ["Website"])
+        XCTAssertEqual(p.target, "Website")
+        XCTAssertEqual(p.files, 1)
+        XCTAssertEqual(t.stamp(zip), t.stamp(zip))
+    }
+
+    func testPlanWithUnsafePaths() throws {
+        let t = tool(listing: ["MyApp.zip": ["a.txt", "../evil"]])
+        let p = t.plan(for: try file("MyApp.zip", minutesAgo: 1))
+        XCTAssertEqual(p.unsafe, "../evil")
+        XCTAssertEqual(p.destination, "has paths pointing outside it: won't unzip")
     }
 
     func testPlanWithoutAMatchOrAListing() throws {

@@ -19,9 +19,6 @@ final class ReleaseTests: XCTestCase {
         let r = try Release.decode(Data(json.utf8))
         XCTAssertEqual(r.version, Version("0.1.14"))
         XCTAssertEqual(r.asset(named: "ToolMacTool.zip")?.browserDownloadURL.lastPathComponent, "ToolMacTool.zip")
-        XCTAssertTrue(r.isNewer(than: "0.1.9"))
-        XCTAssertFalse(r.isNewer(than: "0.1.14"))
-        XCTAssertFalse(r.isNewer(than: "0.0.0-dev"))
         XCTAssertEqual(r.target, "abc123")
     }
 
