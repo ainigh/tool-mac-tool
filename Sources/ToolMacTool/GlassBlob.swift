@@ -5,8 +5,8 @@ import SwiftUI
 struct Blob: Shape {
     var wobble: Double
     var phase: Double
-    /// Higher is squarer: 2 is an ellipse, 4 a squircle.
-    var squareness: Double = 5
+    /// Higher is squarer: 2 is an ellipse, 4 a squircle. Square enough that a card of text fits.
+    var squareness: Double = 8
 
     var animatableData: Double {
         get { wobble }
@@ -43,9 +43,9 @@ enum GlassMood {
 
     var wobble: Double {
         switch self {
-        case .calm: return 1.5
-        case .thinking: return 7
-        case .speaking: return 3.5
+        case .calm: return 0.8
+        case .thinking: return 4
+        case .speaking: return 2
         }
     }
 
@@ -60,8 +60,8 @@ enum GlassMood {
 }
 
 /// The glass itself, with no background of its own: frosted blur of whatever is behind the window,
-/// Glass's slowly turning rainbow inside it, a bright rim and a colored glow, all in the shape of a
-/// rippling blob. Put content on top of it.
+/// a faint turning rainbow inside it, a dark tint so text on it reads well, a bright rim and a
+/// colored glow, all in the shape of a softly rippling card. Put content on top of it.
 struct GlassSurface: View {
     var mood: GlassMood
     var time: Double
@@ -70,12 +70,13 @@ struct GlassSurface: View {
         let shape = Blob(wobble: mood.wobble, phase: time * mood.speed * 2)
         let hue = (time * mood.speed * 0.02).truncatingRemainder(dividingBy: 1)
         ZStack {
-            shape.fill(Color(hue: hue, saturation: 0.8, brightness: 1).opacity(0.35))
-                .blur(radius: 26)
+            shape.fill(Color(hue: hue, saturation: 0.8, brightness: 1).opacity(mood == .calm ? 0.22 : 0.4))
+                .blur(radius: 20)
             shape.fill(.ultraThinMaterial)
             GlassColors(hue: hue, angle: time * mood.speed * 25)
+                .opacity(0.55)
                 .clipShape(shape)
-            shape.fill(Color.black.opacity(0.22))
+            shape.fill(Color.black.opacity(0.45))
             shape.fill(LinearGradient(colors: [.white.opacity(0.22), .clear, .white.opacity(0.06)],
                                       startPoint: .top, endPoint: .bottom))
             shape.stroke(LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.12), .white.opacity(0.35)],

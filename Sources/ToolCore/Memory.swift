@@ -306,3 +306,43 @@ public struct Transcript {
         }
     }
 }
+
+/// A reply split into prose and ``` code blocks, for showing it (code gets its own box).
+public enum ReplyBlock: Equatable {
+    case text(String)
+    /// `language` is what follows the opening ``` ("" if nothing). A block still streaming in
+    /// (no closing ``` yet) is shown as code already.
+    case code(language: String, body: String)
+
+    public static func split(_ text: String) -> [ReplyBlock] {
+        var out: [ReplyBlock] = []
+        var prose: [Substring] = []
+        var code: [Substring]?
+        var language = ""
+        func flushProse() {
+            let t = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !t.isEmpty { out.append(.text(t)) }
+            prose = []
+        }
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let body = code {
+                if trimmed.hasPrefix("```") {
+                    out.append(.code(language: language, body: body.joined(separator: "\n")))
+                    code = nil
+                } else {
+                    code = body + [line]
+                }
+            } else if trimmed.hasPrefix("```") {
+                flushProse()
+                language = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                code = []
+            } else {
+                prose.append(line)
+            }
+        }
+        if let body = code { out.append(.code(language: language, body: body.joined(separator: "\n"))) }
+        flushProse()
+        return out
+    }
+}

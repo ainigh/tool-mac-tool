@@ -14,13 +14,13 @@ enum Windows {
             bringForward(w)
             return
         }
-        let w = NSWindow(contentRect: NSRect(origin: .zero, size: size),
-                         styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
-                         backing: .buffered, defer: false)
+        let w = ToolWindow(contentRect: NSRect(origin: .zero, size: size),
+                           styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+                           backing: .buffered, defer: false)
         w.title = title
         w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: content())
+        w.contentView = FirstClickHostingView(rootView: content())
         w.center()
         w.setFrameAutosaveName("ToolMacTool.\(id)")
         windows[id] = w
@@ -43,9 +43,59 @@ enum Windows {
     }
 }
 
+/// The keys a text field needs from an Edit menu (cut, copy, paste, select all, undo, redo). This
+/// app has no menu bar, so nothing would carry them: its windows send them on themselves.
+enum EditKeys {
+    static func handle(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == .command || flags == [.command, .shift],
+              let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        let action: Selector
+        switch (key, flags.contains(.shift)) {
+        case ("x", false): action = #selector(NSText.cut(_:))
+        case ("c", false): action = #selector(NSText.copy(_:))
+        case ("v", false): action = #selector(NSText.paste(_:))
+        case ("a", false): action = #selector(NSText.selectAll(_:))
+        case ("z", false): action = Selector(("undo:"))
+        case ("z", true): action = Selector(("redo:"))
+        default: return false
+        }
+        return NSApp.sendAction(action, to: nil, from: nil)
+    }
+
+    /// ⌘ plus a letter, nothing else held.
+    static func command(_ event: NSEvent) -> String? {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command else { return nil }
+        return event.charactersIgnoringModifiers?.lowercased()
+    }
+}
+
+/// A tool's titled window: the edit keys work, and ⌘W closes it.
+final class ToolWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if EditKeys.command(event) == "w" {
+            performClose(nil)
+            return true
+        }
+        return EditKeys.handle(event) || super.performKeyEquivalent(with: event)
+    }
+}
+
+/// A hosting view whose first click counts even while the app is in the background (a menu bar
+/// app nearly always is): otherwise that click only brings the window forward.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// A borderless, see-through window that can still take the keyboard (plain borderless windows
-/// can't), for UI that draws its own shape.
-final class GlassPanel: NSPanel {
+/// can't), for UI that draws its own shape. It's moved only by a `WindowDragArea`: with "move by
+/// the background" on, a click on a SwiftUI button can turn into a drag and never reach it.
+class GlassPanel: NSPanel {
+    /// ⌘ shortcuts, by letter (the edit keys are built in).
+    var commands: [String: () -> Void] = [:]
+    /// Esc: return true if it was used (e.g. to stop a reply), else it goes on as usual.
+    var onEscape: (() -> Bool)?
+
     init(size: NSSize) {
         super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .fullSizeContentView],
                    backing: .buffered, defer: false)
@@ -55,11 +105,25 @@ final class GlassPanel: NSPanel {
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let key = EditKeys.command(event), let command = commands[key] {
+            command()
+            return true
+        }
+        return EditKeys.handle(event) || super.performKeyEquivalent(with: event)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        // Caught here, before the text field (which would take Esc for word completion).
+        if event.type == .keyDown, event.keyCode == 53, onEscape?() == true { return }
+        super.sendEvent(event)
+    }
 }
 
 /// Drag here to move the window (SwiftUI views don't move a borderless window by themselves).
@@ -67,6 +131,7 @@ struct WindowDragArea: NSViewRepresentable {
     final class DragView: NSView {
         override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
         override var mouseDownCanMoveWindow: Bool { true }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
 
     func makeNSView(context: Context) -> NSView { DragView() }

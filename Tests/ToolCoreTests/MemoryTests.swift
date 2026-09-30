@@ -66,6 +66,19 @@ final class MemoryTests: XCTestCase {
         XCTAssertEqual(MemoryStore.hideTags("```\nx = [["), "```\nx = [[")
     }
 
+    func testReplySplitsIntoTextAndCode() {
+        let reply = "Try this:\n\n```bash\nif [[ -f x ]]; then\n  echo hi\nfi\n```\n\nThat's it."
+        XCTAssertEqual(ReplyBlock.split(reply), [
+            .text("Try this:"),
+            .code(language: "bash", body: "if [[ -f x ]]; then\n  echo hi\nfi"),
+            .text("That's it."),
+        ])
+        // Still streaming: the open block is code already.
+        XCTAssertEqual(ReplyBlock.split("Here:\n```\nx = 1"), [.text("Here:"), .code(language: "", body: "x = 1")])
+        XCTAssertEqual(ReplyBlock.split("Just `inline` text"), [.text("Just `inline` text")])
+        XCTAssertEqual(ReplyBlock.split(""), [])
+    }
+
     func testBudgetLeavesRoomForTheSystemAndTheReply() {
         XCTAssertEqual(ChatTurn.budget(contextTokens: 8192, system: String(repeating: "s", count: 6000), replyTokens: 2048),
                        (8192 - 2048) * 3 - 6000)

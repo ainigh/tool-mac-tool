@@ -83,11 +83,13 @@ button.
 
 ### Chat (Glass)
 
-A floating glass shape with no window around it. It's small when empty and grows as you talk.
-The edge ripples while the model thinks, it tilts toward the pointer, and it dims a little
-when you're in another app. Drag it by the empty space in its top row. Its buttons open the
-memory, start a new chat, shrink it to just the input box, keep it on top, and close it (⌘W).
-**Return** sends; **Esc** stops a reply.
+A floating glass card with no window around it. It's just the input box when empty and grows
+downward as you talk. The glass ripples while the model thinks and dims a little when you're in
+another app; the controls on it stay still. Drag it by the empty space in its top row. Its
+buttons open the memory, start a new chat (⌘N), shrink it to just the input box, keep it on
+top, and close it (⌘W). **Return** sends, **⌥Return** starts a new line, **Esc** stops a reply,
+and cut, copy, paste and undo work in the box. Code in a reply gets its own box with a
+**Copy** button; hover over a reply to copy all of it.
 
 - **The model** comes from [Ollama](https://ollama.com) (`http://127.0.0.1:11434`, or the
   address in Glass's settings). Pick it from the menu at the top left. Ollama has to be running
