@@ -31,8 +31,45 @@ final class MemoryTests: XCTestCase {
 
     func testHideTagsHoldsBackAnUnfinishedTag() {
         XCTAssertEqual(MemoryStore.hideTags("Sure [[remember: half"), "Sure ")
+        XCTAssertEqual(MemoryStore.hideTags("Sure [[rem"), "Sure ")
+        XCTAssertEqual(MemoryStore.hideTags("Sure [["), "Sure ")
         XCTAssertEqual(MemoryStore.hideTags("Sure ["), "Sure ")
-        XCTAssertEqual(MemoryStore.hideTags("a [[x]] b"), "a  b")
+        // Once it's finished, nothing is held back.
+        XCTAssertEqual(MemoryStore.hideTags("Sure [", streaming: false), "Sure [")
+        XCTAssertEqual(MemoryStore.hideTags("Sure [[remember: half", streaming: false), "Sure [[remember: half")
+    }
+
+    func testOnlyRememberTagsAreHidden() {
+        XCTAssertEqual(MemoryStore.hideTags("a [[x]] b"), "a [[x]] b")
+        XCTAssertEqual(MemoryStore.hideTags("if [[ -f \"$x\" ]]; then"), "if [[ -f \"$x\" ]]; then")
+        // Still streaming, but "[[ -f" can't turn into a tag: shown as it comes.
+        XCTAssertEqual(MemoryStore.hideTags("if [[ -f x"), "if [[ -f x")
+        // An unclosed [[ doesn't swallow the rest of a finished reply.
+        let lua = "In Lua, s = [[ a long\nstring and more text"
+        XCTAssertEqual(MemoryStore.extract(lua).shown, lua)
+    }
+
+    func testTagsInCodeAreLeftAlone() {
+        let reply = """
+            Here:
+            ```bash
+            if [[ -z "$x" ]]; then echo "[[remember: not me]]"; fi
+            ```
+            Also `[[remember: nor me]]`. [[remember: likes bash]]
+            """
+        let r = MemoryStore.extract(reply)
+        XCTAssertEqual(r.facts, ["likes bash"])
+        XCTAssertTrue(r.shown.contains(#"if [[ -z "$x" ]]; then echo "[[remember: not me]]"; fi"#), r.shown)
+        XCTAssertTrue(r.shown.contains("`[[remember: nor me]]`"), r.shown)
+        XCTAssertFalse(r.shown.contains("likes bash"))
+        // An open code block while streaming: nothing inside it is held back.
+        XCTAssertEqual(MemoryStore.hideTags("```\nx = [["), "```\nx = [[")
+    }
+
+    func testBudgetLeavesRoomForTheSystemAndTheReply() {
+        XCTAssertEqual(ChatTurn.budget(contextTokens: 8192, system: String(repeating: "s", count: 6000), replyTokens: 2048),
+                       (8192 - 2048) * 3 - 6000)
+        XCTAssertEqual(ChatTurn.budget(contextTokens: 2048, system: String(repeating: "s", count: 9000), replyTokens: 2048), 1000)
     }
 
     func testPromptKeepsTheEnd() {

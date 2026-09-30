@@ -49,19 +49,24 @@ struct ChatView: View {
 
     var small: Bool { collapsed || chat.messages.isEmpty }
 
+    /// Lively while the model works, slower when calm, and still when calm in the background.
+    var frameInterval: Double { chat.phase == .idle ? 1 / 20 : 1 / 45 }
+    var paused: Bool { chat.phase == .idle && active == .inactive }
+
     var body: some View {
         let size = small ? Self.compact : Self.open
         VStack {
-            TimelineView(.animation(minimumInterval: 1 / 45)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                ZStack {
+            ZStack {
+                // Only the glass redraws every frame; the conversation on top of it redraws when it changes.
+                TimelineView(.animation(minimumInterval: frameInterval, paused: paused)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
                     GlassSurface(mood: mood, time: t)
-                    ChatContent(chat: chat, small: small, collapsed: $collapsed, pinned: $pinned,
-                                close: close, pin: pin)
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 16)
+                        .scaleEffect(breath(t))
                 }
-                .scaleEffect(breath(t))
+                ChatContent(chat: chat, small: small, collapsed: $collapsed, pinned: $pinned,
+                            close: close, pin: pin)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 16)
             }
             .frame(width: size.width, height: size.height)
             .rotation3DEffect(.degrees(Double(-tilt.height) * 7), axis: (x: 1, y: 0, z: 0), perspective: 0.6)
@@ -214,8 +219,11 @@ struct ChatMessages: View {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(chat.messages) { m in
-                        MessageRow(message: m, waiting: chat.phase == .thinking)
-                            .id(m.id)
+                        if m.role == .proposal {
+                            ProposalRow(chat: chat, message: m).id(m.id)
+                        } else {
+                            MessageRow(message: m).equatable().id(m.id)
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -230,9 +238,9 @@ struct ChatMessages: View {
     }
 }
 
-struct MessageRow: View {
+/// Equatable, so a row is only drawn again (and its Markdown parsed again) when its text changes.
+struct MessageRow: View, Equatable {
     let message: ChatModel.Message
-    let waiting: Bool
 
     var body: some View {
         switch message.role {
@@ -263,12 +271,39 @@ struct MessageRow: View {
             Label(message.text, systemImage: "brain")
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.6))
+        case .proposal:
+            EmptyView()     // ProposalRow draws these
         }
     }
 
     static func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// A fact the model wants to remember: nothing is written to MEMORY.md until you say yes.
+struct ProposalRow: View {
+    @ObservedObject var chat: ChatModel
+    let message: ChatModel.Message
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "brain").font(.system(size: 11))
+            Text("Remember “\(message.text)”?")
+                .font(.system(size: 11.5))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button("Remember") { chat.accept(message.id) }
+            Button("No") { chat.dismiss(message.id) }
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .foregroundStyle(.white.opacity(0.85))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.08)))
+        .help("Adds it to MEMORY.md, which goes with every message (Glass reads it too)")
     }
 }
 

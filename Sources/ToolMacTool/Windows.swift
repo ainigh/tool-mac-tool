@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The tools' windows: one of each, made on first use and brought back after that.
@@ -81,5 +82,54 @@ extension NSWorkspace {
         } else {
             activateFileViewerSelecting([url])
         }
+    }
+}
+
+/// Hands over the window a view is in (nil once it leaves it).
+struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+
+    final class ReaderView: NSView {
+        var found: ((NSWindow?) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let w = window
+            DispatchQueue.main.async { self.found?(w) }
+        }
+    }
+
+    func makeNSView(context: Context) -> ReaderView {
+        let v = ReaderView()
+        v.found = found
+        return v
+    }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) { nsView.found = found }
+}
+
+/// Runs an action every few seconds, but only while the view's window is on screen: a closed
+/// window's views live on (so it comes back as it was), and a plain timer would keep going with them.
+struct VisibleTick: ViewModifier {
+    let action: () -> Void
+    @State private var timer: Publishers.Autoconnect<Timer.TimerPublisher>
+    @State private var window: NSWindow? = nil
+
+    init(every seconds: TimeInterval, action: @escaping () -> Void) {
+        self.action = action
+        _timer = State(initialValue: Timer.publish(every: seconds, on: .main, in: .common).autoconnect())
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background(WindowReader { window = $0 })
+            .onReceive(timer) { _ in
+                if let window, window.isVisible, window.occlusionState.contains(.visible) { action() }
+            }
+    }
+}
+
+extension View {
+    func onVisibleTick(every seconds: TimeInterval, perform action: @escaping () -> Void) -> some View {
+        modifier(VisibleTick(every: seconds, action: action))
     }
 }

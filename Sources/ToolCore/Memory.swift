@@ -1,8 +1,9 @@
 import Foundation
 
 /// The long-term memory: one Markdown file, the same one Glass uses (<Glass folder>/MEMORY/MEMORY.md),
-/// so both remember the same things. Its whole text goes to the model with every message; the model
-/// adds a line by writing [[remember: the fact]] in its reply (hidden from you).
+/// so both remember the same things. Its text goes to the model with every message; the model
+/// suggests a line by writing [[remember: the fact]] in its reply (hidden from you), and it's added
+/// once you say yes.
 public struct MemoryStore {
     public let url: URL
 
@@ -124,36 +125,88 @@ public struct MemoryStore {
         return """
             You have a long-term memory, kept in a file the user can read and edit. Here it is:
 
-            \(body.isEmpty ? "(empty)" : String(body.suffix(6000)))
+            \(body.isEmpty ? "(empty)" : String(body.suffix(maxPromptCharacters)))
 
             When the user asks you to remember something, or tells you a lasting fact about themselves \
-            that is worth keeping, add it by putting [[remember: the fact]] anywhere in your reply \
-            (one short sentence; it is hidden from the user). Don't repeat facts already in memory.
+            that is worth keeping, suggest adding it by putting [[remember: the fact]] anywhere in your reply \
+            (one short sentence; the user is asked before it's kept). Don't repeat facts already in memory.
             """
     }
 
-    /// The reply without its [[...]] tags, and the facts it asked to remember.
+    /// How much of the memory goes with each message.
+    public static let maxPromptCharacters = 6000
+
+    static let tag = try! NSRegularExpression(pattern: #"\[\[\s*remember\s*:\s*(.+?)\s*\]\]"#,
+                                              options: [.caseInsensitive, .dotMatchesLineSeparators])
+
+    /// The finished reply without its [[remember: …]] tags, and the facts it suggested. Tags inside
+    /// code (``` blocks or `spans`) are left alone, and so is any other [[…]], like Bash's [[ -f x ]].
     public static func extract(_ reply: String) -> (shown: String, facts: [String]) {
         var facts: [String] = []
-        let re = try! NSRegularExpression(pattern: #"\[\[\s*remember\s*:\s*(.+?)\s*\]\]"#,
-                                          options: [.caseInsensitive, .dotMatchesLineSeparators])
-        let ns = reply as NSString
-        for m in re.matches(in: reply, range: NSRange(location: 0, length: ns.length)) {
-            facts.append(ns.substring(with: m.range(at: 1)))
+        for part in parts(reply) where !part.code {
+            let ns = part.text as NSString
+            for m in tag.matches(in: part.text, range: NSRange(location: 0, length: ns.length)) {
+                facts.append(ns.substring(with: m.range(at: 1)))
+            }
         }
-        return (hideTags(reply).trimmingCharacters(in: .whitespacesAndNewlines), facts)
+        return (hideTags(reply, streaming: false).trimmingCharacters(in: .whitespacesAndNewlines), facts)
     }
 
-    /// For showing a reply while it streams in: complete [[...]] tags removed, and an unfinished
-    /// one at the end held back until it's done.
-    public static func hideTags(_ text: String) -> String {
-        var s = text.replacingOccurrences(of: #"\[\[[^\]]*\]\]"#, with: "", options: .regularExpression)
-        if let open = s.range(of: "[[", options: .backwards), s[open.upperBound...].range(of: "]]") == nil {
-            s = String(s[..<open.lowerBound])
-        } else if s.hasSuffix("[") {
-            s.removeLast()
+    /// The reply without its [[remember: …]] tags. While it streams in, a tag that has started but
+    /// not finished yet ("[[remem") is held back too, so it never flashes on screen.
+    public static func hideTags(_ text: String, streaming: Bool = true) -> String {
+        let all = parts(text)
+        var out = ""
+        for (i, part) in all.enumerated() {
+            if part.code { out += part.text; continue }
+            let ns = part.text as NSString
+            var s = tag.stringByReplacingMatches(in: part.text, range: NSRange(location: 0, length: ns.length),
+                                                 withTemplate: "")
+            if streaming && i == all.count - 1 { s = holdBackUnfinishedTag(s) }
+            out += s.replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
         }
-        return s.replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
+        return out
+    }
+
+    /// Cuts a trailing "[", "[[", "[[ rem…" or "[[remember: half a fact" (no "]]" yet).
+    static func holdBackUnfinishedTag(_ s: String) -> String {
+        if let open = s.range(of: "[[", options: .backwards), s[open.upperBound...].range(of: "]]") == nil {
+            let rest = s[open.upperBound...].drop(while: \.isWhitespace).lowercased()
+            let key = "remember"
+            if key.hasPrefix(rest) || rest.hasPrefix(key) { return String(s[..<open.lowerBound]) }
+        }
+        if s.hasSuffix("[") && !s.hasSuffix("[[") { return String(s.dropLast()) }
+        return s
+    }
+
+    /// The text split into prose and code: ``` blocks (an unclosed one runs to the end) and
+    /// `inline` spans on one line (a lone backtick is just a backtick).
+    static func parts(_ text: String) -> [(code: Bool, text: String)] {
+        var out: [(code: Bool, text: String)] = []
+        var prose = ""
+        var i = text.startIndex
+        func flush() { if !prose.isEmpty { out.append((false, prose)); prose = "" } }
+        while i < text.endIndex {
+            let rest = text[i...]
+            if rest.hasPrefix("```") {
+                let after = text.index(i, offsetBy: 3)
+                let end = text[after...].range(of: "```").map(\.upperBound) ?? text.endIndex
+                flush()
+                out.append((true, String(text[i..<end])))
+                i = end
+            } else if text[i] == "`",
+                      let close = text[text.index(after: i)...].prefix(while: { $0 != "\n" }).firstIndex(of: "`") {
+                flush()
+                let end = text.index(after: close)
+                out.append((true, String(text[i..<end])))
+                i = end
+            } else {
+                prose.append(text[i])
+                i = text.index(after: i)
+            }
+        }
+        flush()
+        return out
     }
 }
 
@@ -165,6 +218,13 @@ public struct ChatTurn: Codable, Equatable {
     public init(role: String, content: String) {
         self.role = role
         self.content = content
+    }
+
+    /// How many characters of conversation fit in a context of `contextTokens`, once the system
+    /// message and room for the reply are taken out. It counts 3 characters a token (fewer than the
+    /// usual 4), to stay safe with code and non-English text.
+    public static func budget(contextTokens: Int, system: String, replyTokens: Int) -> Int {
+        max(1000, (contextTokens - replyTokens) * 3 - system.count)
     }
 
     /// The newest turns that fit in `budget` characters (always at least the last one), so a long
@@ -239,8 +299,8 @@ public struct Transcript {
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let h = try? FileHandle(forWritingTo: url) {
             defer { try? h.close() }
-            h.seekToEndOfFile()
-            h.write(Data(block.utf8))
+            try h.seekToEnd()
+            try h.write(contentsOf: Data(block.utf8))
         } else {
             try Data(block.utf8).write(to: url)
         }

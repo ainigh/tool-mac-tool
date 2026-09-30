@@ -25,30 +25,80 @@ final class ZipModel: ObservableObject {
     @Published var span: TimeInterval = 10 * 60 {
         didSet { refresh() }
     }
+    /// Why the list may be wrong (Downloads or the Desktop can't be read), if it may.
+    @Published private(set) var problem: String?
+    /// A zip whose Desktop folder only matched part of its name: the first click asks, the second runs it.
+    @Published private(set) var armed: URL?
 
     private var statuses: [URL: Status] = [:]
+    /// Each zip's listing, kept while its date and size stay the same, so refreshing doesn't read
+    /// every zip again.
+    private var listings: [URL: (stamp: String, entries: [String]?)] = [:]
     private var refreshing = false
+    /// Asked to refresh while one was running (the span changed, say): go again when it's done.
+    private var again = false
+    private var disarm: Task<Void, Never>?
 
     func items(within seconds: TimeInterval, now: Date = Date()) -> [Item] {
         items.filter { now.timeIntervalSince($0.plan.added) <= seconds }
     }
 
     func refresh() {
-        if refreshing { return }
+        if refreshing {
+            again = true
+            return
+        }
         refreshing = true
         let seconds = max(span, Self.panelSpan)
+        let known = listings
         Task.detached(priority: .utility) {
             let tool = ZipToDesktop.forCurrentUser()
-            let plans = ((try? tool.recentZips(within: seconds)) ?? []).map { tool.plan(for: $0) }
+            var problem: String?
+            var zips: [URL] = []
+            do { zips = try tool.recentZips(within: seconds) } catch { problem = Self.explain(error, folder: "Downloads") }
+            var folders: [String] = []
+            do { folders = try tool.desktopFolders() } catch { problem = problem ?? Self.explain(error, folder: "Desktop") }
+            var fresh: [URL: (stamp: String, entries: [String]?)] = [:]
+            var plans: [ZipToDesktop.Plan] = []
+            for zip in zips {
+                let stamp = tool.stamp(zip)
+                let kept = known[zip].flatMap { $0.stamp == stamp ? $0.entries : nil }
+                let entries = kept ?? (try? tool.list(zip))
+                fresh[zip] = (stamp, entries)
+                plans.append(tool.plan(for: zip, entries: entries, folders: folders))
+            }
+            let found = plans, listings = fresh, trouble = problem
             await MainActor.run {
-                self.items = plans.map { Item(plan: $0, status: self.statuses[$0.zip] ?? .ready) }
+                self.listings = listings
+                self.problem = trouble
+                self.items = found.map { Item(plan: $0, status: self.statuses[$0.zip] ?? .ready) }
                 self.refreshing = false
+                if self.again {
+                    self.again = false
+                    self.refresh()
+                }
             }
         }
     }
 
+    /// A read error, in words, pointing to the setting when macOS said no.
+    nonisolated static func explain(_ error: Error, folder: String) -> String {
+        if (error as NSError).domain == NSCocoaErrorDomain, (error as NSError).code == NSFileReadNoPermissionError {
+            return "Tool Mac Tool isn't allowed to read \(folder). Allow it in System Settings › Privacy & Security › Files and Folders."
+        }
+        return "Can't read \(folder): \(error.localizedDescription)"
+    }
+
+    static let privacySettings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
+
     func run(_ item: Item) {
         if item.status == .running { return }
+        // Only part of the zip's name matched: make sure before moving files in.
+        if item.plan.unsafe == nil, item.plan.target != nil, !item.plan.exact, armed != item.id {
+            arm(item.id)
+            return
+        }
+        armed = nil
         set(item.id, .running)
         let zip = item.plan.zip
         Task.detached(priority: .userInitiated) {
@@ -72,6 +122,15 @@ final class ZipModel: ObservableObject {
         }
     }
 
+    private func arm(_ id: URL) {
+        armed = id
+        disarm?.cancel()
+        disarm = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if !Task.isCancelled, self?.armed == id { self?.armed = nil }
+        }
+    }
+
     private func set(_ id: URL, _ status: Status) {
         statuses[id] = status
         if let i = items.firstIndex(where: { $0.id == id }) { items[i].status = status }
@@ -91,7 +150,8 @@ final class ZipModel: ObservableObject {
         return f.localizedString(for: date, relativeTo: Date())
     }
 
-    static func line(for status: Status, plan: ZipToDesktop.Plan) -> String {
+    static func line(for status: Status, plan: ZipToDesktop.Plan, armed: Bool = false) -> String {
+        if armed, let target = plan.target { return "Click again to unzip into Desktop/\(target)" }
         switch status {
         case .ready: return plan.destination
         case .running: return "Unzipping…"
@@ -124,11 +184,13 @@ struct ZipStatusIcon: View {
 /// Under the tiles: the zips from the last 10 minutes. Click a row to run it.
 struct RecentZipsList: View {
     @ObservedObject var zips: ZipModel
-    let tick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         let recent = zips.items(within: ZipModel.panelSpan)
         VStack(alignment: .leading, spacing: 2) {
+            if let problem = zips.problem {
+                ZipProblem(text: problem).padding(.horizontal, 6).padding(.vertical, 4)
+            }
             if recent.isEmpty {
                 Text("No zips downloaded in the last 10 minutes")
                     .font(.caption)
@@ -137,18 +199,36 @@ struct RecentZipsList: View {
                     .padding(.vertical, 4)
             } else {
                 ForEach(recent) { item in
-                    ZipRow(item: item) { zips.run(item) }
+                    ZipRow(item: item, armed: zips.armed == item.id) { zips.run(item) }
                 }
             }
         }
         .padding(.top, 8)
         .onAppear { zips.refresh() }
-        .onReceive(tick) { _ in zips.refresh() }
+        .onVisibleTick(every: 5) { zips.refresh() }
+    }
+}
+
+/// Why the list may be wrong, with a way to the setting that fixes it.
+struct ZipProblem: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(text, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Open Privacy Settings") { NSWorkspace.shared.open(ZipModel.privacySettings) }
+                .buttonStyle(.link)
+                .font(.caption)
+        }
     }
 }
 
 struct ZipRow: View {
     let item: ZipModel.Item
+    let armed: Bool
     let run: () -> Void
     @State private var hover = false
 
@@ -159,9 +239,9 @@ struct ZipRow: View {
                     ZipStatusIcon(status: item.status).frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(item.plan.zip.lastPathComponent).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                        Text(ZipModel.line(for: item.status, plan: item.plan))
+                        Text(ZipModel.line(for: item.status, plan: item.plan, armed: armed))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(armed ? Color.accentColor : Color.secondary)
                             .lineLimit(2)
                     }
                     Spacer(minLength: 0)
@@ -187,7 +267,6 @@ struct ZipRow: View {
 
 struct ZipWindow: View {
     @ObservedObject var zips: ZipModel
-    let tick = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     struct Span: Identifiable {
         let name: String
@@ -216,6 +295,10 @@ struct ZipWindow: View {
             .padding(.horizontal, 14)
             .padding(.top, 34)
             .padding(.bottom, 10)
+            if let problem = zips.problem {
+                ZipProblem(text: problem).frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.bottom, 10)
+            }
             Divider()
             if items.isEmpty {
                 VStack(spacing: 6) {
@@ -227,7 +310,7 @@ struct ZipWindow: View {
                 ScrollView {
                     VStack(spacing: 10) {
                         ForEach(items) { item in
-                            ZipCard(item: item) { zips.run(item) }
+                            ZipCard(item: item, armed: zips.armed == item.id) { zips.run(item) }
                         }
                     }
                     .padding(14)
@@ -236,17 +319,20 @@ struct ZipWindow: View {
         }
         .frame(minWidth: 480, minHeight: 300)
         .onAppear { zips.refresh() }
-        .onReceive(tick) { _ in zips.refresh() }
+        .onVisibleTick(every: 5) { zips.refresh() }
     }
 }
 
 /// One zip in the window, with everything known about it.
 struct ZipCard: View {
     let item: ZipModel.Item
+    let armed: Bool
     let run: () -> Void
 
     var body: some View {
         let plan = item.plan
+        let unzipTitle: String = armed ? "Click again to confirm"
+            : plan.target.map { "Unzip into Desktop/\($0)" } ?? "Unzip"
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ZipStatusIcon(status: item.status)
@@ -258,9 +344,9 @@ struct ZipCard: View {
             ZipOutcome(status: item.status)
             HStack {
                 Button(action: run) {
-                    Label(plan.target.map { "Unzip into Desktop/\($0)" } ?? "Unzip", systemImage: "arrow.down.doc")
+                    Label(unzipTitle, systemImage: armed ? "questionmark.circle" : "arrow.down.doc")
                 }
-                .disabled(plan.target == nil || item.status == .running)
+                .disabled(plan.target == nil || plan.unsafe != nil || item.status == .running)
                 Button("Show zip") { NSWorkspace.shared.activateFileViewerSelecting([plan.zip]) }
                 if plan.target != nil {
                     Button("Open folder") { NSWorkspace.shared.show(ZipModel.place(item)) }

@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 import ToolCore
 
-/// Keeps the app on the newest commit of `main`: checks at launch and every 6 hours, and installs
-/// on request.
+/// Keeps the app on the newest commit of the branch it was built from (`main`, unless install.sh
+/// was given another): checks at launch and every 6 hours, and installs on request.
 ///
 /// Installing takes GitHub's prebuilt copy when there's a release made from that exact commit.
 /// Otherwise it downloads the source and builds it here with Apple's command line tools, which
@@ -14,7 +14,11 @@ import ToolCore
 @MainActor
 final class Updater: ObservableObject {
     nonisolated static let repo = "ainigh/tool-mac-tool"
-    nonisolated static let branch = "main"
+    /// The branch this copy follows (build-app.sh writes it into Info.plist).
+    nonisolated static var branch: String {
+        let b = Bundle.main.object(forInfoDictionaryKey: "ToolMacToolBranch") as? String ?? ""
+        return b.isEmpty ? "main" : b
+    }
     nonisolated static let assetName = "ToolMacTool.zip"
 
     nonisolated static var currentVersion: String {
@@ -179,7 +183,7 @@ final class Updater: ObservableObject {
         log("building \(commit.short) in \(src.path)")
         let base = currentVersion.split(separator: "-").first.map(String.init) ?? "0.1"
         try run("/bin/bash", [src.appendingPathComponent("scripts/build-app.sh").path],
-                env: ["VERSION": "\(base)-\(commit.short)", "COMMIT": commit.sha, "UNIVERSAL": "0"],
+                env: ["VERSION": "\(base)-\(commit.short)", "COMMIT": commit.sha, "BRANCH": branch, "UNIVERSAL": "0"],
                 in: src, logOutput: true)
         return src.appendingPathComponent("build").appendingPathComponent(Bundle.main.bundleURL.lastPathComponent)
     }
@@ -193,13 +197,16 @@ final class Updater: ObservableObject {
 
     /// GET https://api.github.com/<path>
     nonisolated static func api(_ path: String) throws -> Data {
-        if let gh = ghPath(), let data = try? run(gh, ["api", path]) {
-            return data
+        // gh's own error says more ("isn't signed in") than GitHub's 404 for a private repo does.
+        var ghError: Error?
+        if let gh = ghPath() {
+            do { return try run(gh, ["api", path]) } catch { ghError = error }
         }
         var req = URLRequest(url: URL(string: "https://api.github.com/\(path)")!)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         let (data, response) = try fetch(req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 404, let ghError { throw ghError }
         if status == 404 { throw Problem("GitHub can't see \(repo): if it's private, sign in with gh auth login") }
         if status == 403 { throw Problem("GitHub's hourly limit: try again later, or sign in with gh auth login") }
         guard status == 200 else { throw Problem("GitHub answered \(status)") }
@@ -229,9 +236,9 @@ final class Updater: ObservableObject {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let text = "\(ISO8601DateFormatter().string(from: Date())) \(line)\n"
         if let h = try? FileHandle(forWritingTo: url) {
-            h.seekToEndOfFile()
-            h.write(Data(text.utf8))
-            try? h.close()
+            defer { try? h.close() }
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: Data(text.utf8))
         } else {
             try? Data(text.utf8).write(to: url)
         }
@@ -252,21 +259,30 @@ final class Updater: ObservableObject {
         env.merge(extra) { $1 }
         p.environment = env
         let out = Pipe(), err = Pipe()
+        var outFile: FileHandle?
         if let file {
             FileManager.default.createFile(atPath: file.path, contents: nil)
-            p.standardOutput = try FileHandle(forWritingTo: file)
+            outFile = try FileHandle(forWritingTo: file)
+            p.standardOutput = outFile
         } else {
             p.standardOutput = out
         }
+        defer { try? outFile?.close() }
         p.standardError = err
         try p.run()
         // Read both while it runs, so a full pipe can't stall it.
-        var errData = Data()
-        let errReader = Thread { errData = err.fileHandleForReading.readDataToEndOfFile() }
-        errReader.start()
+        final class Box { var data = Data() }
+        let errBox = Box()
+        let errRead = DispatchGroup()
+        errRead.enter()
+        DispatchQueue.global().async {
+            errBox.data = err.fileHandleForReading.readDataToEndOfFile()
+            errRead.leave()
+        }
         let data = file == nil ? out.fileHandleForReading.readDataToEndOfFile() : Data()
         p.waitUntilExit()
-        while !errReader.isFinished { Thread.sleep(forTimeInterval: 0.01) }
+        errRead.wait()
+        let errData = errBox.data
         let name = (tool as NSString).lastPathComponent
         if logOutput {
             log("\(name) \(args.joined(separator: " "))\n\(String(decoding: data, as: UTF8.self))\(String(decoding: errData, as: UTF8.self))")

@@ -22,7 +22,7 @@ gh api -H "Accept: application/vnd.github.raw" repos/ainigh/tool-mac-tool/conten
 It downloads the latest release into `~/Applications` and opens it. If there's no release yet, it
 builds from the source instead. That needs Apple's command line tools, which Homebrew installs; if
 they're missing, run `xcode-select --install`. `TMT_BRANCH=name` installs another branch, built
-here.
+here; that copy then follows that branch when it updates.
 
 The app adds itself to your login items the first time it runs. To turn that off, click the sunrise
 button (**Open at login**) in the bottom bar.
@@ -32,7 +32,7 @@ Click **Allow**. The app is ad-hoc signed and not notarized, so macOS may ask ag
 
 ## Update
 
-The app follows the `main` branch. It checks at launch, every 6 hours, and when you choose
+The app follows the `main` branch (or the branch it was installed from). It checks at launch, every 6 hours, and when you choose
 the ↻ button in the bottom bar. When `main` has a commit this copy wasn't built from, the icon turns solid
 and the bottom bar shows an **Update** button (hover over it for the commit's title):
 
@@ -55,27 +55,30 @@ Each tile opens that tool's window.
 
 Under the Files tiles, the panel lists every zip that landed in `~/Downloads` in the last
 10 minutes. Each row shows where the zip would go. **Click a row** to run it on that zip; the row
-then shows how it went. The folder button opens the target folder. **The tile** opens a window
+then shows how it went. When the folder only matched part of the zip's name, the first click asks
+("Click again to unzip into …") and a second click within a few seconds runs it. The folder button opens the target folder. **The tile** opens a window
 with the same list over a longer span (10 minutes, hour, day, week). There each zip shows its
 size, how many files it holds, whether everything sits inside one folder, where it would go and,
 once run, which files were added and replaced.
 
 What running it does:
 
-1. Unzips it into a scratch folder.
+1. Unzips it into a scratch folder. A zip with paths that point outside it (`../`) is refused.
 2. Picks the Desktop folder it belongs to:
    - First choice: a folder with **the same name** as the zip. Case and a browser's ` (2)` suffix
      don't matter. If the zip holds a single folder, that folder's name counts too.
-   - Otherwise: a folder whose **name is contained in** the zip's name. For example, Desktop
-     `MyApp` matches `MyApp-main (2).zip`. If several match, the longest name wins. Names shorter
-     than 3 letters only count as exact matches.
+   - Otherwise: a folder whose **name appears as whole words** in the zip's name. For example,
+     Desktop `MyApp` matches `MyApp-main (2).zip`, but `new` doesn't match `newsletter.zip`. If
+     several match, the longest name wins. Names shorter than 3 letters only count as exact matches.
    - If nothing matches, or two folders tie, it stops without touching anything.
 3. Moves the zip's contents into that folder. Subfolders are merged. A file that already exists is
    replaced, and **the old one goes to the Trash**, so you can get it back. If the zip wraps
    everything in one folder named like the zip or the target (GitHub's `MyApp-main/`), the tool
    moves what's inside that folder, not the folder itself.
 
-The zip stays in Downloads. A card also fades in under the menu bar with a **Show in Finder**
+If moving stops partway (a file can't be moved, say), it says what had already been added and
+replaced. If Downloads or the Desktop can't be read, the list says so and links to the privacy
+setting. The zip stays in Downloads. A card also fades in under the menu bar with a **Show in Finder**
 button.
 
 ### Chat (Glass)
@@ -92,10 +95,13 @@ memory, start a new chat, shrink it to just the input box, keep it on top, and c
 - **Memory** is Glass's own `MEMORY.md` (`~/Documents/Glass/MEMORY/MEMORY.md`, or the folder set
   in Glass's settings), so Glass and this app remember the same things. Its text goes with every
   message; only its last 6,000 characters are sent, if it grows past that. When you ask the model
-  to remember something, it writes `[[remember: …]]` in its reply. That's hidden from you and
-  added to the file as a dated line, and the chat shows "Remembered: …".
-- **Long chats** send only their newest messages (about 16,000 characters), so they never
-  overflow the model's context.
+  to remember something, it writes `[[remember: …]]` in its reply. That's hidden from you, and the
+  chat asks **Remember "…"?** Only when you click **Remember** is it added to the file as a dated
+  line, so text you paste in can't slip lasting instructions into memory. Any other `[[…]]`
+  (Bash's `[[ -f x ]]`, say) and anything inside code is left as it is.
+- **Long chats** send only their newest messages. The app asks Ollama for an 8,192-token context
+  and fills it with the memory, as much of the conversation as fits, and room for the reply, so
+  the start (with the memory) is never cut off.
 - **Every chat is saved** as `glass-chat-<time>.md` in the Glass folder, in Glass's format, so it
   shows up in Glass's transcripts too.
 

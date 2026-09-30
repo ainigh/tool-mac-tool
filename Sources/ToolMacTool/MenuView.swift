@@ -126,6 +126,7 @@ struct BottomBar: View {
 
     @ViewBuilder private var update: some View {
         let version = "v\(Updater.currentVersion)" + (Updater.currentCommit.map { " · \($0.prefix(7))" } ?? "")
+            + (Updater.branch == "main" ? "" : " · \(Updater.branch)")
         switch updater.state {
         case .available(let u):
             Button {

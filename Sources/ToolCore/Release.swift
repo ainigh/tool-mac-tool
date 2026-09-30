@@ -59,12 +59,6 @@ public struct Release: Decodable, Equatable {
     public var version: Version? { Version(tag) }
 
     public func asset(named name: String) -> Asset? { assets.first { $0.name == name } }
-
-    /// Whether this release is newer than the running `current` version.
-    public func isNewer(than current: String) -> Bool {
-        guard let mine = Version(current), let theirs = version else { return false }
-        return theirs > mine
-    }
 }
 
 /// The newest commit on a branch (GET /repos/{owner}/{repo}/commits/{branch}).

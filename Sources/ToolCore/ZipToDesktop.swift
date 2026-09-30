@@ -1,12 +1,12 @@
 import Foundation
 
-/// The "Unzip latest download to Desktop" tool.
+/// The "Unzip to Desktop" tool, for one zip from Downloads.
 ///
-///  1. Takes the single most recent file in Downloads. It has to be a .zip, or nothing happens.
+///  1. Refuses a zip with paths that would land outside the folder it's unzipped into.
 ///  2. Unzips it into a scratch folder.
 ///  3. Finds the Desktop folder it belongs to: the one with the same name as the zip (or as the one
-///     folder inside it), else the one whose name is contained in the zip's name
-///     (Desktop "MyApp" matches "MyApp-main (2).zip"); the longest such name wins.
+///     folder inside it), else the one whose name appears as whole words in the zip's name
+///     (Desktop "MyApp" matches "MyApp-main (2).zip", not "MyAppNext.zip"); the longest such name wins.
 ///  4. Moves what was in the zip into that folder. Folders merge; a file that's already there is
 ///     replaced, and the old one goes to the Trash, so nothing is lost.
 ///
@@ -48,24 +48,27 @@ public struct ZipToDesktop {
     }
 
     public enum Failure: LocalizedError, Equatable {
-        case noFiles(folder: String)
-        case notZip(name: String)
-        case stillDownloading(name: String)
         case emptyZip(name: String)
+        case unsafePaths(name: String, example: String)
         case noMatch(zip: String)
         case ambiguous(zip: String, folders: [String])
         case unzipFailed(String)
+        /// Moving stopped partway: `done` says what had already been added and replaced.
+        case interrupted(done: Report, why: String)
 
         public var errorDescription: String? {
             switch self {
-            case .noFiles(let folder): return "There are no files in \(folder)."
-            case .notZip(let name): return "The latest download, “\(name)”, isn't a zip file."
-            case .stillDownloading(let name): return "“\(name)” is still downloading. Try again when it's done."
             case .emptyZip(let name): return "“\(name)” is empty."
+            case .unsafePaths(let name, let example):
+                return "“\(name)” has paths that point outside it (like “\(example)”), so it wasn't unzipped."
             case .noMatch(let zip): return "No folder on the Desktop matches “\(zip)”."
             case .ambiguous(let zip, let folders):
                 return "“\(zip)” matches more than one Desktop folder: \(folders.joined(separator: ", "))."
             case .unzipFailed(let why): return "Couldn't unzip it: \(why)"
+            case .interrupted(let done, let why):
+                var parts = ["\(done.added.count) added", "\(done.replaced.count) replaced"]
+                if !done.replaced.isEmpty { parts[1] += " (the old ones are in the Trash)" }
+                return "Stopped partway into Desktop/\(done.target.lastPathComponent) after \(parts.joined(separator: ", ")): \(why)"
             }
         }
     }
@@ -90,13 +93,10 @@ public struct ZipToDesktop {
 
     // MARK: - Running it
 
-    /// The latest download, if it's a zip.
-    public func run() throws -> Report {
-        try run(zip: latestZip())
-    }
-
-    /// One particular zip.
     public func run(zip: URL) throws -> Report {
+        if let entries = try? list(zip), let bad = entries.first(where: Self.isUnsafe) {
+            throw Failure.unsafePaths(name: zip.lastPathComponent, example: bad)
+        }
         let work = scratch.appendingPathComponent(UUID().uuidString)
         try fileManager.createDirectory(at: work, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: work) }
@@ -108,7 +108,7 @@ public struct ZipToDesktop {
             throw Failure.unzipFailed(error.localizedDescription)
         }
 
-        let entries = try visibleChildren(of: work).filter { $0.lastPathComponent != "__MACOSX" }
+        let entries = try children(of: work).filter { !Self.isJunk($0.lastPathComponent) }
         if entries.isEmpty { throw Failure.emptyZip(name: zip.lastPathComponent) }
         let zipName = zip.deletingPathExtension().lastPathComponent
         let wrapper = entries.count == 1 && isFolder(entries[0]) ? entries[0].lastPathComponent : nil
@@ -129,20 +129,23 @@ public struct ZipToDesktop {
             source = work.appendingPathComponent(wrapper)
         }
         var report = Report(zip: zip, target: target, matchedExactly: exact, added: [], replaced: [])
-        try merge(source, into: target, prefix: "", report: &report)
+        do {
+            try merge(source, into: target, prefix: "", report: &report)
+        } catch {
+            throw Failure.interrupted(done: report, why: error.localizedDescription)
+        }
         return report
     }
 
-    /// The most recent visible file in Downloads, if it's a zip. Folders are not looked at.
-    public func latestZip() throws -> URL {
-        let files = try visibleChildren(of: downloads).filter { !isFolder($0) }
-        guard let newest = files.max(by: { date($0) < date($1) }) else {
-            throw Failure.noFiles(folder: downloads.lastPathComponent)
-        }
-        let ext = newest.pathExtension.lowercased()
-        if Self.partialExtensions.contains(ext) { throw Failure.stillDownloading(name: newest.lastPathComponent) }
-        if ext != "zip" { throw Failure.notZip(name: newest.lastPathComponent) }
-        return newest
+    /// A path in a zip that would land outside the folder it's unzipped into.
+    static func isUnsafe(_ path: String) -> Bool {
+        path.hasPrefix("/") || path.hasPrefix("~") || path.split(separator: "/").contains("..")
+            || path.split(separator: "\\").contains("..")
+    }
+
+    /// What a Mac or a zip program leaves in a zip that isn't part of it.
+    static func isJunk(_ name: String) -> Bool {
+        name == "__MACOSX" || name == ".DS_Store" || name.hasPrefix("._")
     }
 
     // MARK: - Looking before running
@@ -161,11 +164,14 @@ public struct ZipToDesktop {
         public var wrapper: String?
         /// How many files it holds (folders not counted); nil if it couldn't be read.
         public var files: Int?
+        /// A path in it that points outside it, if any: then it won't be run.
+        public var unsafe: String? = nil
 
         public var id: URL { zip }
 
         /// Where it would go, in a few words.
         public var destination: String {
+            if unsafe != nil { return "has paths pointing outside it: won't unzip" }
             if let target { return "→ Desktop/\(target)" + (exact ? "" : " (name contains it)") }
             if !ambiguous.isEmpty { return "matches \(ambiguous.joined(separator: ", ")): pick by renaming one" }
             return "no matching Desktop folder"
@@ -182,21 +188,23 @@ public struct ZipToDesktop {
             .map(\.0)
     }
 
+    /// Reads the zip's listing and the Desktop, then works out the plan.
     public func plan(for zip: URL) -> Plan {
-        let entries = try? list(zip)
-        var wrapper: String?
-        if let entries {
-            let tops = Set(entries.compactMap { $0.split(separator: "/").first.map(String.init) }
-                .filter { $0 != "__MACOSX" && $0 != ".DS_Store" })
-            if tops.count == 1, let top = tops.first, entries.contains(where: { $0.hasPrefix(top + "/") }) {
-                wrapper = top
-            }
-        }
+        plan(for: zip, entries: try? list(zip), folders: (try? desktopFolders()) ?? [])
+    }
+
+    /// The plan from a listing (nil: it couldn't be read) and the Desktop's folders, so a caller can
+    /// keep listings instead of reading every zip again.
+    public func plan(for zip: URL, entries: [String]?, folders: [String]) -> Plan {
+        let wrapper = entries.flatMap(Self.wrapper(in:))
         let zipName = zip.deletingPathExtension().lastPathComponent
-        let folders = (try? desktopFolders()) ?? []
+        let files = entries.map { list in
+            list.filter { path in
+                !path.hasSuffix("/") && !path.split(separator: "/").contains(where: { Self.isJunk(String($0)) })
+            }.count
+        }
         var plan = Plan(zip: zip, added: date(zip), size: size(zip), target: nil, exact: false, ambiguous: [],
-                        wrapper: wrapper,
-                        files: entries.map { $0.filter { !$0.hasSuffix("/") && !$0.hasPrefix("__MACOSX/") }.count })
+                        wrapper: wrapper, files: files)
         switch Self.match(names: [zipName] + (wrapper.map { [$0] } ?? []), folders: folders) {
         case .found(let name, let exact)?:
             plan.target = name
@@ -206,14 +214,28 @@ public struct ZipToDesktop {
         case nil:
             break
         }
+        if let entries, let bad = entries.first(where: Self.isUnsafe) {
+            plan.unsafe = bad
+        }
         return plan
     }
+
+    /// The one folder everything in a zip sits in, going by its listing (the same rule running it
+    /// uses: only a Mac's leftovers like __MACOSX and .DS_Store don't count).
+    static func wrapper(in entries: [String]) -> String? {
+        let tops = Set(entries.compactMap { $0.split(separator: "/").first.map(String.init) }.filter { !isJunk($0) })
+        guard tops.count == 1, let top = tops.first, entries.contains(where: { $0.hasPrefix(top + "/") }) else {
+            return nil
+        }
+        return top
+    }
+
+    /// When a file arrived and how big it is: if neither changed, neither did its listing.
+    public func stamp(_ url: URL) -> String { "\(date(url).timeIntervalSince1970)-\(size(url))" }
 
     func size(_ url: URL) -> Int64 {
         ((try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
     }
-
-    static let partialExtensions: Set<String> = ["crdownload", "download", "part", "partial", "opdownload"]
 
     // MARK: - Matching
 
@@ -225,7 +247,8 @@ public struct ZipToDesktop {
     /// Which Desktop folder the zip goes into.
     ///
     /// `names` are what the zip is called, in order of preference (its name, then the one folder in it).
-    /// Same name (ignoring case and a browser's " (2)") beats a Desktop name contained in the zip's;
+    /// Same name (ignoring case and a browser's " (2)") beats a Desktop name found in the zip's as
+    /// whole words ("MyApp" in "MyApp-main", not in "MyAppNext"; "docs v2" in "old docs v2 final");
     /// among those, the longest wins. Names shorter than 3 characters only match exactly.
     public static func match(names: [String], folders: [String]) -> Match? {
         let keys = names.map(normalize).filter { !$0.isEmpty }
@@ -238,7 +261,8 @@ public struct ZipToDesktop {
         var bestLength = 0
         for folder in folders {
             let f = normalize(folder)
-            guard f.count >= 3, keys.contains(where: { $0.contains(f) }) else { continue }
+            let w = words(f)
+            guard f.count >= 3, !w.isEmpty, keys.contains(where: { contains(words($0), w) }) else { continue }
             if f.count > bestLength {
                 best = [folder]
                 bestLength = f.count
@@ -258,12 +282,23 @@ public struct ZipToDesktop {
         return s.trimmingCharacters(in: .whitespaces)
     }
 
+    /// A name's words: runs of letters and digits.
+    static func words(_ name: String) -> [Substring] {
+        name.split(whereSeparator: { !($0.isLetter || $0.isNumber) })
+    }
+
+    /// Whether `part` appears in `whole`, word for word, in a row.
+    static func contains(_ whole: [Substring], _ part: [Substring]) -> Bool {
+        guard !part.isEmpty, part.count <= whole.count else { return false }
+        return (0...(whole.count - part.count)).contains { Array(whole[$0..<($0 + part.count)]) == part }
+    }
+
     static func related(_ a: String, _ b: String) -> Bool {
         let x = normalize(a), y = normalize(b)
         return !x.isEmpty && !y.isEmpty && (x.contains(y) || y.contains(x))
     }
 
-    func desktopFolders() throws -> [String] {
+    public func desktopFolders() throws -> [String] {
         try visibleChildren(of: desktop).filter(isFolder).map(\.lastPathComponent)
     }
 
@@ -273,7 +308,7 @@ public struct ZipToDesktop {
     func merge(_ source: URL, into target: URL, prefix: String, report: inout Report) throws {
         for item in try children(of: source) {
             let name = item.lastPathComponent
-            if name == ".DS_Store" || name == "__MACOSX" { continue }
+            if Self.isJunk(name) { continue }
             let dest = target.appendingPathComponent(name)
             let rel = prefix + name
             if !exists(dest) {
@@ -283,9 +318,22 @@ public struct ZipToDesktop {
                 try merge(item, into: dest, prefix: rel + "/", report: &report)
             } else {
                 try trash(dest)
-                try fileManager.moveItem(at: item, to: dest)
+                do {
+                    try fileManager.moveItem(at: item, to: dest)
+                } catch {
+                    throw Stranded(path: rel, why: error.localizedDescription)
+                }
                 report.replaced.append(rel)
             }
+        }
+    }
+
+    /// The old copy of `path` went to the Trash, but the new one couldn't be moved in.
+    struct Stranded: LocalizedError {
+        let path: String
+        let why: String
+        var errorDescription: String? {
+            "the old \(path) is in the Trash, but the new one couldn't be moved in (\(why))"
         }
     }
 

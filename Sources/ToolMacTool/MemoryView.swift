@@ -22,8 +22,6 @@ struct MemoryView: View {
     @State private var conflict = false
     @State private var message: String?
 
-    let tick = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
-
     var dirty: Bool { text != saved }
 
     var body: some View {
@@ -44,7 +42,7 @@ struct MemoryView: View {
             try? store.ensure()
             load()
         }
-        .onReceive(tick) { _ in reloadIfChanged() }
+        .onVisibleTick(every: 3) { reloadIfChanged() }
         .alert("MEMORY.md changed since you opened it", isPresented: $conflict) {
             Button("Save mine anyway", role: .destructive) { save(force: true) }
             Button("Load theirs (drop my edits)") { load() }
