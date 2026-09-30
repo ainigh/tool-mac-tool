@@ -190,6 +190,10 @@ final class ChatModel: ObservableObject {
         task?.cancel()
     }
 
+    func clearProblem() {
+        problem = nil
+    }
+
     func newChat() {
         task?.cancel()
         task = nil
