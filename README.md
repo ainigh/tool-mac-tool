@@ -9,7 +9,7 @@ that release.
 
 ## Install
 
-You need gh (GitHub's command line tool) signed in, since the repository is private. Glass's installer
+You need gh (GitHub's command line tool) signed in, since the repository is private. Glass's installer 
 already set that up. Paste this in Terminal:
 
 ```bash
