@@ -25,32 +25,18 @@ struct MenuBarIcon: View {
     }
 }
 
-/// What the menu shows: which tools are running and how each one last went.
+/// What the panel needs: the tools' models, the updater, open at login.
 @MainActor
 final class AppModel: ObservableObject {
-    struct Result {
-        var ok: Bool
-        var message: String
-        var reveal: URL?
-        var at: Date
-    }
-
-    @Published private(set) var running: Set<String> = []
-    @Published private(set) var results: [String: Result] = [:]
     @Published var openAtLogin = SMAppService.mainApp.status == .enabled
 
     let updater = Updater()
-
-    /// The tool that ran most recently, and how it went.
-    var lastResult: (tool: Tool, result: Result)? {
-        guard let last = results.max(by: { $0.value.at < $1.value.at }),
-              let tool = Tools.all.first(where: { $0.id == last.key }) else { return nil }
-        return (tool, last.value)
-    }
+    let zips = ZipModel()
+    let chat = ChatModel()
 
     init() {
         updater.start()
-        // Start at login from the first launch; the menu has a switch to turn it off.
+        // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {
             UserDefaults.standard.set(true, forKey: key)
@@ -58,24 +44,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func run(_ tool: Tool) {
-        guard !running.contains(tool.id) else { return }
-        running.insert(tool.id)
-        let work = tool.run
-        Task.detached(priority: .userInitiated) {
-            let result: Result
-            do {
-                let out = try work()
-                result = Result(ok: true, message: out.message, reveal: out.reveal, at: Date())
-            } catch {
-                result = Result(ok: false, message: error.localizedDescription, reveal: nil, at: Date())
-            }
-            await MainActor.run {
-                self.running.remove(tool.id)
-                self.results[tool.id] = result
-                HUD.shared.show(title: tool.title, message: result.message, ok: result.ok, reveal: result.reveal)
-            }
-        }
+    func open(_ tool: Tool) {
+        tool.open(self)
     }
 
     func setOpenAtLogin(_ on: Bool) {
