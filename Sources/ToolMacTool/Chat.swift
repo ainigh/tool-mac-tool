@@ -70,6 +70,8 @@ final class ChatModel: ObservableObject {
         let id = UUID()
         var role: Role
         var text: String
+        /// A reply that didn't finish: "stopped" or "failed".
+        var note = ""
     }
 
     enum Phase { case idle, thinking, streaming }
@@ -121,24 +123,45 @@ final class ChatModel: ObservableObject {
                     if problem?.hasPrefix("Ollama") == true { problem = nil }
                 }
             } catch {
-                problem = "Ollama isn't running (\(ollama.base.host ?? "")): open the Ollama app, or run ollama serve"
+                problem = notRunning
             }
         }
     }
 
+    private var notRunning: String {
+        "Ollama isn't running (\(ollama.base.host ?? "")): open the Ollama app, or run ollama serve"
+    }
+
     func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, phase == .idle else { return }
-        guard !model.isEmpty else {
-            problem = "Pick a model first (Ollama needs at least one: ollama pull llama3.2)"
-            loadModels()
-            return
-        }
+        guard !text.isEmpty, phase == .idle, haveModel() else { return }
         input = ""
         problem = nil
         messages.append(Message(role: .user, text: text))
         record(who: "you", text: text)
+        reply()
+    }
 
+    /// Whether a reply can be asked for again: nothing is streaming and you've said something.
+    var canRetry: Bool { phase == .idle && messages.contains { $0.role == .user } }
+
+    /// Asks again for the reply to your last message: what came after it goes, and the
+    /// conversation as it stands is sent again.
+    func retry() {
+        guard canRetry, haveModel(), let last = messages.lastIndex(where: { $0.role == .user }) else { return }
+        messages.removeSubrange((last + 1)...)
+        problem = nil
+        reply()
+    }
+
+    private func haveModel() -> Bool {
+        if !model.isEmpty { return true }
+        problem = "Pick a model first (Ollama needs at least one: ollama pull llama3.2)"
+        loadModels()
+        return false
+    }
+
+    private func reply() {
         let history = messages.compactMap { m -> ChatTurn? in
             switch m.role {
             case .user: return ChatTurn(role: "user", content: m.text)
@@ -172,12 +195,16 @@ final class ChatModel: ObservableObject {
                         usage = (p, chunk.outputTokens ?? 0)
                     }
                 }
+                // A stopped stream just ends, without an error.
+                if Task.isCancelled { note = "stopped" }
             } catch {
                 if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                     note = "stopped"
                 } else if mine == turn {
                     note = "failed"
-                    problem = error.localizedDescription
+                    let code = (error as? URLError)?.code
+                    problem = code == .cannotConnectToHost || code == .cannotFindHost
+                        ? notRunning : error.localizedDescription
                 }
             }
             // A new chat since: this reply is gone, and the next one's state isn't ours to change.
@@ -219,6 +246,7 @@ final class ChatModel: ObservableObject {
             messages.remove(at: i)
         } else {
             messages[i].text = shown
+            messages[i].note = note
         }
         // Nothing goes into memory until you say so: a pasted page could otherwise plant
         // instructions there, and memory goes with every message from then on.

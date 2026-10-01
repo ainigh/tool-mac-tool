@@ -43,7 +43,7 @@ enum GlassMood {
 
     var wobble: Double {
         switch self {
-        case .calm: return 0.8
+        case .calm: return 0.4
         case .thinking: return 4
         case .speaking: return 2
         }
@@ -70,11 +70,11 @@ struct GlassSurface: View {
         let shape = Blob(wobble: mood.wobble, phase: time * mood.speed * 2)
         let hue = (time * mood.speed * 0.02).truncatingRemainder(dividingBy: 1)
         ZStack {
-            shape.fill(Color(hue: hue, saturation: 0.8, brightness: 1).opacity(mood == .calm ? 0.22 : 0.4))
+            shape.fill(Color(hue: hue, saturation: 0.8, brightness: 1).opacity(mood == .calm ? 0.18 : 0.38))
                 .blur(radius: 20)
             shape.fill(.ultraThinMaterial)
             GlassColors(hue: hue, angle: time * mood.speed * 25)
-                .opacity(0.55)
+                .opacity(mood == .calm ? 0.4 : 0.55)
                 .clipShape(shape)
             shape.fill(Color.black.opacity(0.45))
             shape.fill(LinearGradient(colors: [.white.opacity(0.22), .clear, .white.opacity(0.06)],
