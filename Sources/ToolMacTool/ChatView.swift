@@ -303,7 +303,7 @@ struct ChatMessages: View {
                         ForEach(chat.messages) { m in
                             row(m, isLastReply: m.id == lastReply).id(m.id)
                         }
-                        Color.clear.frame(height: 1).id(Self.end)
+                        Color.clear.frame(height: 1)
                             .background(GeometryReader { g in
                                 let bottom = g.frame(in: .named(Self.space)).maxY <= outer.size.height + 40
                                 Color.clear
@@ -313,6 +313,7 @@ struct ChatMessages: View {
                                     }
                             })
                             .onDisappear { atBottom = false }
+                            .id(Self.end)   // last, so scrollTo finds it even once the lazy stack has let it go
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 14)
@@ -428,8 +429,18 @@ struct AssistantMessage: View, Equatable {
     }
 
     var body: some View {
-        if text.isEmpty {
+        if text.isEmpty && live {
             ThinkingDots()
+        } else if text.isEmpty {
+            // Stopped before it said anything.
+            HStack(spacing: 6) {
+                Label("Stopped", systemImage: "stop.circle")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.4))
+                if let retry {
+                    ActionChip(title: "Retry", symbol: "arrow.clockwise", help: "Ask for this reply again", action: retry)
+                }
+            }
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(ReplyBlock.split(text).enumerated()), id: \.offset) { _, block in

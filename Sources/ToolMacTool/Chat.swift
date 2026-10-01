@@ -242,7 +242,10 @@ final class ChatModel: ObservableObject {
         task = nil
         guard let i = messages.firstIndex(where: { $0.id == id }) else { return }
         let (shown, facts) = MemoryStore.extract(raw)
-        if shown.isEmpty {
+        if shown.isEmpty && note == "stopped" {
+            // Kept, empty, so it says it was stopped and offers to try again.
+            messages[i].note = note
+        } else if shown.isEmpty {
             messages.remove(at: i)
         } else {
             messages[i].text = shown
