@@ -87,9 +87,16 @@ A floating glass card with no window around it. It's just the input box when emp
 downward as you talk. The glass ripples while the model thinks and dims a little when you're in
 another app; the controls on it stay still. Drag it by the empty space in its top row. Its
 buttons open the memory, start a new chat (⌘N), shrink it to just the input box, keep it on
-top, and close it (⌘W). **Return** sends, **⌥Return** starts a new line, **Esc** stops a reply,
-and cut, copy, paste and undo work in the box. Code in a reply gets its own box with a
-**Copy** button; hover over a reply to copy all of it.
+top, and close it (⌘W). **Return** sends, **⌥Return** starts a new line, **Esc** stops a reply
+(or, with nothing typed, puts the chat away), and cut, copy, paste and undo work in the box.
+
+Replies show Markdown: headings, bullet, numbered and task lists, quotes and rules, plus bold,
+italics, `code` and links inside a line. Code blocks get their own box with a **Copy** button.
+Under the newest reply sit **Copy** and **Retry** (which asks for that reply again); older replies
+show **Copy** when you hover over them. A reply you stopped or that failed says so. The list
+follows a reply as it streams in, unless you've scrolled up to read; then a ↓ button takes you
+back to the newest message. If a reply fails before it says anything, the warning above the box
+offers **Try again**.
 
 - **The model** comes from [Ollama](https://ollama.com) (`http://127.0.0.1:11434`, or the
   address in Glass's settings). Pick it from the menu at the top left. Ollama has to be running
@@ -133,7 +140,7 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, updates (testable anywhere)
+Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown, updates (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + GlassBlob, MemoryView, HUD, Updater
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)

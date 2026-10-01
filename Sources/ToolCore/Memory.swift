@@ -331,7 +331,7 @@ public enum ReplyBlock: Equatable {
                     out.append(.code(language: language, body: body.joined(separator: "\n")))
                     code = nil
                 } else {
-                    code = body + [line]
+                    code?.append(line)
                 }
             } else if trimmed.hasPrefix("```") {
                 flushProse()
