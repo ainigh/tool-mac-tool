@@ -83,20 +83,28 @@ button.
 
 ### Chat (Glass)
 
-A floating glass card with no window around it. It's just the input box when empty and grows
-downward as you talk. The glass ripples while the model thinks and dims a little when you're in
-another app; the controls on it stay still. Drag it by the empty space in its top row. Its
-buttons open the memory, start a new chat (⌘N), shrink it to just the input box, keep it on
-top, and close it (⌘W). **Return** sends, **⌥Return** starts a new line, **Esc** stops a reply
-(or, with nothing typed, puts the chat away), and cut, copy, paste and undo work in the box.
+A floating glass panel built like Glass's own page, with no window around it. Colors drift
+behind the glass (livelier while you type, circling while the model thinks, washing red when
+something's wrong), and a glowing line splits it in two. Above the line: a status light and the
+model's name (click it to switch models), then the newest reply, as large as it fits, in the
+colors moving behind the glass. Below the line: what you're typing, in the opposite colors,
+smaller the more you write. When you send, your text lifts away, a ring spreads through the
+glass and the old reply slides off. The panel swells a little when text changes and settles 15
+seconds later.
+
+With nothing to show it's just the status and the box; it opens up when you send. The controls
+fade in while the pointer is over the panel: memory, new chat (⌘N), shrink to just the box, keep
+on top, and close (⌘W). Drag it by the empty space in its top row or its bottom row. **Return**
+sends, **⌥Return** starts a new line, **Esc** stops a reply (or, with nothing typed, puts the
+chat away), and cut, copy, paste and undo work in the box.
 
 Replies show Markdown: headings, bullet, numbered and task lists, quotes and rules, plus bold,
-italics, `code` and links inside a line. Code blocks get their own box with a **Copy** button.
-Under the newest reply sit **Copy** and **Retry** (which asks for that reply again); older replies
-show **Copy** when you hover over them. A reply you stopped or that failed says so. The list
-follows a reply as it streams in, unless you've scrolled up to read; then a ↓ button takes you
-back to the newest message. If a reply fails before it says anything, the warning above the box
-offers **Try again**.
+italics, `code` and links inside a line. Code blocks get their own box with a **Copy** button. A
+reply too long to fit even small scrolls; while it streams it follows the end unless you've
+scrolled up, and then a ↓ button takes you back down. Under the reply sit **Copy** and **Retry**
+(which asks for it again), how it ended if it was stopped or failed, what was just remembered,
+and ‹ › arrows to step back through earlier replies. If a reply fails before it says anything,
+the warning under it offers **Try again**.
 
 - **The model** comes from [Ollama](https://ollama.com) (`http://127.0.0.1:11434`, or the
   address in Glass's settings). Pick it from the menu at the top left. Ollama has to be running
@@ -116,8 +124,10 @@ offers **Try again**.
 
 ### Memory (Glass)
 
-`MEMORY.md` in an editor. It shows how many words the file has and roughly how many tokens it
-adds to each message. ⌘S saves. The editor reloads when the file changes on disk (the chat adds
+`MEMORY.md` in an editor on the same glass as the chat (drag its edges to resize it). The status
+light says whether there are unsaved edits; under the line are the file's path (click it to show
+it in Finder), how many words it has and roughly how many tokens it adds to each message. ⌘S
+saves, ⌘W closes. The editor reloads when the file changes on disk (the chat adds
 to it), unless you have unsaved edits. If you save over a change made in the meantime, it asks
 first.
 
@@ -134,7 +144,7 @@ first.
    the update.
 
 For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw your own shape;
-`GlassBlob.swift` and `ChatView.swift` show how.
+`Glass.swift` (the glass panel, its moving colors and the glowing line) and `ChatView.swift` show how.
 
 ## Layout
 
@@ -142,7 +152,7 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
 Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown, updates (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
-                              Zips, Chat + ChatView + GlassBlob, MemoryView, HUD, Updater
+                              Zips, Chat + ChatView + Glass, MemoryView, HUD, Updater
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)
 .github/workflows/build.yml   test + build on every push; release on main
 install.sh                    install the latest release (or build main) into ~/Applications
