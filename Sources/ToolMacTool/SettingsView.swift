@@ -139,6 +139,17 @@ struct SettingsView: View {
 
             Section {
                 HStack {
+                    Text("Building updates on this Mac needs Apple's command line tools with Swift 6, and gh.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Build tools…") { BuildToolsWindow.show() }
+                }
+            } header: {
+                Text("Updates")
+            }
+
+            Section {
+                HStack {
                     Button("Show settings file") { NSWorkspace.shared.activateFileViewerSelecting([prefs.url]) }
                     Spacer()
                     Button("Reset to defaults…", role: .destructive) { confirmReset = true }

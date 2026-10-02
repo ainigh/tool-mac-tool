@@ -113,6 +113,9 @@ struct BottomBar: View {
         HStack(spacing: 4) {
             update
             Spacer(minLength: 8)
+            IconButton(symbol: "hammer", help: "Build tools: check and install what building updates here needs") {
+                BuildToolsWindow.show()
+            }
             IconButton(symbol: model.openAtLogin ? "sunrise.fill" : "sunrise",
                        help: model.openAtLogin ? "Opens at login (click to stop)" : "Open at login",
                        tint: model.openAtLogin ? .accentColor : .secondary) {
@@ -153,6 +156,9 @@ struct BottomBar: View {
             IconButton(symbol: "doc.on.doc", help: "Copy the error (with the build log, if it built)") {
                 Clipboard.copy(Updater.report(why))
             }
+            Button("Fix…") { BuildToolsWindow.show() }
+                .controlSize(.small)
+                .help("Check and install what building updates here needs")
         case .upToDate, .idle:
             IconButton(symbol: "arrow.clockwise", help: "Check for updates") { updater.check(userInitiated: true) }
             Text(updater.state == .upToDate ? "Up to date · \(version)" : version)

@@ -30,4 +30,22 @@ final class ReleaseTests: XCTestCase {
         XCTAssertEqual(c.short, "0123456")
         XCTAssertEqual(c.title, "Add a tool")
     }
+
+    func testFindsTheNewestCommandLineTools() {
+        let list = """
+        Software Update Tool
+
+        Finding available software
+        Software Update found the following new or updated software:
+        * Label: Command Line Tools for Xcode-15.3
+        \tTitle: Command Line Tools for Xcode, Version: 15.3, Size: 707415KiB, Recommended: YES,
+        * Label: Command Line Tools for Xcode-16.2
+        \tTitle: Command Line Tools for Xcode, Version: 16.2, Size: 856000KiB, Recommended: YES,
+        * Label: macOS Sonoma 14.7-23H124
+        """
+        let found = SoftwareUpdate.commandLineTools(in: list)
+        XCTAssertEqual(found?.label, "Command Line Tools for Xcode-16.2")
+        XCTAssertEqual(found?.version, Version("16.2"))
+        XCTAssertNil(SoftwareUpdate.commandLineTools(in: "No new software available."))
+    }
 }
