@@ -339,7 +339,7 @@ struct ChatStatus: View {
 
     var label: String {
         switch chat.phase {
-        case .thinking: return "Thinking…"
+        case .thinking: return chat.activity ?? "Thinking…"
         case .streaming: return "Replying…"
         case .idle:
             if chat.model.isEmpty { return "No model" }
@@ -479,9 +479,18 @@ enum ChatMenus {
     /// The model, the memory file, the prompts, the settings.
     static func more(_ chat: ChatModel) {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         let models = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
         models.submenu = ModelMenu.menu(chat)
         menu.addItem(models)
+        menu.addItem(.separator())
+        let count = ShortcutTool.callable(chat.settings.shortcuts).count
+        let tools = ActionMenuItem(title: count == 0 ? "Use shortcuts as tools (none set up)"
+                                                     : "Use shortcuts as tools (\(count))") { chat.toolsOn.toggle() }
+        tools.state = chat.toolsOn && chat.settings.toolsOn ? .on : .off
+        tools.isEnabled = chat.settings.toolsOn && count > 0
+        menu.addItem(tools)
+        menu.addItem(ActionMenuItem(title: "Edit tools…") { ToolsWindow.show() })
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "Edit memory (MEMORY.md)…") { MemoryWindow.show() })
         menu.addItem(ActionMenuItem(title: "Edit prompts and personas…") { PromptsWindow.show() })
@@ -897,6 +906,13 @@ struct ReplyActions: View {
                     ActionChip(title: "Retry", symbol: "arrow.clockwise", help: "Ask for this reply again") {
                         chat.retry()
                     }
+                }
+                if let ran = exchange.reply?.ran, !ran.isEmpty {
+                    Label("Ran " + ran.joined(separator: ", "), systemImage: "bolt.fill")
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .help("Shortcuts the model ran for this reply:\n" + ran.joined(separator: "\n"))
                 }
                 if let note = exchange.reply?.note, !note.isEmpty {
                     Label(note == "stopped" ? "Stopped" : "Didn't finish",

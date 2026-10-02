@@ -32,7 +32,7 @@ enum Tools {
     static let sections: [ToolSection] = [
         ToolSection(title: "Files", tools: [unzip], extra: .recentZips),
         ToolSection(title: "Voice", tools: [readAloud, dictate, transcribe]),
-        ToolSection(title: "Glass", tools: [chat, diagram, memory, prompts, settings]),
+        ToolSection(title: "Glass", tools: [chat, diagram, memory, prompts, shortcutTools, settings]),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }
@@ -72,6 +72,14 @@ enum Tools {
         subtitle: "Up to nine system prompts to pick from in the chat, the prompt that tells the model how to use and keep its memory, and a persona for each voice.",
         symbol: "text.quote",
         open: { _ in PromptsWindow.show() })
+
+    static let shortcutTools = Tool(
+        id: "tools",
+        name: "Tools",
+        title: "Tools: shortcuts the model can run",
+        subtitle: "Pick Apple Shortcuts the chat's model may call, and say when it should call each. Each takes text and gives text back (or nothing).",
+        symbol: "bolt.horizontal.circle",
+        open: { _ in ToolsWindow.show() })
 
     static let settings = Tool(
         id: "settings",

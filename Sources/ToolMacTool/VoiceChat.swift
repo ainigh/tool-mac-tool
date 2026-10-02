@@ -208,7 +208,7 @@ struct VoiceChatView: View {
         case .off: return (.trouble, "Not listening: click to start")
         case .listening: return (.ready, "Listening… (pauses send)")
         case .hearing: return (.streaming, "Hearing you… (space sends now)")
-        case .thinking: return (.thinking, "Thinking…")
+        case .thinking: return (.thinking, chat.activity ?? "Thinking…")
         case .speaking: return (.streaming, "Speaking: click to interrupt")
         case .trouble: return (.trouble, "Something's wrong")
         }
