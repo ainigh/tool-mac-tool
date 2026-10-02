@@ -517,9 +517,13 @@ struct DiagramProblem: View {
 
 // MARK: - The canvas
 
-/// Mermaid, drawn in a see-through web view. Mermaid's script is downloaded once (from jsDelivr)
-/// into ~/Library/Application Support/ToolMacTool/mermaid; after that it draws offline. Pinch to
-/// zoom.
+/// The diagram, drawn in a see-through web view. A diagram that is a graph (a flowchart, mind map,
+/// state, class, ER, sequence, timeline or architecture diagram) is drawn as a network in the app's
+/// own look: each node a large icon picked from its label (brands, services and plain words), elbow
+/// connections shaded from one node's color to the next, subgraphs as tinted frames (the page and
+/// scripts in Sources/ToolMacTool/Network, shipped in the app). Anything else (pie, gantt, ...) is
+/// drawn by Mermaid, whose script is downloaded once (from jsDelivr) into
+/// ~/Library/Application Support/ToolMacTool/mermaid; after that it draws offline. Pinch to zoom.
 struct MermaidCanvas: NSViewRepresentable {
     @ObservedObject var diagram: DiagramModel
     let handle: Handle
@@ -530,6 +534,21 @@ struct MermaidCanvas: NSViewRepresentable {
             .appendingPathComponent("Library/Application Support/ToolMacTool/mermaid")
     }
     static var script: URL { folder.appendingPathComponent("mermaid-\(version).min.js") }
+
+    /// The network view's page and scripts, in the app's resource bundle (next to the binary when
+    /// run from a build folder).
+    static var resources: URL? {
+        let name = "ToolMacTool_ToolMacTool.bundle"
+        let bases = [Bundle.main.resourceURL, Bundle.main.bundleURL, Bundle.main.executableURL?.deletingLastPathComponent()]
+        for base in bases.compactMap({ $0 }) {
+            let bundle = base.appendingPathComponent(name)
+            for dir in [bundle.appendingPathComponent("Network"), bundle.appendingPathComponent("Contents/Resources/Network")]
+            where FileManager.default.fileExists(atPath: dir.appendingPathComponent("network.js").path) {
+                return dir
+            }
+        }
+        return nil
+    }
 
     /// Lets the view ask the page for things (the SVG).
     @MainActor
@@ -612,85 +631,48 @@ struct MermaidCanvas: NSViewRepresentable {
         context.coordinator.drawPending()
     }
 
-    /// Gets Mermaid's script (downloading it the first time), then opens the page.
+    /// Puts the page and its scripts next to Mermaid's script (downloading that the first time),
+    /// then opens the page. Without Mermaid's script (offline the first time), graphs still draw.
     static func load(into web: WKWebView, diagram: DiagramModel) {
         Task { @MainActor in
             do {
-                try await fetchScript()
-                let page = folder.appendingPathComponent("canvas.html")
-                try Data(html.utf8).write(to: page, options: .atomic)
-                web.loadFileURL(page, allowingReadAccessTo: folder)
+                try installPage()
             } catch {
-                diagram.report("Couldn't get Mermaid (it's downloaded once, from cdn.jsdelivr.net): \(error.localizedDescription)")
+                diagram.report("Couldn't set up the diagram canvas: \(error.localizedDescription)")
+                return
             }
+            try? await fetchScript()
+            web.loadFileURL(folder.appendingPathComponent("canvas.html"), allowingReadAccessTo: folder)
+        }
+    }
+
+    /// Copies the network view's files into the folder (the app's own copy wins, so an update
+    /// brings its new drawing), with the page pointed at this version of Mermaid's script.
+    static func installPage() throws {
+        guard let source = resources else {
+            throw Ollama.Problem("the app's diagram files (ToolMacTool_ToolMacTool.bundle) are missing; reinstall the app")
+        }
+        let files = FileManager.default
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        for name in try files.contentsOfDirectory(atPath: source.path) {
+            let from = source.appendingPathComponent(name), to = folder.appendingPathComponent(name)
+            var data = try Data(contentsOf: from)
+            if name == "canvas.html" {
+                data = Data(String(decoding: data, as: UTF8.self).replacingOccurrences(of: "__MERMAID_VERSION__", with: version).utf8)
+            }
+            try data.write(to: to, options: .atomic)
         }
     }
 
     static func fetchScript() async throws {
         if FileManager.default.fileExists(atPath: script.path) { return }
         let url = URL(string: "https://cdn.jsdelivr.net/npm/mermaid@\(version)/dist/mermaid.min.js")!
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 20))
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count > 100_000 else {
             throw Ollama.Problem("the download failed (\((response as? HTTPURLResponse)?.statusCode ?? 0))")
         }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try data.write(to: script, options: .atomic)
-    }
-
-    static var html: String {
-        """
-        <!doctype html>
-        <html><head><meta charset="utf-8">
-        <style>
-          html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
-                       font-family: -apple-system, "SF Pro Rounded", sans-serif; -webkit-user-select: none; }
-          #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-          #stage svg { display: block; }
-          #empty { color: rgba(255,255,255,.28); font: 600 24px -apple-system, "SF Pro Rounded", sans-serif;
-                   text-align: center; line-height: 1.4; }
-        </style>
-        <script src="mermaid-\(version).min.js"></script>
-        </head><body>
-        <div id="stage"><div id="empty">Your diagram appears here.<br>Describe it below, or press the mic and say it.</div></div>
-        <script>
-          const stage = document.getElementById('stage');
-          const emptyHTML = stage.innerHTML;
-          function post(m) { window.webkit.messageHandlers.tmt.postMessage(JSON.stringify(m)); }
-          mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict',
-            themeVariables: { background: 'transparent', fontFamily: '-apple-system, "SF Pro Rounded", sans-serif',
-                              fontSize: '16px' } });
-          let n = 0;
-          function fit() {
-            const svg = stage.querySelector('svg');
-            if (!svg || !svg.viewBox || !svg.viewBox.baseVal) return;
-            const box = svg.viewBox.baseVal;
-            if (!box.width || !box.height) return;
-            const w = stage.clientWidth - 16, h = stage.clientHeight - 16;
-            const scale = Math.min(w / box.width, h / box.height, 2.5);
-            svg.style.maxWidth = 'none';
-            svg.setAttribute('width', box.width * scale);
-            svg.setAttribute('height', box.height * scale);
-          }
-          async function draw(code, id) {
-            const mine = 'm' + (++n);
-            try {
-              await mermaid.parse(code);
-              const { svg } = await mermaid.render(mine, code);
-              stage.innerHTML = svg;
-              fit();
-              post({ id: id, ok: true });
-            } catch (e) {
-              for (const x of [mine, 'd' + mine]) { const el = document.getElementById(x); if (el && !stage.contains(el)) el.remove(); }
-              post({ id: id, ok: false, error: String((e && (e.message || e.str)) || e) });
-            }
-          }
-          function clearStage() { stage.innerHTML = emptyHTML; }
-          function svgText() { const s = stage.querySelector('svg'); return s ? s.outerHTML : ''; }
-          window.addEventListener('resize', fit);
-          post({ ready: true });
-        </script>
-        </body></html>
-        """
     }
 }
 

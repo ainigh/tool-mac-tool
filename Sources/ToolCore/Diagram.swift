@@ -1,8 +1,9 @@
 import Foundation
 
-/// The diagram tool: you say what you want, the model answers with Mermaid, and the app draws it.
-/// Each request carries the diagram as it stands, and only the last exchange is kept, so the
-/// model always works from the current picture rather than a long history.
+/// The diagram tool: you say what you want, the model answers with Mermaid, and the app draws it
+/// (as a network diagram, in the app's own look, when it's a graph). Each request carries the
+/// diagram as it stands, and only the last exchange is kept, so the model always works from the
+/// current picture rather than a long history.
 public enum Diagram {
     public static let system = """
         You draw diagrams with Mermaid. Every reply is exactly one Mermaid diagram in a single ```mermaid code \
@@ -11,14 +12,22 @@ public enum Diagram {
         - You're given the current diagram (it may be empty) and the user's request. Change the current diagram \
         as asked and return the whole new diagram, keeping everything the user didn't ask to change. When the \
         request is about something new, start a fresh diagram.
-        - Choose the diagram type that fits: flowchart for processes and structures, sequenceDiagram for \
-        interactions over time, classDiagram, stateDiagram-v2, erDiagram, gantt, pie, mindmap, timeline, \
-        journey, quadrantChart or gitGraph when they suit better.
+        - The app draws your Mermaid as a network: every node becomes a large icon picked from its label, with \
+        the label under it, and the app lays it out and colors it itself. So:
+        - Use a flowchart for almost everything: systems, architectures, processes, plans, ideas and how things \
+        relate. Use a mindmap to break a topic down; stateDiagram-v2, classDiagram, erDiagram, sequenceDiagram \
+        or timeline only when the request is about states, classes, a data model, messages between parties or \
+        dates. Use gantt, pie, journey, quadrantChart, xychart or gitGraph only when asked for exactly that.
+        - Give every node a short, concrete label (1 to 4 words) that names the real thing: products, services, \
+        tools and languages by their names (PostgreSQL, Stripe, AWS Lambda, React, Slack), people and roles \
+        plainly (Customer, Designer). The icons are picked from these words.
+        - To put a short description under a node, add it after <br>: db["PostgreSQL<br>orders and users"].
+        - Group related nodes in subgraphs with a title (subgraph data [Data layer] ... end). Label a \
+        connection only when the label adds something, in 1 to 3 words.
         - Write valid Mermaid (version 11): simple node ids (letters, digits, underscores), labels in double \
-        quotes when they contain spaces or punctuation, no HTML, no Markdown inside labels, no %%{init}%% \
-        directives, no styling unless asked.
-        - Keep labels short and the layout readable; prefer top-down (TD) for flowcharts unless left-right \
-        reads better.
+        quotes when they contain punctuation, no HTML but <br>, no Markdown inside labels, no %%{init}%% \
+        directives, and no styling (classDef, style, linkStyle): the app styles the diagram.
+        - Keep it readable: about 5 to 30 nodes.
         """
 
     /// The user's message for one request: the diagram as it stands, then what they asked.
@@ -36,7 +45,7 @@ public enum Diagram {
 
     /// Asked when a reply wouldn't draw: the error, so the model can fix its own diagram.
     public static func repair(_ error: String) -> String {
-        "That diagram didn't render. Mermaid said: \(error.trimmingCharacters(in: .whitespacesAndNewlines))\n\n"
+        "That diagram didn't draw. The problem:\(error.trimmingCharacters(in: .whitespacesAndNewlines))\n\n"
             + "Fix it and reply with the whole corrected diagram in one ```mermaid block."
     }
 

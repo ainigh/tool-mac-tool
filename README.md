@@ -240,14 +240,32 @@ newer, mistral and others can): with one that can't, the chat answers without th
 
 A glass canvas covering most of the screen (90% of it). It opens from its tile, or when the chat's
 model draws something (see Model tools). Type, or press the mic and say, what you
-want drawn: the model answers with a [Mermaid](https://mermaid.js.org) diagram and it's drawn
-there. Ask for a change ("add a cache between the app and the database") and it redraws from the
+want drawn: the model answers with a [Mermaid](https://mermaid.js.org) diagram (the language
+models already know well) and the app draws it its own way, as a network in the style of Mind Map
+Studio's network view: every node a large icon in its color, picked from its label (about 270
+brands and cloud services by name, Stripe, Cloudflare, PostgreSQL, Kafka, "AWS Lambda", and plain
+words through Lucide's icons, "customer" → people, "payment" → a banknote; an emoji in a label is
+its icon), with the label and a short description (what follows a `<br>`) under it; connections as
+elbows with rounded corners, shaded from one node's color to the other's, with a comet running along
+each to show which way it goes and its label on a pill; subgraphs as tinted frames with their title.
+It lays itself out: layered so connections run straight where they can, boxes laid out inside first,
+links into one node side by side so their labels stay clear, and of top-down, left-right and (for a
+hub with four or more branches) a two-sided mind map, whichever shows largest in the window. A hub
+gets a larger icon on a pulsing tile, its branches a color each; with no hub the colors run round
+the wheel along the flow. Flowcharts (`graph` too), mind maps, state, class (members under the name),
+ER (attributes), sequence (participants and their messages), timeline and architecture diagrams are
+drawn this way, and the model is asked to use a flowchart unless something else fits better; pie
+charts, gantt charts and the other kinds that aren't graphs are drawn by Mermaid itself. Ask for a
+change ("add a cache between the app and the database") and it redraws from the
 diagram as it stands: each request sends the current diagram and only the previous exchange, no
 memory and no chat history. If what it wrote won't draw, Mermaid's error goes back to it once to
-fix. **Undo** goes back to the diagram before (and again to come forward), **Mermaid** opens the
+fix (Mermaid's, or the line that wouldn't read). **Undo** goes back to the diagram before (and again to come forward), **Mermaid** opens the
 code beside the canvas to read or edit (and **Draw this**), and you can copy the Mermaid or the
-SVG. Pinch to zoom. Mermaid's script is downloaded once, the first time (from cdn.jsdelivr.net),
-into `~/Library/Application Support/ToolMacTool/mermaid`. The model is the chat's unless Settings
+SVG. Pinch to zoom. The canvas (`Sources/ToolMacTool/Network`: its page, `network.js`, and Mind Map
+Studio's Mermaid reader and icons, which `scripts/sync-network.sh` copies from that repository) ships
+in the app and is put in `~/Library/Application Support/ToolMacTool/mermaid` with Mermaid's script,
+which is downloaded once, the first time (from cdn.jsdelivr.net); without it, everything but the
+kinds Mermaid draws still draws. The model is the chat's unless Settings
 picks another for diagrams. As in the chat, the controls along the bottom are hidden until you
 double-click the glass, any part of the glass drags it, and saying "close" while it listens
 closes it.
@@ -316,6 +334,10 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               MemoryView, HUD, Updater
+Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
+                              Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
+                              icon-match); shipped as the app's resources
+scripts/sync-network.sh       copies Mind Map Studio's Mermaid reader and icons into Network/
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)
 .github/workflows/build.yml   test + build on every push; release on main
 install.sh                    install the latest release (or build main) into ~/Applications
