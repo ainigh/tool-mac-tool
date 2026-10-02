@@ -154,7 +154,8 @@ final class SpeechTests: XCTestCase {
         var c = PhraseCutter(pause: 1)
         _ = c.add(audio(2))
         XCTAssertNil(c.flush())
-        _ = c.add(audio(0.5, level: 0.1))
+        _ = c.add(audio(1) + audio(0.5, level: 0.1))
+        // The speech and the bit of quiet before it.
         XCTAssertEqual(c.flush().map { Double($0.count) / 16_000 } ?? 0, 0.8, accuracy: 0.03)
     }
 

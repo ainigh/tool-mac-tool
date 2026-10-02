@@ -282,9 +282,14 @@ public struct PhraseCutter {
 
     /// Forgets the open phrase (what was heard while held).
     public mutating func reset() {
+        carry = []
+        startOver()
+    }
+
+    /// A new phrase starts (what's heard but not yet looked at stays).
+    private mutating func startOver() {
         open = []
         levels = []
-        carry = []
         spoke = false
         quietFrames = 0
     }
@@ -331,7 +336,7 @@ public struct PhraseCutter {
         if Double(quietFrames) * frameSeconds >= pause {
             // The pause ends it (and stays in it: a soft word in it isn't lost).
             let phrase = Phrase(samples: open, paused: true)
-            reset()
+            startOver()
             return phrase
         }
         if Double(levels.count) * frameSeconds >= longest {
