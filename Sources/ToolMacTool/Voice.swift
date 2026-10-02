@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 import Speech
@@ -15,14 +16,24 @@ enum VoiceSettings {
                                                "Deranged", "Good News", "Hysterical", "Jester", "Organ", "Pipe Organ",
                                                "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox"]
 
-    /// The voices for this Mac's language, best first (premium, then enhanced, then the rest).
+    /// The four voices on offer: the two best women's and two best men's voices this Mac has for
+    /// its language (VoiceLineup picks them).
     static func voices() -> [AVSpeechSynthesisVoice] {
         let language = Locale.current.language.languageCode?.identifier ?? "en"
-        return AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix(language) && !novelty.contains($0.name) && !isNovelty($0) }
-            .sorted { a, b in
-                a.quality.rawValue != b.quality.rawValue ? a.quality.rawValue > b.quality.rawValue : a.name < b.name
-            }
+        let all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix(language) && !novelty.contains($0.name) && !isNovelty($0) }
+        let byID = Dictionary(all.map { ($0.identifier, $0) }, uniquingKeysWith: { a, _ in a })
+        return VoiceLineup.pick(all.map(info)).compactMap { byID[$0.identifier] }
+    }
+
+    private static func info(_ v: AVSpeechSynthesisVoice) -> VoiceInfo {
+        let quality: VoiceInfo.Quality
+        switch v.quality {
+        case .premium: quality = .premium
+        case .enhanced: quality = .enhanced
+        default: quality = .standard
+        }
+        let female: Bool? = v.gender == .female ? true : v.gender == .male ? false : nil
+        return VoiceInfo(identifier: v.identifier, name: v.name, language: v.language, quality: quality, female: female)
     }
 
     private static func isNovelty(_ voice: AVSpeechSynthesisVoice) -> Bool {
@@ -35,11 +46,14 @@ enum VoiceSettings {
         set { defaults.set(newValue, forKey: "ttsVoice") }
     }
 
-    /// The chosen voice, or the best one there is.
+    /// The chosen voice if it's one of the four, else the best one.
     static func voice() -> AVSpeechSynthesisVoice? {
-        if let id = voiceID, let v = AVSpeechSynthesisVoice(identifier: id) { return v }
-        return voices().first
+        let lineup = voices()
+        return lineup.first { $0.identifier == voiceID } ?? lineup.first ?? AVSpeechSynthesisVoice(language: nil)
     }
+
+    /// Some of the four aren't Premium yet: better ones can be downloaded.
+    static var canDownloadBetter: Bool { voices().contains { $0.quality != .premium } }
 
     /// 0.5 to 2: how fast, against the voice's normal pace.
     static var speed: Double {
@@ -56,12 +70,19 @@ enum VoiceSettings {
         return u
     }
 
-    /// "Ava (Premium)": a voice as a menu shows it.
+    /// "Ava · woman, US (Premium)": a voice as a menu shows it.
     static func label(_ voice: AVSpeechSynthesisVoice) -> String {
-        switch voice.quality {
-        case .premium: return "\(voice.name) (Premium)"
-        case .enhanced: return "\(voice.name) (Enhanced)"
-        default: return voice.name
+        let who = voice.gender == .female ? "woman" : voice.gender == .male ? "man" : ""
+        let region = voice.language.split(separator: "-").dropFirst().first.map(String.init) ?? ""
+        let about = [who, region].filter { !$0.isEmpty }.joined(separator: ", ")
+        let quality = voice.quality == .premium ? " (Premium)" : voice.quality == .enhanced ? " (Enhanced)" : ""
+        return voice.name + (about.isEmpty ? "" : " · \(about)") + quality
+    }
+
+    /// Where to download Premium voices: Accessibility → Spoken Content → System voice → Manage Voices.
+    static func openVoiceDownloads() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent") {
+            NSWorkspace.shared.open(url)
         }
     }
 }
@@ -83,6 +104,16 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     override init() {
         super.init()
         synth.delegate = self
+    }
+
+    private static let sampler = AVSpeechSynthesizer()
+
+    /// A few words in `voice`, so choosing one lets you hear it.
+    static func preview(_ voice: AVSpeechSynthesisVoice) {
+        sampler.stopSpeaking(at: .immediate)
+        let u = VoiceSettings.utterance("Hi, I'm \(voice.name). This is how I sound.")
+        u.voice = voice
+        sampler.speak(u)
     }
 
     func say(_ text: String) {
@@ -200,8 +231,14 @@ final class SpeechRecorder: NSObject, AVSpeechSynthesizerDelegate {
 /// Listens to the microphone and writes down what's said, live. With `pauseToEnd` set, a pause
 /// that long ends what was said: it goes to `onUtterance` and listening carries on fresh. Without
 /// it, it keeps going (dictation) and `text` grows until it's stopped.
+///
+/// Nothing said should go missing: the recognizer's restarts are caught (LiveTranscript), each
+/// recognition is handed over to a fresh one at a quiet moment before the recognizer's time limit,
+/// stopping waits for the last words, and a microphone change (AirPods connecting) re-wires it.
 final class Listener: ObservableObject {
     @Published private(set) var on = false
+    /// Stopped, and the last words are still being worked out (a second or so).
+    @Published private(set) var finishing = false
     /// Listening is paused (the mic stays open, nothing is written down), e.g. while a reply is spoken.
     @Published private(set) var held = false
     /// What's been said so far.
@@ -220,12 +257,21 @@ final class Listener: ObservableObject {
     private var task: SFSpeechRecognitionTask?
     /// Counts recognition tasks, so a finished or cancelled one can't touch the next one's text.
     private var generation = 0
-    /// What earlier tasks wrote down (the recognizer stops now and then and is started again).
-    private var committed = ""
+    private var transcript = LiveTranscript()
     private var quiet: Timer?
     private var failures: [Date] = []
+    private var rewiring: NSObjectProtocol?
+    /// When the current recognition started, and how long it's been quiet since someone spoke.
+    private var taskStarted = Date()
+    private var quietFor = 0.0
+
+    /// A recognition is handed over to a new one at a pause after this long, and at the latest
+    /// after `rollLatest` (the recognizer stops by itself at about a minute).
+    static let rollAfter = 40.0
+    static let rollLatest = 55.0
 
     func start() {
+        if finishing { finished() }
         guard !on else { return }
         problem = nil
         Self.authorize { [weak self] problem in
@@ -238,12 +284,36 @@ final class Listener: ObservableObject {
         }
     }
 
+    /// Stops listening. The words still being worked out are waited for (`finishing`), briefly.
     func stop() {
+        let wasListening = on && !held && task != nil
+        closeMic()
+        guard wasListening else {
+            drop()
+            return
+        }
+        finishing = true
+        lock.lock()
+        let r = request
+        lock.unlock()
+        r?.endAudio()
+        let mine = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, self.finishing, self.generation == mine else { return }
+            self.finished()
+        }
+    }
+
+    /// Stops listening now, dropping whatever hasn't been recognized yet.
+    private func halt() {
+        closeMic()
+        drop()
+    }
+
+    private func closeMic() {
         quiet?.invalidate()
-        generation += 1
-        task?.cancel()
-        task = nil
-        setRequest(nil)
+        if let rewiring { NotificationCenter.default.removeObserver(rewiring) }
+        rewiring = nil
         if on {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
@@ -251,6 +321,21 @@ final class Listener: ObservableObject {
         on = false
         held = false
         level = 0
+    }
+
+    private func drop() {
+        generation += 1
+        task?.cancel()
+        task = nil
+        setRequest(nil)
+        finishing = false
+    }
+
+    /// The last recognition is done: its words are in.
+    private func finished() {
+        transcript.settle()
+        text = transcript.text
+        drop()
     }
 
     /// Stops writing down (keeps the mic open) until `release`.
@@ -262,7 +347,7 @@ final class Listener: ObservableObject {
         task?.cancel()
         task = nil
         setRequest(nil)
-        committed = ""
+        transcript.clear()
         text = ""
     }
 
@@ -276,7 +361,7 @@ final class Listener: ObservableObject {
     func endUtterance() {
         quiet?.invalidate()
         let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        committed = ""
+        transcript.clear()
         text = ""
         restart()
         if !said.isEmpty { onUtterance?(said) }
@@ -284,7 +369,7 @@ final class Listener: ObservableObject {
 
     /// Clears what's been written down (dictation: after it was saved).
     func clear() {
-        committed = ""
+        transcript.clear()
         text = ""
         if on && !held { restart() }
     }
@@ -296,12 +381,25 @@ final class Listener: ObservableObject {
             return
         }
         self.recognizer = recognizer
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            problem = "No microphone found"
+        if let problem = openMic() {
+            self.problem = problem
             return
         }
+        rewiring = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                          queue: .main) { [weak self] _ in self?.rewire() }
+        on = true
+        held = false
+        transcript.clear()
+        text = ""
+        failures = []
+        newTask()
+    }
+
+    /// Taps the microphone and starts the engine; nil, or what went wrong.
+    private func openMic() -> String? {
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { return "No microphone found" }
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             self?.heard(buffer)
@@ -311,15 +409,29 @@ final class Listener: ObservableObject {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            problem = "Couldn't start the microphone: \(error.localizedDescription)"
+            return "Couldn't start the microphone: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    /// The microphone changed (one was plugged in or connected, or the format changed): the engine
+    /// has stopped, so start it again on the new one, keeping what's been written down.
+    private func rewire() {
+        guard on else { return }
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        if let problem = openMic() {
+            transcript.settle()
+            text = transcript.text
+            self.problem = problem
+            halt()
             return
         }
-        on = true
-        held = false
-        committed = ""
-        text = ""
-        failures = []
-        newTask()
+        if !held {
+            transcript.settle()
+            text = transcript.text
+            restart()
+        }
     }
 
     /// On the audio thread.
@@ -329,7 +441,24 @@ final class Listener: ObservableObject {
         lock.unlock()
         r?.append(buffer)
         let l = Self.level(buffer)
-        DispatchQueue.main.async { self.level = self.level * 0.5 + l * 0.5 }
+        let seconds = Double(buffer.frameLength) / max(buffer.format.sampleRate, 1)
+        DispatchQueue.main.async {
+            self.level = self.level * 0.5 + l * 0.5
+            self.maybeRoll(level: l, seconds: seconds)
+        }
+    }
+
+    /// Hands the recognition over to a fresh one before the recognizer's time limit, at a pause
+    /// after something was said, so no word is cut.
+    private func maybeRoll(level: Float, seconds: Double) {
+        guard on, !held, task != nil else { return }
+        quietFor = level < 0.2 ? quietFor + seconds : 0
+        let age = Date().timeIntervalSince(taskStarted)
+        let paused = quietFor > 0.5 && !transcript.guess.isEmpty
+        guard (age > Self.rollAfter && paused) || age > Self.rollLatest else { return }
+        transcript.settle()
+        text = transcript.text
+        restart()
     }
 
     private func setRequest(_ r: SFSpeechAudioBufferRecognitionRequest?) {
@@ -345,14 +474,17 @@ final class Listener: ObservableObject {
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.addsPunctuation = true
+        req.taskHint = pauseToEnd == nil ? .dictation : .unspecified
         if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
         setRequest(req)
+        taskStarted = Date()
+        quietFor = 0
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             let said = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
-            let failed = error != nil
+            let code = (error as NSError?)?.code
             DispatchQueue.main.async {
-                self?.recognized(said, isFinal: isFinal, failed: failed, generation: mine)
+                self?.recognized(said, isFinal: isFinal, error: code, generation: mine)
             }
         }
     }
@@ -365,26 +497,38 @@ final class Listener: ObservableObject {
         newTask()
     }
 
-    private func recognized(_ said: String?, isFinal: Bool, failed: Bool, generation mine: Int) {
-        guard mine == generation, on, !held else { return }
+    private func recognized(_ said: String?, isFinal: Bool, error: Int?, generation mine: Int) {
+        guard mine == generation else { return }
+        if finishing {
+            if let said { transcript.heard(said) }
+            text = transcript.text
+            if isFinal || error != nil { finished() }
+            return
+        }
+        guard on, !held else { return }
         if let said {
-            text = Self.join(committed, said)
+            transcript.heard(said)
+            text = transcript.text
             if !said.isEmpty { waitForPause() }
-            if isFinal {
-                committed = text
-                restart()
-            }
-        } else if failed {
+        }
+        if isFinal {
+            transcript.settle()
+            restart()
+        } else if let error {
             // The recognizer gave up (a long silence, its time limit): carry on with a new one,
-            // unless it keeps failing straight away.
-            let now = Date()
-            failures = failures.filter { now.timeIntervalSince($0) < 10 } + [now]
-            if failures.count > 5 {
-                problem = "Speech recognition keeps stopping. Is Dictation or Siri turned off in System Settings?"
-                stop()
-                return
+            // unless it keeps failing straight away. Hearing nothing (1110) isn't failing.
+            if error != 1110 {
+                let now = Date()
+                failures = failures.filter { now.timeIntervalSince($0) < 10 } + [now]
+                if failures.count > 5 {
+                    transcript.settle()
+                    text = transcript.text
+                    problem = "Speech recognition keeps stopping. Is Dictation or Siri turned off in System Settings?"
+                    halt()
+                    return
+                }
             }
-            committed = text
+            transcript.settle()
             restart()
         }
     }
@@ -395,12 +539,6 @@ final class Listener: ObservableObject {
         quiet = Timer.scheduledTimer(withTimeInterval: pause, repeats: false) { [weak self] _ in
             self?.endUtterance()
         }
-    }
-
-    static func join(_ a: String, _ b: String) -> String {
-        if a.isEmpty { return b }
-        if b.isEmpty { return a }
-        return a + " " + b
     }
 
     /// Loudness of a buffer, 0 (quiet) to 1 (loud), on a decibel scale.
