@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import SwiftUI
@@ -26,7 +27,7 @@ struct Ollama {
     /// without it Ollama uses its own default, which is often smaller than what's sent, and then it
     /// cuts the start of the prompt, the system message with the memory in it.
     func chat(model: String, messages: [ChatTurn], contextTokens: Int, temperature: Double? = nil,
-              thinking: AppSettings.Thinking = .auto) -> AsyncThrowingStream<OllamaChunk, Error> {
+              thinking: AppSettings.Thinking = .auto, tools: [OllamaTool] = []) -> AsyncThrowingStream<OllamaChunk, Error> {
         struct Body: Encodable {
             struct Options: Encodable {
                 let num_ctx: Int
@@ -38,6 +39,8 @@ struct Ollama {
             let options: Options
             /// Left out unless it's set: models that can't think refuse it.
             let think: Bool?
+            /// Left out when there are none: models that can't call tools refuse them.
+            let tools: [OllamaTool]?
         }
         var req = URLRequest(url: base.appendingPathComponent("api/chat"))
         req.httpMethod = "POST"
@@ -45,7 +48,7 @@ struct Ollama {
         let think: Bool? = thinking == .auto ? nil : thinking == .on
         req.httpBody = try? JSONEncoder().encode(Body(model: model, messages: messages,
                                                       options: .init(num_ctx: contextTokens, temperature: temperature),
-                                                      think: think))
+                                                      think: think, tools: tools.isEmpty ? nil : tools))
         req.timeoutInterval = 600
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -86,6 +89,11 @@ struct Ollama {
             return notRunning
         }
         return error.localizedDescription
+    }
+
+    /// The error a model gives when it can't call tools.
+    static func cantUseTools(_ error: Error) -> Bool {
+        error.localizedDescription.contains("does not support tools")
     }
 
     var notRunning: String {
@@ -163,6 +171,10 @@ final class ChatModel: ObservableObject {
         var forgetting = false
         /// A memory note whose change was taken back.
         var undone = false
+        /// On a reply: the tool calls it made and their results, kept so later replies see them.
+        var toolTurns: [ChatTurn] = []
+        /// On a reply: the shortcuts it ran ("Weather", "Add Reminder (declined)").
+        var ran: [String] = []
     }
 
     enum Phase { case idle, thinking, streaming }
@@ -182,6 +194,10 @@ final class ChatModel: ObservableObject {
     @Published var memoryOn: Bool
     /// The window stays above others.
     @Published var pinned = true
+    /// Whether the model may run the shortcuts set up in Tools.
+    @Published var toolsOn: Bool
+    /// What's happening while no words come ("Running Weather…").
+    @Published private(set) var activity: String?
 
     let memory: MemoryStore
     let prefs = Preferences.shared
@@ -196,12 +212,17 @@ final class ChatModel: ObservableObject {
     /// Counts replies, so one that was stopped by a new chat can't touch the next reply's state.
     private var turn = 0
     private var watch: AnyCancellable?
+    /// Models Ollama said can't call tools: asked without them from then on.
+    private var toolless = Set<String>()
+    /// How many rounds of tool calls one reply may make before it has to answer.
+    static let toolRounds = 4
 
     init() {
         let s = Preferences.shared.settings
         mode = ChatKind(rawValue: s.mode) ?? .text
         promptID = s.promptID
         memoryOn = s.memoryOn
+        toolsOn = s.toolsOn
         memory = MemoryStore.forCurrentUser()
         // The model and the prompts live in Settings: when they change, this redraws.
         watch = prefs.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -285,6 +306,11 @@ final class ChatModel: ObservableObject {
             parts.append(persona)
         }
         if !mode.note.isEmpty { parts.append(mode.note) }
+        if !tools.isEmpty {
+            parts.append("You can run some of the user's Apple Shortcuts on this Mac with your tools. Call one when the "
+                + "request matches its description, then answer using what it returns; don't call tools otherwise, "
+                + "and never pretend you ran one.")
+        }
         if memoryOn {
             parts.append(MemoryStore.prompt(memory: memory.read(), instruction: s.memoryPrompt))
         }
@@ -292,18 +318,25 @@ final class ChatModel: ObservableObject {
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
+    /// The shortcuts this reply may run, by the names the model calls them.
+    var tools: [(name: String, tool: ShortcutTool)] {
+        guard toolsOn, settings.toolsOn, !toolless.contains(model) else { return [] }
+        return ShortcutTool.callable(settings.shortcuts)
+    }
+
     private func reply() {
-        let history = messages.compactMap { m -> ChatTurn? in
+        let history = messages.flatMap { m -> [ChatTurn] in
             switch m.role {
-            case .user: return ChatTurn(role: "user", content: m.text)
-            case .assistant: return m.text.isEmpty ? nil : ChatTurn(role: "assistant", content: m.text)
-            case .note, .proposal: return nil
+            case .user: return [ChatTurn(role: "user", content: m.text)]
+            case .assistant:
+                return m.toolTurns + (m.text.isEmpty ? [] : [ChatTurn(role: "assistant", content: m.text)])
+            case .note, .proposal: return []
             }
         }
         let s = settings
         let system = ChatTurn(role: "system", content: systemMessage())
         let budget = ChatTurn.budget(contextTokens: s.contextTokens, system: system.content, replyTokens: s.replyTokens)
-        let turns = [system] + ChatTurn.window(history, budget: budget)
+        let start = [system] + ChatTurn.window(history, budget: budget)
 
         let reply = Message(role: .assistant, text: "")
         messages.append(reply)
@@ -313,23 +346,59 @@ final class ChatModel: ObservableObject {
         let mine = turn
         let model = self.model
         let ollama = self.ollama
+        let tools = self.tools
+        let offered = tools.map { $0.tool.spec(name: $0.name) }
         task = Task {
             var raw = ""
             var note = ""
+            var turns = start
+            var toolTurns: [ChatTurn] = []
+            var ran: [String] = []
+            var specs = offered
             do {
-                for try await chunk in ollama.chat(model: model, messages: turns, contextTokens: s.contextTokens,
-                                                   temperature: s.temperature, thinking: s.thinking) {
-                    guard mine == turn else { break }
-                    if let piece = chunk.message?.content, !piece.isEmpty {
-                        raw += piece
-                        phase = .streaming
-                        let shown = MemoryStore.hideTags(raw)
-                        update(reply.id, text: shown)
-                        onReplyText?(shown)
+                var round = 0
+                rounds: while true {
+                    let before = raw.isEmpty ? "" : raw + "\n\n"
+                    var said = ""
+                    var calls: [ToolCall] = []
+                    do {
+                        let offer = round < Self.toolRounds ? specs : []
+                        for try await chunk in ollama.chat(model: model, messages: turns, contextTokens: s.contextTokens,
+                                                           temperature: s.temperature, thinking: s.thinking, tools: offer) {
+                            guard mine == turn else { break rounds }
+                            if let piece = chunk.message?.content, !piece.isEmpty {
+                                said += piece
+                                phase = .streaming
+                                let shown = MemoryStore.hideTags(before + said)
+                                update(reply.id, text: shown)
+                                onReplyText?(shown)
+                            }
+                            if let c = chunk.message?.toolCalls { calls += c }
+                            if chunk.done, let p = chunk.promptTokens {
+                                usage = (p, chunk.outputTokens ?? 0)
+                            }
+                        }
+                    } catch let error where !specs.isEmpty && Ollama.cantUseTools(error) {
+                        // This model can't call tools: ask again without them.
+                        toolless.insert(model)
+                        specs = []
+                        continue rounds
                     }
-                    if chunk.done, let p = chunk.promptTokens {
-                        usage = (p, chunk.outputTokens ?? 0)
+                    if !said.isEmpty { raw = before + said }
+                    if calls.isEmpty || Task.isCancelled || mine != turn { break }
+                    round += 1
+                    let asked = ChatTurn(role: "assistant", content: said, toolCalls: calls)
+                    turns.append(asked)
+                    toolTurns.append(asked)
+                    for call in calls {
+                        let (result, label) = await runTool(call, among: tools)
+                        guard mine == turn, !Task.isCancelled else { break rounds }
+                        ran.append(label)
+                        let answer = ChatTurn(role: "tool", content: result, toolName: call.function.name)
+                        turns.append(answer)
+                        toolTurns.append(answer)
                     }
+                    phase = .thinking
                 }
                 // A stopped stream just ends, without an error.
                 if Task.isCancelled { note = "stopped" }
@@ -343,8 +412,47 @@ final class ChatModel: ObservableObject {
             }
             // A new chat since: this reply is gone, and the next one's state isn't ours to change.
             guard mine == turn else { return }
+            activity = nil
+            if let i = messages.firstIndex(where: { $0.id == reply.id }) {
+                messages[i].toolTurns = toolTurns
+                messages[i].ran = ran
+            }
             finish(reply.id, raw: raw, model: model, note: note)
         }
+    }
+
+    /// Runs the shortcut a call names (asking first if it's set to): what goes back to the model,
+    /// and what the chat shows.
+    private func runTool(_ call: ToolCall, among tools: [(name: String, tool: ShortcutTool)]) async -> (String, String) {
+        guard let tool = tools.first(where: { $0.name == call.function.name })?.tool else {
+            return ("There's no tool called \(call.function.name).", call.function.name + " (not a tool)")
+        }
+        let input = ShortcutTool.input(from: call)
+        if tool.confirm && !Self.allowed(tool, input: input) {
+            return ("The user chose not to run it this time.", tool.shortcut + " (declined)")
+        }
+        activity = "Running \(tool.shortcut)…"
+        defer { activity = nil }
+        record(who: "shortcut", text: "_ran \(tool.shortcut)_" + (input.isEmpty ? "" : ": \(input)"))
+        do {
+            let out = try await ShortcutRunner.run(tool.shortcut, input: input, returnsText: tool.returnsText)
+            if !tool.returnsText { return ("Done: the shortcut ran.", tool.shortcut) }
+            return (out.isEmpty ? "The shortcut ran and gave nothing back." : out, tool.shortcut)
+        } catch {
+            return ("The shortcut failed: \(error.localizedDescription)", tool.shortcut + " (failed)")
+        }
+    }
+
+    /// "Run Weather?" with what it'll be given.
+    private static func allowed(_ tool: ShortcutTool, input: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Run the \u{201C}\(tool.shortcut)\u{201D} shortcut?"
+        alert.informativeText = input.isEmpty ? "The model wants to run it, with no input."
+            : "The model wants to run it with:\n\n\(input.prefix(600))"
+        alert.addButton(withTitle: "Run")
+        alert.addButton(withTitle: "Don't run")
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func stop() {
@@ -356,6 +464,7 @@ final class ChatModel: ObservableObject {
     }
 
     func newChat() {
+        activity = nil
         task?.cancel()
         task = nil
         turn += 1

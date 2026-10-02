@@ -187,6 +187,22 @@ pasted anywhere.
 - **Every chat is saved** as `glass-chat-<time>.md` in the Glass folder, in Glass's format, so it
   shows up in Glass's transcripts too.
 
+### Tools (Glass)
+
+Lets the chat's model run your **Apple Shortcuts**. Add shortcuts from the list of the ones you
+have, and for each write **when to call it** (like a prompt: what it does, when the model should
+use it and when not) and **what to pass it**. Each shortcut takes one piece of text and either
+**gives text back**, which the model reads and uses in its reply, or is **one way**, and the model
+is only told it ran. **Ask me before each run** shows what it's about to be given and waits for
+you. **Try it** runs a shortcut with some text right there and shows what came back.
+
+In the chat, the status says "Running Weather…" while one runs, and the reply says which ones
+ran. A reply can call shortcuts up to four rounds before it has to answer, and later replies
+still see what they returned. The chat's ⋯ menu turns tools off for that chat; the switch at the
+top of Tools turns them off everywhere. Shortcuts are run with macOS's `shortcuts` command, so the
+first run may ask for permission. Not every model can call tools (llama3.1 and newer, qwen2.5 and
+newer, mistral and others can): with one that can't, the chat answers without them.
+
 ### Diagram (Glass)
 
 A glass canvas covering most of the screen (90% of it). Type, or press the mic and say, what you
@@ -255,10 +271,12 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
 Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
+                              shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files, updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
+                              ShortcutTools (running shortcuts, the Tools window),
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               MemoryView, HUD, Updater

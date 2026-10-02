@@ -146,6 +146,9 @@ public struct AppSettings: Codable, Equatable {
     public var memoryPrompt = MemoryStore.defaultInstruction
     public var prompts = SystemPrompt.defaults
     public var personas = Persona.defaults
+    /// Apple Shortcuts the chat's model may run, and whether it may.
+    public var shortcuts: [ShortcutTool] = []
+    public var toolsOn = true
 
     public static let defaultOllama = "http://127.0.0.1:11434"
 
@@ -153,7 +156,8 @@ public struct AppSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case ollama, model, diagramModel, contextTokens, temperature, thinking, mode, promptID, memoryOn,
-             autoRemember, timeZone, location, clock24, personaScope, memoryPrompt, prompts, personas
+             autoRemember, timeZone, location, clock24, personaScope, memoryPrompt, prompts, personas,
+             shortcuts, toolsOn
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +183,8 @@ public struct AppSettings: Codable, Equatable {
         take(.memoryPrompt, &s.memoryPrompt)
         take(.prompts, &s.prompts)
         take(.personas, &s.personas)
+        take(.shortcuts, &s.shortcuts)
+        take(.toolsOn, &s.toolsOn)
         self = s.tidied()
     }
 

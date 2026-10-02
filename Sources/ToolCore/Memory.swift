@@ -293,10 +293,22 @@ public struct MemoryStore {
 public struct ChatTurn: Codable, Equatable {
     public var role: String
     public var content: String
+    /// The tools an assistant turn asked to run.
+    public var toolCalls: [ToolCall]?
+    /// On a "tool" turn: which tool this is the result of.
+    public var toolName: String?
 
-    public init(role: String, content: String) {
+    enum CodingKeys: String, CodingKey {
+        case role, content
+        case toolCalls = "tool_calls"
+        case toolName = "tool_name"
+    }
+
+    public init(role: String, content: String, toolCalls: [ToolCall]? = nil, toolName: String? = nil) {
         self.role = role
         self.content = content
+        self.toolCalls = toolCalls
+        self.toolName = toolName
     }
 
     /// How many characters of conversation fit in a context of `contextTokens`, once the system
@@ -316,15 +328,30 @@ public struct ChatTurn: Codable, Equatable {
             kept.append(t)
             used += t.content.count
         }
-        // Don't open with the model's words: start at a user turn.
-        while kept.count > 1, kept.last?.role == "assistant" { kept.removeLast() }
+        // Don't open with the model's words (or a tool's result): start at a user turn.
+        while kept.count > 1, kept.last?.role != "user" { kept.removeLast() }
         return kept.reversed()
     }
 }
 
 /// One line of Ollama's streamed /api/chat answer.
 public struct OllamaChunk: Decodable, Equatable {
-    public struct Message: Decodable, Equatable { public var content: String }
+    public struct Message: Decodable, Equatable {
+        public var content: String
+        /// The tools the model wants run (they can come before, after or instead of text).
+        public var toolCalls: [ToolCall]?
+
+        enum CodingKeys: String, CodingKey {
+            case content
+            case toolCalls = "tool_calls"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+            toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
+        }
+    }
     public var message: Message?
     public var done: Bool
     public var error: String?
