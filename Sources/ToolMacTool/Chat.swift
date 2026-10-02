@@ -60,6 +60,41 @@ struct Ollama {
     }
 }
 
+/// The four chats: the same conversation underneath, each tuned for how you talk to it and how
+/// it answers. They keep separate conversations and share the model setting and the memory.
+enum ChatKind: String, CaseIterable {
+    /// Type, read.
+    case text
+    /// Type; the reply is also spoken.
+    case speaks
+    /// Talk; the reply is written.
+    case listens
+    /// Talk, listen: no box to type in.
+    case voice
+
+    var number: Int { Self.allCases.firstIndex(of: self)! + 1 }
+    var windowID: String { self == .text ? "chat" : "chat\(number)" }
+    var speaks: Bool { self == .speaks || self == .voice }
+    var listens: Bool { self == .listens || self == .voice }
+
+    /// What the model is told about how its replies reach you, or how your messages reach it.
+    var note: String {
+        switch self {
+        case .text:
+            return ""
+        case .speaks:
+            return "\n\nYour replies are also read aloud, so prefer plain sentences to tables, long lists and symbols."
+        case .listens:
+            return "\n\nThe user's messages are transcribed from speech and may contain recognition mistakes: "
+                + "read them generously, and ask when something is unclear."
+        case .voice:
+            return "\n\nThis is a spoken conversation: the user talks (transcribed, so allow for recognition mistakes) "
+                + "and your reply is read aloud. Answer like a person talking: usually one to three short sentences, "
+                + "no lists, headings, tables, code or Markdown, nothing that only makes sense on screen."
+        }
+    }
+}
+
 /// One conversation: what's been said, what's streaming in, the model, and the memory.
 @MainActor
 final class ChatModel: ObservableObject {
@@ -87,8 +122,15 @@ final class ChatModel: ObservableObject {
     /// Tokens the last reply read (the whole context sent) and wrote.
     @Published private(set) var usage: (prompt: Int, output: Int)?
 
+    let kind: ChatKind
     let memory: MemoryStore
     let ollama: Ollama
+    /// For a voice: a reply started, grew (the text so far, tags hidden), ended (what's shown,
+    /// and "stopped" or "failed" if it didn't finish), or the conversation was cleared.
+    var onReplyStart: (() -> Void)?
+    var onReplyText: ((String) -> Void)?
+    var onReplyEnd: ((String, String) -> Void)?
+    var onClear: (() -> Void)?
     private var transcript: Transcript?
     private var task: Task<Void, Never>?
     /// Counts replies, so one that was stopped by a new chat can't touch the next reply's state.
@@ -101,7 +143,8 @@ final class ChatModel: ObservableObject {
     static let contextTokens = 8192
     static let replyTokens = 2048
 
-    init() {
+    init(kind: ChatKind = .text) {
+        self.kind = kind
         let home = FileManager.default.homeDirectoryForCurrentUser
         let config = MemoryStore.GlassConfig.load(home: home)
         memory = MemoryStore.forCurrentUser()
@@ -132,13 +175,14 @@ final class ChatModel: ObservableObject {
         "Ollama isn't running (\(ollama.base.host ?? "")): open the Ollama app, or run ollama serve"
     }
 
-    func send() {
+    /// Sends what's in the box. `spoken`: it was said, not typed (the transcript says so).
+    func send(spoken: Bool = false) {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, phase == .idle, haveModel() else { return }
         input = ""
         problem = nil
         messages.append(Message(role: .user, text: text))
-        record(who: "you", text: text)
+        record(who: spoken ? "you (voice)" : "you", text: text)
         reply()
     }
 
@@ -169,7 +213,8 @@ final class ChatModel: ObservableObject {
             case .note, .proposal: return nil
             }
         }
-        let system = ChatTurn(role: "system", content: Self.system + "\n\n" + MemoryStore.prompt(memory: memory.read()))
+        let system = ChatTurn(role: "system",
+                              content: Self.system + kind.note + "\n\n" + MemoryStore.prompt(memory: memory.read()))
         let budget = ChatTurn.budget(contextTokens: Self.contextTokens, system: system.content,
                                      replyTokens: Self.replyTokens)
         let turns = [system] + ChatTurn.window(history, budget: budget)
@@ -178,6 +223,7 @@ final class ChatModel: ObservableObject {
         messages.append(reply)
         phase = .thinking
         turn += 1
+        onReplyStart?()
         let mine = turn
         let model = self.model
         task = Task {
@@ -189,7 +235,9 @@ final class ChatModel: ObservableObject {
                     if let piece = chunk.message?.content, !piece.isEmpty {
                         raw += piece
                         phase = .streaming
-                        update(reply.id, text: MemoryStore.hideTags(raw))
+                        let shown = MemoryStore.hideTags(raw)
+                        update(reply.id, text: shown)
+                        onReplyText?(shown)
                     }
                     if chunk.done, let p = chunk.promptTokens {
                         usage = (p, chunk.outputTokens ?? 0)
@@ -229,6 +277,7 @@ final class ChatModel: ObservableObject {
         transcript = nil
         usage = nil
         phase = .idle
+        onClear?()
     }
 
     // MARK: -
@@ -264,6 +313,7 @@ final class ChatModel: ObservableObject {
         if !shown.isEmpty {
             record(who: model, text: shown, note: note)
         }
+        onReplyEnd?(shown, note.isEmpty && shown.isEmpty ? "failed" : note)
     }
 
     /// Yes to a suggested fact: it's added to MEMORY.md.

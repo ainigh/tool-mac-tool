@@ -10,36 +10,48 @@ enum ChatWindow {
     /// Room around the panel for its glow (and for it to swell into).
     static let margin: CGFloat = 30
 
-    static func show(_ chat: ChatModel) {
-        Windows.show("chat") {
+    /// `link`: Chat 2's voice or Chat 3's microphone.
+    static func show(_ chat: ChatModel, link: VoiceLink? = nil) {
+        let id = chat.kind.windowID
+        Windows.show(id) {
             let card = ChatView.cardSize(small: chat.messages.isEmpty, smallHeight: nil)
             let panel = GlassPanel(size: frame(for: card))
             panel.level = .floating
-            let view = ChatView(chat: chat,
-                                close: { panel.orderOut(nil) },
+            let close = {
+                link?.closed()
+                panel.orderOut(nil)
+            }
+            let view = ChatView(chat: chat, link: link,
+                                close: close,
                                 pin: { on in panel.level = on ? .floating : .normal },
                                 resize: { card in resize(panel, to: card, animate: true) })
             let host = FirstClickHostingView(rootView: view)
             host.sizingOptions = []          // the window sets the size; the view fills it
             panel.contentView = host
-            panel.commands = ["w": { panel.orderOut(nil) }, "n": { chat.newChat() }]
-            // Esc stops a reply; with nothing streaming and nothing typed, it puts the chat away.
+            panel.commands = ["w": close, "n": { chat.newChat() }]
+            // Esc stops a reply, then the voice, then the microphone; with nothing going on and
+            // nothing typed, it puts the chat away.
             panel.onEscape = {
                 if chat.phase != .idle {
                     chat.stop()
+                    link?.speaker?.stop()
+                } else if link?.speaker?.speaking == true {
+                    link?.speaker?.stop()
+                } else if link?.listener?.on == true {
+                    link?.listener?.stop()
                 } else if chat.input.isEmpty {
-                    panel.orderOut(nil)
+                    close()
                 } else {
                     return false
                 }
                 return true
             }
-            if !panel.setFrameUsingName("ToolMacTool.chat"), let screen = NSScreen.main {
+            if !panel.setFrameUsingName("ToolMacTool.\(id)"), let screen = NSScreen.main {
                 let v = screen.visibleFrame
                 panel.setFrameOrigin(NSPoint(x: v.maxX - panel.frame.width - 8, y: v.maxY - panel.frame.height))
             }
             resize(panel, to: card, animate: false)
-            panel.setFrameAutosaveName("ToolMacTool.chat")
+            panel.setFrameAutosaveName("ToolMacTool.\(id)")
             return panel
         }
         chat.loadModels()
@@ -67,6 +79,7 @@ enum ChatWindow {
 /// the line are there.
 struct ChatView: View {
     @ObservedObject var chat: ChatModel
+    let link: VoiceLink?
     let close: () -> Void
     let pin: (Bool) -> Void
     let resize: (CGSize) -> Void
@@ -111,7 +124,7 @@ struct ChatView: View {
             top
             GlowLine(clock: clock, mood: mood, paused: still)
                 .padding(.horizontal, 26)
-            PromptWell(chat: chat, ink: ink, small: small, sent: sent)
+            PromptWell(chat: chat, link: link, ink: ink, small: small, sent: sent)
                 .padding(.horizontal, 26)
                 .padding(.top, small ? 12 : 16)
                 .padding(.bottom, small ? 14 : 10)
@@ -152,12 +165,16 @@ struct ChatView: View {
 
     var top: some View {
         VStack(spacing: 0) {
-            ChatBar(chat: chat, ink: ink, collapsed: $collapsed, pinned: $pinned,
+            ChatBar(chat: chat, link: link, ink: ink, collapsed: $collapsed, pinned: $pinned,
                     showControls: hovering, close: close, pin: pin)
                 .padding(.leading, 18)
                 .padding(.trailing, 14)
                 .padding(.top, 12)
                 .padding(.bottom, small ? 10 : 6)
+            if let listener = link?.listener {
+                ListenerProblem(listener: listener)
+                    .padding(.horizontal, 22)
+            }
             if !small {
                 ReplyWell(chat: chat, ink: ink)
                     .padding(.horizontal, 26)
@@ -212,6 +229,7 @@ struct ChatView: View {
 /// the controls on the right, which show while the pointer is over the panel.
 struct ChatBar: View {
     @ObservedObject var chat: ChatModel
+    let link: VoiceLink?
     let ink: Double
     @Binding var collapsed: Bool
     @Binding var pinned: Bool
@@ -235,6 +253,9 @@ struct ChatBar: View {
 
     var controls: some View {
         HStack(spacing: 6) {
+            if let link, let speaker = link.speaker {
+                SpeakToggle(link: link, speaker: speaker)
+            }
             GlassIcon(symbol: "brain", help: "Memory (MEMORY.md)") { MemoryWindow.show() }
             GlassIcon(symbol: "sparkles", help: "New chat (⌘N)") { chat.newChat() }
                 .disabled(chat.messages.isEmpty && chat.phase == .idle)
@@ -877,6 +898,7 @@ struct ChatProblem: View {
 /// last reply used.
 struct PromptWell: View {
     @ObservedObject var chat: ChatModel
+    let link: VoiceLink?
     let ink: Double
     let small: Bool
     let sent: () -> Void
@@ -914,6 +936,10 @@ struct PromptWell: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: small ? nil : .infinity, alignment: .topLeading)
+                if let link, let listener = link.listener {
+                    MicButton(link: link, listener: listener, ink: ink)
+                        .padding(.bottom, 2)
+                }
                 sendButton
             }
             if !small {
@@ -926,7 +952,7 @@ struct PromptWell: View {
 
     var field: some View {
         TextField("Message", text: $chat.input,
-                  prompt: Text(chat.messages.isEmpty ? "Ask anything…" : "Type here…").foregroundColor(.white.opacity(0.3)),
+                  prompt: Text(placeholder).foregroundColor(.white.opacity(0.3)),
                   axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: fontSize, weight: .semibold, design: .rounded))
@@ -939,10 +965,18 @@ struct PromptWell: View {
             .opacity(ghost == nil ? 1 : 0)
     }
 
+    var placeholder: String {
+        if link?.listener != nil { return chat.messages.isEmpty ? "Talk (press the mic) or type…" : "Talk or type…" }
+        return chat.messages.isEmpty ? "Ask anything…" : "Type here…"
+    }
+
     var sendButton: some View {
         ZStack {
             if busy {
-                RoundButton(symbol: "stop.fill", help: "Stop (Esc)", enabled: true) { chat.stop() }
+                RoundButton(symbol: "stop.fill", help: "Stop (Esc)", enabled: true) {
+                    chat.stop()
+                    link?.speaker?.stop()
+                }
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             } else {
                 RoundButton(symbol: "arrow.up", help: "Send (Return)", enabled: canSend, action: send)
@@ -1016,5 +1050,17 @@ struct RoundButton: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.15), value: enabled)
         .help(help)
+    }
+}
+
+/// Why the microphone isn't listening (a permission, no microphone), with a way to try again.
+struct ListenerProblem: View {
+    @ObservedObject var listener: Listener
+
+    var body: some View {
+        if let problem = listener.problem {
+            VoiceProblem(text: problem, action: "Try again") { listener.start() }
+                .padding(.bottom, 10)
+        }
     }
 }

@@ -41,6 +41,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSDesktopFolderUsageDescription</key><string>To move a download's contents into its folder on the Desktop.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>To find your latest download.</string>
+  <key>NSMicrophoneUsageDescription</key><string>To hear you in Dictate and in the chats that listen.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>To write down what you say, and to transcribe audio files.</string>
 </dict>
 </plist>
 PLIST
