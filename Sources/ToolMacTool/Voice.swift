@@ -1,59 +1,21 @@
 import AppKit
 import AVFoundation
+import FluidAudio
 import Foundation
-import Speech
 import ToolCore
 
-// The voice tools all speak and listen through macOS itself: AVSpeechSynthesizer for the voice
-// and the Speech framework (on this Mac when it can) for listening. Nothing to install.
+// The voice tools speak with Kokoro and listen with Parakeet (see Neural.swift). While Kokoro is
+// still downloading the first time, the Mac's own voice reads instead, so nothing waits.
 
 /// The voice and speed every tool speaks with (Read aloud sets them).
 enum VoiceSettings {
     private static let defaults = UserDefaults.standard
 
-    /// Voices nobody wants reading to them (Bells, Zarvox…).
-    private static let novelty: Set<String> = ["Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos",
-                                               "Deranged", "Good News", "Hysterical", "Jester", "Organ", "Pipe Organ",
-                                               "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox"]
-
-    /// The four voices on offer: the two best women's and two best men's voices this Mac has for
-    /// its language (VoiceLineup picks them).
-    static func voices() -> [AVSpeechSynthesisVoice] {
-        let language = Locale.current.language.languageCode?.identifier ?? "en"
-        let all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix(language) && !novelty.contains($0.name) && !isNovelty($0) }
-        let byID = Dictionary(all.map { ($0.identifier, $0) }, uniquingKeysWith: { a, _ in a })
-        return VoiceLineup.pick(all.map(info)).compactMap { byID[$0.identifier] }
+    /// One of the four (NeuralVoice.all).
+    static var voice: NeuralVoice {
+        get { NeuralVoice.named(defaults.string(forKey: "neuralVoice")) }
+        set { defaults.set(newValue.id, forKey: "neuralVoice") }
     }
-
-    private static func info(_ v: AVSpeechSynthesisVoice) -> VoiceInfo {
-        let quality: VoiceInfo.Quality
-        switch v.quality {
-        case .premium: quality = .premium
-        case .enhanced: quality = .enhanced
-        default: quality = .standard
-        }
-        let female: Bool? = v.gender == .female ? true : v.gender == .male ? false : nil
-        return VoiceInfo(identifier: v.identifier, name: v.name, language: v.language, quality: quality, female: female)
-    }
-
-    private static func isNovelty(_ voice: AVSpeechSynthesisVoice) -> Bool {
-        if #available(macOS 14, *) { return voice.voiceTraits.contains(.isNoveltyVoice) }
-        return false
-    }
-
-    static var voiceID: String? {
-        get { defaults.string(forKey: "ttsVoice") }
-        set { defaults.set(newValue, forKey: "ttsVoice") }
-    }
-
-    /// The chosen voice if it's one of the four, else the best one.
-    static func voice() -> AVSpeechSynthesisVoice? {
-        let lineup = voices()
-        return lineup.first { $0.identifier == voiceID } ?? lineup.first ?? AVSpeechSynthesisVoice(language: nil)
-    }
-
-    /// Some of the four aren't Premium yet: better ones can be downloaded.
-    static var canDownloadBetter: Bool { voices().contains { $0.quality != .premium } }
 
     /// 0.5 to 2: how fast, against the voice's normal pace.
     static var speed: Double {
@@ -61,34 +23,54 @@ enum VoiceSettings {
         set { defaults.set(newValue, forKey: "ttsSpeed") }
     }
 
-    static func utterance(_ text: String) -> AVSpeechUtterance {
+    /// Voices nobody wants reading to them (Bells, Zarvox…).
+    private static let novelty: Set<String> = ["Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos",
+                                               "Deranged", "Good News", "Hysterical", "Jester", "Organ", "Pipe Organ",
+                                               "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox"]
+
+    /// The Mac's own voice standing in for the chosen one: the best it has of the same sex.
+    static func systemVoice() -> AVSpeechSynthesisVoice? {
+        let language = Locale.current.language.languageCode?.identifier ?? "en"
+        let all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix(language) && !novelty.contains($0.name) }
+        let infos = all.map { v -> VoiceInfo in
+            let quality: VoiceInfo.Quality = v.quality == .premium ? .premium : v.quality == .enhanced ? .enhanced : .standard
+            let female: Bool? = v.gender == .female ? true : v.gender == .male ? false : nil
+            return VoiceInfo(identifier: v.identifier, name: v.name, language: v.language, quality: quality, female: female)
+        }
+        let best = VoiceLineup.best(infos, female: Self.voice.female).first ?? VoiceLineup.pick(infos).first
+        return best.flatMap { AVSpeechSynthesisVoice(identifier: $0.identifier) } ?? AVSpeechSynthesisVoice(language: nil)
+    }
+
+    static func systemUtterance(_ text: String) -> AVSpeechUtterance {
         let u = AVSpeechUtterance(string: text)
-        u.voice = voice()
+        u.voice = systemVoice()
         let normal = Double(AVSpeechUtteranceDefaultSpeechRate)
         let rate = speed >= 1 ? normal + (speed - 1) * 0.35 : normal - (1 - speed) * 0.3
         u.rate = Float(min(Double(AVSpeechUtteranceMaximumSpeechRate), max(Double(AVSpeechUtteranceMinimumSpeechRate), rate)))
         return u
     }
 
-    /// "Ava · woman, US (Premium)": a voice as a menu shows it.
-    static func label(_ voice: AVSpeechSynthesisVoice) -> String {
-        let who = voice.gender == .female ? "woman" : voice.gender == .male ? "man" : ""
-        let region = voice.language.split(separator: "-").dropFirst().first.map(String.init) ?? ""
-        let about = [who, region].filter { !$0.isEmpty }.joined(separator: ", ")
-        let quality = voice.quality == .premium ? " (Premium)" : voice.quality == .enhanced ? " (Enhanced)" : ""
-        return voice.name + (about.isEmpty ? "" : " · \(about)") + quality
+    /// "Heart · woman": a voice as a menu shows it.
+    static func label(_ v: NeuralVoice) -> String {
+        "\(v.name) · \(v.female ? "woman" : "man")"
     }
 
-    /// Where to download Premium voices: Accessibility → Spoken Content → System voice → Manage Voices.
-    static func openVoiceDownloads() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent") {
-            NSWorkspace.shared.open(url)
+    /// Kokoro reads `text` in the chosen voice: 24 kHz mono samples.
+    static func render(_ text: String, with model: Task<KokoroAneManager, Error>) -> Task<[Float], Error> {
+        let voiceID = Self.voice.id
+        let pace = Float(Self.speed)
+        return Task.detached(priority: .userInitiated) {
+            try await model.value.synthesizeDetailed(text: text, voice: voiceID, speed: pace).samples
         }
     }
+
+    static let sampleRate = 24_000.0
+    static let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 }
 
 /// Says things out loud, one after another. Text given while it's talking waits its turn;
-/// `stop` drops everything.
+/// `stop` drops everything. Each sentence is made while the one before it plays, so there are
+/// no gaps between them.
 final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published private(set) var speaking = false
     @Published private(set) var paused = false
@@ -98,53 +80,179 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// Nothing left to say (it finished, not stopped).
     var onDone: (() -> Void)?
 
+    // Kokoro: sentences waiting, the next one being made, the player.
+    private let engine = AVAudioEngine()
+    private let player = AVAudioPlayerNode()
+    private var lines: [String] = []
+    private var ahead: (text: String, audio: Task<[Float], Error>)?
+    /// A sentence is being made or played.
+    private var busy = false
+    /// Counts stops, so audio made or played for what was stopped is dropped.
+    private var epoch = 0
+    /// For lighting up the word: when the line started, how long it is, time spent paused.
+    private var lineStarted = Date()
+    private var lineLength = 0.0
+    private var pausedAt: Date?
+    private var pausedFor = 0.0
+    private var ticker: Timer?
+
+    // The Mac's voice, while Kokoro isn't there yet.
     private let synth = AVSpeechSynthesizer()
     private var queued: Set<ObjectIdentifier> = []
 
     override init() {
         super.init()
         synth.delegate = self
-    }
-
-    private static let sampler = AVSpeechSynthesizer()
-
-    /// A few words in `voice`, so choosing one lets you hear it.
-    static func preview(_ voice: AVSpeechSynthesisVoice) {
-        sampler.stopSpeaking(at: .immediate)
-        let u = VoiceSettings.utterance("Hi, I'm \(voice.name). This is how I sound.")
-        u.voice = voice
-        sampler.speak(u)
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: VoiceSettings.format)
     }
 
     func say(_ text: String) {
-        let u = VoiceSettings.utterance(text)
-        queued.insert(ObjectIdentifier(u))
+        let parts = SpokenText.sentences(text)
+        guard !parts.isEmpty else { return }
         speaking = true
-        synth.speak(u)
+        // Kokoro once it's there (and the Mac's voice isn't part way through something).
+        if !Neural.shared.voices.isReady || !queued.isEmpty {
+            _ = Neural.shared.voiceModel()
+            let u = VoiceSettings.systemUtterance(text)
+            queued.insert(ObjectIdentifier(u))
+            synth.speak(u)
+            return
+        }
+        lines += parts
+        if !busy { next() }
     }
 
     func stop() {
+        epoch += 1
+        lines = []
+        ahead?.audio.cancel()
+        ahead = nil
+        busy = false
+        player.stop()
+        if engine.isRunning { engine.stop() }
+        ticker?.invalidate()
         queued = []
         synth.stopSpeaking(at: .immediate)
         speaking = false
         paused = false
+        pausedAt = nil
         word = nil
     }
 
     func pause() {
-        if synth.pauseSpeaking(at: .word) { paused = true }
+        guard speaking, !paused else { return }
+        if !queued.isEmpty {
+            if synth.pauseSpeaking(at: .word) { paused = true }
+            return
+        }
+        player.pause()
+        paused = true
+        pausedAt = Date()
     }
 
     func resume() {
-        if synth.continueSpeaking() { paused = false }
+        guard paused else { return }
+        if !queued.isEmpty {
+            if synth.continueSpeaking() { paused = false }
+            return
+        }
+        paused = false
+        if let pausedAt { pausedFor += Date().timeIntervalSince(pausedAt) }
+        pausedAt = nil
+        if busy, engine.isRunning { player.play() }
     }
 
-    private func ended(_ u: AVSpeechUtterance) {
-        guard queued.remove(ObjectIdentifier(u)) != nil, queued.isEmpty else { return }
+    /// Plays the next sentence (made ahead, or made now), or finishes.
+    private func next() {
+        let line: (text: String, audio: Task<[Float], Error>)
+        if let ahead {
+            line = ahead
+            self.ahead = nil
+        } else if !lines.isEmpty {
+            let text = lines.removeFirst()
+            line = (text, VoiceSettings.render(text, with: Neural.shared.voiceModel()))
+        } else {
+            finished()
+            return
+        }
+        busy = true
+        let mine = epoch
+        Task.detached { [weak self] in
+            let audio = try? await line.audio.value
+            DispatchQueue.main.async {
+                guard let self, mine == self.epoch else { return }
+                self.play(line.text, audio ?? [])
+            }
+        }
+    }
+
+    private func play(_ text: String, _ audio: [Float]) {
+        // Make the next one while this one plays.
+        if ahead == nil, !lines.isEmpty {
+            let t = lines.removeFirst()
+            ahead = (t, VoiceSettings.render(t, with: Neural.shared.voiceModel()))
+        }
+        guard !audio.isEmpty,
+              let buffer = AVAudioPCMBuffer(pcmFormat: VoiceSettings.format, frameCapacity: AVAudioFrameCount(audio.count)),
+              let data = buffer.floatChannelData?[0] else {
+            next()
+            return
+        }
+        audio.withUnsafeBufferPointer { data.update(from: $0.baseAddress!, count: audio.count) }
+        buffer.frameLength = AVAudioFrameCount(audio.count)
+        if !engine.isRunning {
+            engine.prepare()
+            do {
+                try engine.start()
+            } catch {
+                next()
+                return
+            }
+        }
+        current = text
+        word = nil
+        lineStarted = Date()
+        lineLength = Double(audio.count) / VoiceSettings.sampleRate
+        pausedFor = 0
+        pausedAt = paused ? Date() : nil
+        let mine = epoch
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, mine == self.epoch else { return }
+                self.busy = false
+                self.next()
+            }
+        }
+        if !paused { player.play() }
+        ticker?.invalidate()
+        ticker = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    /// Lights up the word being said, spreading the line's time over its words.
+    private func tick() {
+        guard busy, !paused, lineLength > 0 else { return }
+        let elapsed = Date().timeIntervalSince(lineStarted) - pausedFor
+        word = SpokenText.wordRange(in: current, at: elapsed / lineLength)
+    }
+
+    private func finished() {
+        busy = false
+        ticker?.invalidate()
+        player.stop()
+        if engine.isRunning { engine.stop() }
         speaking = false
         paused = false
         word = nil
         onDone?()
+    }
+
+    // MARK: The Mac's voice
+
+    private func ended(_ u: AVSpeechUtterance) {
+        guard queued.remove(ObjectIdentifier(u)) != nil, queued.isEmpty else { return }
+        if !lines.isEmpty || busy { return }
+        finished()
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
@@ -167,11 +275,49 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async { self.ended(utterance) }
     }
+
+    /// Says a few words in the chosen voice, so choosing one lets you hear it.
+    static func preview() {
+        sampler.stop()
+        sampler.say("Hi, I'm \(VoiceSettings.voice.name). This is how I sound.")
+    }
+
+    private static let sampler = Speaker()
 }
 
 /// Writes speech to an audio file instead of the speakers.
-final class SpeechRecorder: NSObject, AVSpeechSynthesizerDelegate {
-    private static var running: [SpeechRecorder] = []
+enum SpeechRecorder {
+    /// Speaks `text` into `url` (.wav); `done` gets nil, or what went wrong. On the main thread.
+    static func record(_ text: String, to url: URL, done: @escaping (String?) -> Void) {
+        guard Neural.shared.voices.isReady else {
+            SystemRecorder.record(text, to: url, done: done)
+            return
+        }
+        let audio = VoiceSettings.render(text, with: Neural.shared.voiceModel())
+        Task.detached {
+            var problem: String?
+            do {
+                let samples = try await audio.value
+                let file = try AVAudioFile(forWriting: url, settings: VoiceSettings.format.settings,
+                                           commonFormat: .pcmFormatFloat32, interleaved: false)
+                if !samples.isEmpty,
+                   let buffer = AVAudioPCMBuffer(pcmFormat: VoiceSettings.format, frameCapacity: AVAudioFrameCount(samples.count)),
+                   let data = buffer.floatChannelData?[0] {
+                    samples.withUnsafeBufferPointer { data.update(from: $0.baseAddress!, count: samples.count) }
+                    buffer.frameLength = AVAudioFrameCount(samples.count)
+                    try file.write(from: buffer)
+                }
+            } catch {
+                problem = error.localizedDescription
+            }
+            DispatchQueue.main.async { done(problem) }
+        }
+    }
+}
+
+/// The Mac's voice into a file, while Kokoro isn't there yet.
+private final class SystemRecorder: NSObject, AVSpeechSynthesizerDelegate {
+    private static var running: [SystemRecorder] = []
 
     private let synth = AVSpeechSynthesizer()
     private let url: URL
@@ -187,11 +333,10 @@ final class SpeechRecorder: NSObject, AVSpeechSynthesizerDelegate {
         synth.delegate = self
     }
 
-    /// Speaks `text` into `url` (.wav, .aiff or .caf); `done` gets nil, or what went wrong.
     static func record(_ text: String, to url: URL, done: @escaping (String?) -> Void) {
-        let r = SpeechRecorder(url: url, done: done)
+        let r = SystemRecorder(url: url, done: done)
         running.append(r)
-        r.synth.write(VoiceSettings.utterance(text)) { [weak r] buffer in
+        r.synth.write(VoiceSettings.systemUtterance(text)) { [weak r] buffer in
             r?.write(buffer)
         }
     }
@@ -228,16 +373,18 @@ final class SpeechRecorder: NSObject, AVSpeechSynthesizerDelegate {
     }
 }
 
-/// Listens to the microphone and writes down what's said, live. With `pauseToEnd` set, a pause
-/// that long ends what was said: it goes to `onUtterance` and listening carries on fresh. Without
-/// it, it keeps going (dictation) and `text` grows until it's stopped.
+/// Listens to the microphone and writes down what's said. The audio is cut into phrases at the
+/// pauses (PhraseCutter) and each phrase is written down whole by Parakeet, in order; while a
+/// phrase is still being said, it's written down every so often to show it live. With
+/// `pauseToEnd` set, a pause that long ends what was said: it goes to `onUtterance` and listening
+/// carries on fresh. Without it, it keeps going (dictation) and `text` grows until it's stopped.
 ///
-/// Nothing said should go missing: the recognizer's restarts are caught (LiveTranscript), each
-/// recognition is handed over to a fresh one at a quiet moment before the recognizer's time limit,
-/// stopping waits for the last words, and a microphone change (AirPods connecting) re-wires it.
+/// No audio is thrown away once someone speaks: phrases wait while the model downloads (or if it
+/// couldn't be had), stopping writes down the last one, and a microphone change (AirPods
+/// connecting) re-wires the input and carries on.
 final class Listener: ObservableObject {
     @Published private(set) var on = false
-    /// Stopped, and the last words are still being worked out (a second or so).
+    /// Stopped, and the last words are still being written down.
     @Published private(set) var finishing = false
     /// Listening is paused (the mic stays open, nothing is written down), e.g. while a reply is spoken.
     @Published private(set) var held = false
@@ -251,29 +398,30 @@ final class Listener: ObservableObject {
     var onUtterance: ((String) -> Void)?
 
     private let engine = AVAudioEngine()
-    private var recognizer: SFSpeechRecognizer?
     private let lock = NSLock()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
-    /// Counts recognition tasks, so a finished or cancelled one can't touch the next one's text.
-    private var generation = 0
-    private var transcript = LiveTranscript()
-    private var quiet: Timer?
-    private var failures: [Date] = []
+    private var resampler: Resampler?            // used on the audio thread, under the lock
+    private var cutter = PhraseCutter(pause: 0.8)
     private var rewiring: NSObjectProtocol?
-    /// When the current recognition started, and how long it's been quiet since someone spoke.
-    private var taskStarted = Date()
-    private var quietFor = 0.0
 
-    /// A recognition is handed over to a new one at a pause after this long, and at the latest
-    /// after `rollLatest` (the recognizer stops by itself at about a minute).
-    static let rollAfter = 40.0
-    static let rollLatest = 55.0
+    /// Written down: finished phrases, and the live guess at the one being said.
+    private var done = ""
+    private var guess = ""
+    /// Phrases waiting to be written down, oldest first (`send`: it ends what was said).
+    private var waiting: [(samples: [Float], send: Bool)] = []
+    private var writing = false
+    /// Counts clears, so what's written down for something cleared is dropped.
+    private var generation = 0
+    /// Counts phrases, so a live guess at one that has since ended is dropped.
+    private var phraseNumber = 0
+    private var guessing = false
+    private var ticker: Timer?
 
     func start() {
-        if finishing { finished() }
-        guard !on else { return }
         problem = nil
+        if on {
+            writeNext()                             // "Try again" after the model failed
+            return
+        }
         Self.authorize { [weak self] problem in
             guard let self else { return }
             if let problem {
@@ -284,115 +432,77 @@ final class Listener: ObservableObject {
         }
     }
 
-    /// Stops listening. The words still being worked out are waited for (`finishing`), briefly.
+    /// Stops listening. What was said last is still written down (`finishing` meanwhile).
     func stop() {
-        let wasListening = on && !held && task != nil
+        guard on else { return }
         closeMic()
-        guard wasListening else {
-            drop()
-            return
-        }
-        finishing = true
-        lock.lock()
-        let r = request
-        lock.unlock()
-        r?.endAudio()
-        let mine = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            guard let self, self.finishing, self.generation == mine else { return }
-            self.finished()
-        }
-    }
-
-    /// Stops listening now, dropping whatever hasn't been recognized yet.
-    private func halt() {
-        closeMic()
-        drop()
+        if !held, let last = cutter.flush() { enqueue(last, send: false) }
+        cutter.reset()
+        held = false
+        finishing = writing || !waiting.isEmpty
     }
 
     private func closeMic() {
-        quiet?.invalidate()
+        ticker?.invalidate()
         if let rewiring { NotificationCenter.default.removeObserver(rewiring) }
         rewiring = nil
-        if on {
-            engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
-        }
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
         on = false
-        held = false
         level = 0
     }
 
-    private func drop() {
-        generation += 1
-        task?.cancel()
-        task = nil
-        setRequest(nil)
-        finishing = false
-    }
-
-    /// The last recognition is done: its words are in.
-    private func finished() {
-        transcript.settle()
-        text = transcript.text
-        drop()
-    }
-
-    /// Stops writing down (keeps the mic open) until `release`.
+    /// Stops writing down (keeps the mic open) until `release`; what's half said is dropped.
     func hold() {
         guard on, !held else { return }
         held = true
-        quiet?.invalidate()
-        generation += 1
-        task?.cancel()
-        task = nil
-        setRequest(nil)
-        transcript.clear()
-        text = ""
+        dropAll()
     }
 
     func release() {
         guard on, held else { return }
+        cutter.reset()
         held = false
-        newTask()
     }
 
     /// Ends what's been said now, without waiting for the pause.
     func endUtterance() {
-        quiet?.invalidate()
-        let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        transcript.clear()
-        text = ""
-        restart()
-        if !said.isEmpty { onUtterance?(said) }
+        enqueue(cutter.flush() ?? [], send: true)
     }
 
-    /// Clears what's been written down (dictation: after it was saved).
+    /// Clears what's been written down.
     func clear() {
-        transcript.clear()
+        dropAll()
+    }
+
+    private func dropAll() {
+        generation += 1
+        cutter.reset()
+        waiting = []
+        done = ""
+        guess = ""
         text = ""
-        if on && !held { restart() }
     }
 
     private func begin() {
-        guard let recognizer = SFSpeechRecognizer() ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable else {
-            problem = "Speech recognition isn't available right now (it needs Siri's language models or a network)"
-            return
-        }
-        self.recognizer = recognizer
+        _ = Neural.shared.earModel()                // start getting it, if it isn't here yet
         if let problem = openMic() {
             self.problem = problem
             return
         }
         rewiring = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
                                                           queue: .main) { [weak self] _ in self?.rewire() }
+        cutter = PhraseCutter(pause: pauseToEnd ?? 0.8)
         on = true
         held = false
-        transcript.clear()
-        text = ""
-        failures = []
-        newTask()
+        finishing = false
+        if waiting.isEmpty && !writing {
+            done = ""
+            guess = ""
+            text = ""
+        }
+        ticker = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in self?.guessLive() }
+        writeNext()                                 // anything left from before
     }
 
     /// Taps the microphone and starts the engine; nil, or what went wrong.
@@ -400,8 +510,11 @@ final class Listener: ObservableObject {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return "No microphone found" }
+        lock.lock()
+        resampler = Resampler(from: format)
+        lock.unlock()
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             self?.heard(buffer)
         }
         engine.prepare()
@@ -414,131 +527,111 @@ final class Listener: ObservableObject {
         return nil
     }
 
-    /// The microphone changed (one was plugged in or connected, or the format changed): the engine
-    /// has stopped, so start it again on the new one, keeping what's been written down.
+    /// The microphone changed: the engine has stopped, so start it again on the new one.
     private func rewire() {
         guard on else { return }
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         if let problem = openMic() {
-            transcript.settle()
-            text = transcript.text
             self.problem = problem
-            halt()
-            return
-        }
-        if !held {
-            transcript.settle()
-            text = transcript.text
-            restart()
+            stop()
         }
     }
 
     /// On the audio thread.
     private func heard(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        let r = request
+        let samples = resampler?.convert(buffer) ?? []
         lock.unlock()
-        r?.append(buffer)
         let l = Self.level(buffer)
-        let seconds = Double(buffer.frameLength) / max(buffer.format.sampleRate, 1)
         DispatchQueue.main.async {
             self.level = self.level * 0.5 + l * 0.5
-            self.maybeRoll(level: l, seconds: seconds)
-        }
-    }
-
-    /// Hands the recognition over to a fresh one before the recognizer's time limit, at a pause
-    /// after something was said, so no word is cut.
-    private func maybeRoll(level: Float, seconds: Double) {
-        guard on, !held, task != nil else { return }
-        quietFor = level < 0.2 ? quietFor + seconds : 0
-        let age = Date().timeIntervalSince(taskStarted)
-        let paused = quietFor > 0.5 && !transcript.guess.isEmpty
-        guard (age > Self.rollAfter && paused) || age > Self.rollLatest else { return }
-        transcript.settle()
-        text = transcript.text
-        restart()
-    }
-
-    private func setRequest(_ r: SFSpeechAudioBufferRecognitionRequest?) {
-        lock.lock()
-        request = r
-        lock.unlock()
-    }
-
-    private func newTask() {
-        guard let recognizer, on, !held else { return }
-        generation += 1
-        let mine = generation
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        req.addsPunctuation = true
-        req.taskHint = pauseToEnd == nil ? .dictation : .unspecified
-        if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
-        setRequest(req)
-        taskStarted = Date()
-        quietFor = 0
-        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            let said = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let code = (error as NSError?)?.code
-            DispatchQueue.main.async {
-                self?.recognized(said, isFinal: isFinal, error: code, generation: mine)
+            guard self.on, !self.held else { return }
+            for phrase in self.cutter.add(samples) {
+                self.enqueue(phrase.samples, send: phrase.paused && self.pauseToEnd != nil)
             }
         }
     }
 
-    private func restart() {
-        generation += 1
-        task?.cancel()
-        task = nil
-        setRequest(nil)
-        newTask()
+    private func enqueue(_ samples: [Float], send: Bool) {
+        phraseNumber += 1
+        waiting.append((samples, send))
+        writeNext()
     }
 
-    private func recognized(_ said: String?, isFinal: Bool, error: Int?, generation mine: Int) {
-        guard mine == generation else { return }
-        if finishing {
-            if let said { transcript.heard(said) }
-            text = transcript.text
-            if isFinal || error != nil { finished() }
+    /// Writes down the oldest waiting phrase, then the next, one at a time so they stay in order.
+    private func writeNext() {
+        guard !writing, let item = waiting.first else {
+            if !writing && waiting.isEmpty { finishing = false }
             return
         }
-        guard on, !held else { return }
-        if let said {
-            transcript.heard(said)
-            text = transcript.text
-            if !said.isEmpty { waitForPause() }
-        }
-        if isFinal {
-            transcript.settle()
-            restart()
-        } else if let error {
-            // The recognizer gave up (a long silence, its time limit): carry on with a new one,
-            // unless it keeps failing straight away. Hearing nothing (1110) isn't failing.
-            if error != 1110 {
-                let now = Date()
-                failures = failures.filter { now.timeIntervalSince($0) < 10 } + [now]
-                if failures.count > 5 {
-                    transcript.settle()
-                    text = transcript.text
-                    problem = "Speech recognition keeps stopping. Is Dictation or Siri turned off in System Settings?"
-                    halt()
-                    return
+        writing = true
+        let mine = generation
+        let model = Neural.shared.earModel()
+        Task.detached { [weak self] in
+            var said = ""
+            var problem: String?
+            if !item.samples.isEmpty {
+                do {
+                    said = try await Neural.write(item.samples, with: model.value).text
+                } catch {
+                    problem = error.localizedDescription
                 }
             }
-            transcript.settle()
-            restart()
+            DispatchQueue.main.async { self?.written(said, send: item.send, problem: problem, generation: mine) }
         }
     }
 
-    private func waitForPause() {
-        guard let pause = pauseToEnd else { return }
-        quiet?.invalidate()
-        quiet = Timer.scheduledTimer(withTimeInterval: pause, repeats: false) { [weak self] _ in
-            self?.endUtterance()
+    private func written(_ said: String, send: Bool, problem: String?, generation mine: Int) {
+        writing = false
+        guard mine == generation else {
+            writeNext()
+            return
         }
+        if let problem {
+            // The model isn't there (no network the first time?): the phrase waits for "Try again".
+            self.problem = "Couldn't write it down: \(problem)"
+            finishing = false
+            return
+        }
+        if !waiting.isEmpty { waiting.removeFirst() }
+        done = Self.join(done, said.trimmingCharacters(in: .whitespacesAndNewlines))
+        if waiting.isEmpty { guess = "" }
+        text = Self.join(done, guess)
+        if send {
+            let all = done
+            done = ""
+            guess = ""
+            text = ""
+            if !all.isEmpty { onUtterance?(all) }
+        }
+        writeNext()
+    }
+
+    /// While a phrase is being said, writes down what's been said of it so far, to show it live.
+    private func guessLive() {
+        guard on, !held, !guessing, !writing, waiting.isEmpty, cutter.spoke,
+              cutter.open.count > PhraseCutter.rate / 2, Neural.shared.ears.isReady else { return }
+        guessing = true
+        let mine = (generation, phraseNumber)
+        let audio = cutter.open
+        let model = Neural.shared.earModel()
+        Task.detached { [weak self] in
+            let said = (try? await Neural.write(audio, with: model.value).text) ?? ""
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.guessing = false
+                guard mine == (self.generation, self.phraseNumber), self.on, !self.held, self.waiting.isEmpty else { return }
+                self.guess = said.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.text = Self.join(self.done, self.guess)
+            }
+        }
+    }
+
+    static func join(_ a: String, _ b: String) -> String {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        return a + " " + b
     }
 
     /// Loudness of a buffer, 0 (quiet) to 1 (loud), on a decibel scale.
@@ -552,26 +645,18 @@ final class Listener: ObservableObject {
         return max(0, min(1, (db + 55) / 45))
     }
 
-    /// Asks for speech recognition and the microphone; the answer is nil, or what to switch on.
+    /// Asks for the microphone; the answer is nil, or what to switch on.
     static func authorize(_ done: @escaping (String?) -> Void) {
-        SFSpeechRecognizer.requestAuthorization { status in
-            guard status == .authorized else {
-                DispatchQueue.main.async {
-                    done("Speech recognition is off for Tool Mac Tool: turn it on in System Settings → Privacy & Security → Speech Recognition")
-                }
-                return
-            }
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async {
-                    done(granted ? nil : "The microphone is off for Tool Mac Tool: turn it on in System Settings → Privacy & Security → Microphone")
-                }
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            DispatchQueue.main.async {
+                done(granted ? nil : "The microphone is off for Tool Mac Tool: turn it on in System Settings → Privacy & Security → Microphone")
             }
         }
     }
 }
 
-/// Turns an audio file into timed text. Long files go to the recognizer in pieces of under a
-/// minute (its limit), each cut at the quietest moment near its end; silent pieces are skipped.
+/// Turns an audio file into timed text. It goes to the recognizer in pieces of under a minute,
+/// each cut at the quietest moment near its end; silent pieces are skipped.
 final class FileTranscriber {
     /// What's happening, on the main thread.
     var onSegment: ((TimedText) -> Void)?
@@ -579,9 +664,9 @@ final class FileTranscriber {
     /// nil when it finished, else what went wrong ("Stopped" when cancelled).
     var onDone: ((String?) -> Void)?
 
-    private var cancelled = false
+    private var job: Task<Void, Never>?
     private let lock = NSLock()
-    private var task: SFSpeechRecognitionTask?
+    private var cancelled = false
 
     static let piece = 50.0
     static let search = 12.0
@@ -589,9 +674,8 @@ final class FileTranscriber {
     func cancel() {
         lock.lock()
         cancelled = true
-        let t = task
         lock.unlock()
-        t?.cancel()
+        job?.cancel()
     }
 
     private var isCancelled: Bool {
@@ -600,26 +684,15 @@ final class FileTranscriber {
         return cancelled
     }
 
+    /// On the main thread.
     func start(_ url: URL) {
-        Listener.authorize { [weak self] problem in
-            guard let self else { return }
-            if let problem {
-                self.onDone?(problem)
-                return
-            }
-            Thread.detachNewThread { self.run(url) }
-        }
+        let model = Neural.shared.earModel()
+        job = Task.detached { [weak self] in await self?.run(url, model: model) }
     }
 
     private func main(_ work: @escaping () -> Void) { DispatchQueue.main.async(execute: work) }
 
-    private func run(_ url: URL) {
-        guard let recognizer = SFSpeechRecognizer() ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable else {
-            main { self.onDone?("Speech recognition isn't available right now") }
-            return
-        }
-        recognizer.queue = OperationQueue()
+    private func run(_ url: URL, model: Task<AsrManager, Error>) async {
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -627,10 +700,18 @@ final class FileTranscriber {
             main { self.onDone?("Couldn't read that file as audio: \(error.localizedDescription)") }
             return
         }
+        let asr: AsrManager
+        do {
+            asr = try await model.value
+        } catch {
+            main { self.onDone?("Couldn't get speech recognition: \(error.localizedDescription)") }
+            return
+        }
         let format = file.processingFormat
         let rate = format.sampleRate
         let total = file.length
         let pieceFrames = AVAudioFrameCount(Self.piece * rate)
+        let resampler = Resampler(from: format)
         var position: AVAudioFramePosition = 0
         while position < total {
             if isCancelled {
@@ -650,76 +731,25 @@ final class FileTranscriber {
                 buffer.frameLength = Self.cutPoint(buffer, rate: rate)
             }
             let offset = Double(position) / rate
-            if Self.loudest(buffer) > 0.02 {
-                let (segments, problem) = recognize(buffer, with: recognizer, offset: offset)
-                if isCancelled {
-                    main { self.onDone?("Stopped") }
+            let samples = resampler.convert(buffer)
+            if Self.loudest(buffer) > 0.02, !samples.isEmpty {
+                do {
+                    let result = try await Neural.write(samples, with: asr)
+                    let words = buildWordTimings(from: result.tokenTimings ?? []).map {
+                        TimedWord(word: $0.word, start: $0.startTime, end: $0.endTime)
+                    }
+                    for s in Captions.sentences(result.text, words: words, offset: offset) { main { self.onSegment?(s) } }
+                } catch {
+                    let stopped = isCancelled
+                    main { self.onDone?(stopped ? "Stopped" : "Couldn't write it down: \(error.localizedDescription)") }
                     return
                 }
-                if let problem, segments.isEmpty, problem != "nothing heard" {
-                    main { self.onDone?(problem) }
-                    return
-                }
-                for s in segments { main { self.onSegment?(s) } }
             }
             position += AVAudioFramePosition(buffer.frameLength)
             let progress = Double(position) / Double(max(total, 1))
             main { self.onProgress?(progress) }
         }
         main { self.onDone?(nil) }
-    }
-
-    /// One piece, start to end: its sentences, timed from the start of the file.
-    private func recognize(_ buffer: AVAudioPCMBuffer, with recognizer: SFSpeechRecognizer,
-                           offset: Double) -> ([TimedText], String?) {
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = false
-        request.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        request.append(buffer)
-        request.endAudio()
-        let done = DispatchSemaphore(value: 0)
-        var out: [TimedText] = []
-        var problem: String?
-        var finished = false
-        let t = recognizer.recognitionTask(with: request) { result, error in
-            guard !finished else { return }
-            if let result, result.isFinal {
-                out = Self.sentences(result.bestTranscription, offset: offset)
-                finished = true
-                done.signal()
-            } else if let error {
-                let code = (error as NSError).code
-                problem = code == 1110 ? "nothing heard" : error.localizedDescription   // 1110: no speech
-                finished = true
-                done.signal()
-            }
-        }
-        lock.lock()
-        task = t
-        lock.unlock()
-        if done.wait(timeout: .now() + 180) == .timedOut {
-            t.cancel()
-            problem = "The recognizer took too long on one part"
-        }
-        return (out, problem)
-    }
-
-    /// The recognized words grouped into sentences, each timed by its first and last word.
-    static func sentences(_ t: SFTranscription, offset: Double) -> [TimedText] {
-        let words = t.segments
-        guard !words.isEmpty else { return [] }
-        var out: [TimedText] = []
-        var i = 0
-        for sentence in SpokenText.sentences(t.formattedString) {
-            let count = max(1, sentence.split(whereSeparator: \.isWhitespace).count)
-            let first = words[min(i, words.count - 1)]
-            let last = words[min(i + count - 1, words.count - 1)]
-            out.append(TimedText(start: offset + first.timestamp, end: offset + last.timestamp + last.duration,
-                                 text: sentence))
-            i += count
-        }
-        return out
     }
 
     /// Where to end a piece that isn't the last: the quietest tenth of a second in its last

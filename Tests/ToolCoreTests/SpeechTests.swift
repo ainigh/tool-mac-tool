@@ -112,36 +112,73 @@ final class SpeechTests: XCTestCase {
         """)
     }
 
-    func testLiveTranscriptKeepsRevisions() {
-        var t = LiveTranscript()
-        t.heard("I scream")
-        t.heard("Ice cream is")
-        t.heard("Ice cream is great, isn't it")
-        XCTAssertEqual(t.text, "Ice cream is great, isn't it")
-        t.heard("Ice cream is great. Isn't it?")
-        XCTAssertEqual(t.text, "Ice cream is great. Isn't it?")
+    /// `seconds` of a steady tone at `level` (rms), or silence.
+    private func audio(_ seconds: Double, level: Float = 0) -> [Float] {
+        let n = Int(seconds * Double(PhraseCutter.rate))
+        return (0..<n).map { i in level == 0 ? 0 : (i % 2 == 0 ? level : -level) }
     }
 
-    func testLiveTranscriptKeepsWhatCameBeforeARestart() {
-        var t = LiveTranscript()
-        t.heard("The meeting is on Tuesday at noon.")
-        t.heard("Bring")                                  // started over after a pause
-        t.heard("Bring the slides")
-        XCTAssertEqual(t.text, "The meeting is on Tuesday at noon. Bring the slides")
-        t.heard("")                                       // and again, with nothing yet
-        t.heard("Thanks")
-        XCTAssertEqual(t.text, "The meeting is on Tuesday at noon. Bring the slides Thanks")
+    func testPhraseCutterEndsAPhraseAtThePause() {
+        var c = PhraseCutter(pause: 0.6)
+        XCTAssertEqual(c.add(audio(2)), [])                      // quiet: nothing yet
+        XCTAssertEqual(c.add(audio(1.5, level: 0.1)).count, 0)   // speaking
+        let done = c.add(audio(1))                               // a pause
+        XCTAssertEqual(done.count, 1)
+        // The speech, a little quiet in front of it and the pause: 0.3 + 1.5 + 0.6 s.
+        XCTAssertEqual(Double(done[0].samples.count) / 16_000, 2.4, accuracy: 0.03)
+        XCTAssertEqual(done[0].samples.filter { $0 != 0 }.count, Int(1.5 * 16_000))
+        XCTAssertTrue(done[0].paused)
+        XCTAssertFalse(c.spoke)
     }
 
-    func testLiveTranscriptSettles() {
-        var t = LiveTranscript()
-        t.heard("One two three")
-        t.settle()
-        t.heard("Four")
-        XCTAssertEqual(t.settled, "One two three")
-        XCTAssertEqual(t.text, "One two three Four")
-        t.clear()
-        XCTAssertEqual(t.text, "")
+    func testPhraseCutterKeepsEverySpokenSampleInOddSizedPieces() {
+        var c = PhraseCutter(pause: 0.5, longest: 4)
+        var stream = audio(0.4)
+        for _ in 0..<3 { stream += audio(3.3, level: 0.2) + audio(0.2) }   // runs on past `longest`
+        stream += audio(1.1, level: 0.05) + audio(0.8)
+        var phrases: [[Float]] = []
+        var i = 0
+        while i < stream.count {
+            let n = min(777, stream.count - i)
+            phrases += c.add(Array(stream[i..<(i + n)])).map(\.samples)
+            i += n
+        }
+        if let rest = c.flush() { phrases.append(rest) }
+        XCTAssertGreaterThan(phrases.count, 1)
+        XCTAssertTrue(phrases.allSatisfy { Double($0.count) / 16_000 <= 4.05 })
+        let spoken = stream.filter { $0 != 0 }.count
+        XCTAssertEqual(phrases.reduce(0) { $0 + $1.filter { $0 != 0 }.count }, spoken)
+    }
+
+    func testPhraseCutterFlushesOnlyWhenSomethingWasSaid() {
+        var c = PhraseCutter(pause: 1)
+        _ = c.add(audio(2))
+        XCTAssertNil(c.flush())
+        _ = c.add(audio(0.5, level: 0.1))
+        XCTAssertEqual(c.flush().map { Double($0.count) / 16_000 } ?? 0, 0.8, accuracy: 0.03)
+    }
+
+    func testTimedSentences() {
+        let words = [TimedWord(word: "Hi", start: 0.1, end: 0.3), TimedWord(word: "there.", start: 0.3, end: 0.6),
+                     TimedWord(word: "Bye.", start: 1.0, end: 1.4)]
+        XCTAssertEqual(Captions.sentences("Hi there. Bye.", words: words, offset: 10),
+                       [TimedText(start: 10.1, end: 10.6, text: "Hi there."), TimedText(start: 11, end: 11.4, text: "Bye.")])
+        XCTAssertEqual(Captions.sentences("Hi.", words: [], offset: 0), [])
+    }
+
+    func testWordRange() {
+        let s = "I don't know, really."
+        XCTAssertEqual(SpokenText.wordRange(in: s, at: 0).map { (s as NSString).substring(with: $0) }, "I")
+        XCTAssertEqual(SpokenText.wordRange(in: s, at: 0.3).map { (s as NSString).substring(with: $0) }, "don't")
+        XCTAssertEqual(SpokenText.wordRange(in: s, at: 1).map { (s as NSString).substring(with: $0) }, "really")
+        XCTAssertNil(SpokenText.wordRange(in: "...", at: 0.5))
+    }
+
+    func testNeuralVoices() {
+        XCTAssertEqual(NeuralVoice.all.filter(\.female).count, 2)
+        XCTAssertEqual(NeuralVoice.all.filter { !$0.female }.count, 2)
+        XCTAssertEqual(NeuralVoice.named("am_fenrir").name, "Fenrir")
+        XCTAssertEqual(NeuralVoice.named("nope").id, "af_heart")
     }
 
     func testVoiceLineupPicksTwoWomenAndTwoMen() {

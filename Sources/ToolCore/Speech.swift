@@ -221,58 +221,207 @@ public enum Dictation {
     }
 }
 
-/// What live speech recognition has written down so far. The recognizer keeps revising its guess
-/// as it hears more, but now and then (after a pause, mostly) it starts over and its next guess
-/// holds only the new words. Those restarts are caught here, so nothing said before one is lost.
-public struct LiveTranscript: Equatable {
-    /// Done: finished recognitions, and guesses the recognizer started over from.
-    public private(set) var settled = ""
-    /// The recognizer's current guess, which may still change.
-    public private(set) var guess = ""
+/// Cuts live microphone audio (16 kHz mono) into phrases at the pauses, so each one can be written
+/// down whole. Once someone speaks, every sample ends up in exactly one phrase; only quiet before
+/// speech is dropped, all but a little of it (so the first word's start isn't clipped). A phrase
+/// that runs on is cut at its quietest moment before it gets too long.
+public struct PhraseCutter {
+    public static let rate = 16_000
+    /// Loudness is judged on frames this long (20 ms).
+    static let frame = 320
 
-    public init() {}
+    /// How long a pause ends a phrase.
+    public var pause: Double
+    /// The longest a phrase may get (the recognizer takes about 15 s at a time; longer is cut).
+    public var longest: Double
+    /// Quiet kept in front of speech.
+    public var lead: Double = 0.3
 
-    public var text: String { Self.join(settled, guess) }
+    /// The open phrase so far.
+    public private(set) var open: [Float] = []
+    /// Someone spoke in the open phrase.
+    public private(set) var spoke = false
+    private var quietFrames = 0
+    private var levels: [Float] = []        // per frame of `open`
+    private var carry: [Float] = []         // samples short of a whole frame
+    /// The background's loudness, followed slowly; speech is well above it.
+    private var floor: Float = 0.003
 
-    /// The recognizer's latest guess.
-    public mutating func heard(_ said: String) {
-        let said = said.trimmingCharacters(in: .whitespacesAndNewlines)
-        if said.isEmpty {
-            settle()
-            return
+    public init(pause: Double, longest: Double = 14) {
+        self.pause = pause
+        self.longest = longest
+    }
+
+    /// A finished phrase: its audio, and whether a pause ended it (rather than its length).
+    public struct Phrase: Equatable {
+        public var samples: [Float]
+        public var paused: Bool
+    }
+
+    /// Adds what the microphone heard; returns the phrases it finished, oldest first.
+    public mutating func add(_ samples: [Float]) -> [Phrase] {
+        var done: [Phrase] = []
+        carry += samples
+        var i = 0
+        while i + Self.frame <= carry.count {
+            let chunk = Array(carry[i..<(i + Self.frame)])
+            i += Self.frame
+            if let phrase = addFrame(chunk) { done.append(phrase) }
         }
-        if Self.startsOver(from: guess, to: said) { settle() }
-        guess = said
+        carry.removeFirst(i)
+        return done
     }
 
-    /// The guess is final (the recognition ended, or a new one takes over).
-    public mutating func settle() {
-        settled = Self.join(settled, guess)
-        guess = ""
+    /// Ends the open phrase now (listening stopped, or "send it now"): it, if anything was said.
+    public mutating func flush() -> [Float]? {
+        open += carry
+        carry = []
+        defer { reset() }
+        return spoke ? open : nil
     }
 
-    public mutating func clear() {
-        settled = ""
-        guess = ""
+    /// Forgets the open phrase (what was heard while held).
+    public mutating func reset() {
+        open = []
+        levels = []
+        carry = []
+        spoke = false
+        quietFrames = 0
     }
 
-    /// A revision keeps most of what came before; a restart is shorter and shares little of its
-    /// start. When unsure it counts as a restart: a repeated word can be deleted, a lost one can't.
-    static func startsOver(from old: String, to new: String) -> Bool {
-        let a = words(old), b = words(new)
-        guard !a.isEmpty, b.count < a.count else { return false }
-        let shared = zip(a, b).prefix { $0 == $1 }.count
-        return shared * 2 < a.count
+    public static func rms(_ frame: ArraySlice<Float>) -> Float {
+        guard !frame.isEmpty else { return 0 }
+        var sum: Float = 0
+        for x in frame { sum += x * x }
+        return (sum / Float(frame.count)).squareRoot()
     }
 
-    static func words(_ s: String) -> [String] {
-        s.lowercased().split(whereSeparator: \.isWhitespace).map { $0.filter { $0.isLetter || $0.isNumber } }
-    }
+    /// Louder than this counts as speech.
+    var threshold: Float { max(0.006, floor * 3.5) }
 
-    public static func join(_ a: String, _ b: String) -> String {
-        if a.isEmpty { return b }
-        if b.isEmpty { return a }
-        return a + " " + b
+    private mutating func addFrame(_ chunk: [Float]) -> Phrase? {
+        let level = Self.rms(chunk[...])
+        let loud = level > threshold
+        // The floor drops quickly to quiet and rises slowly with steady background noise; speech
+        // doesn't move it.
+        if level < floor {
+            floor = floor * 0.9 + level * 0.1
+        } else if !loud {
+            floor = min(0.015, floor * 0.99 + level * 0.01)
+        }
+        open += chunk
+        levels.append(level)
+        if loud {
+            spoke = true
+            quietFrames = 0
+        } else {
+            quietFrames += 1
+        }
+        let frameSeconds = Double(Self.frame) / Double(Self.rate)
+        if !spoke {
+            // Only quiet so far: keep just the lead.
+            let keep = max(1, Int((lead / frameSeconds).rounded()))
+            if levels.count > keep {
+                let drop = levels.count - keep
+                levels.removeFirst(drop)
+                open.removeFirst(drop * Self.frame)
+            }
+            return nil
+        }
+        if Double(quietFrames) * frameSeconds >= pause {
+            // The pause ends it (and stays in it: a soft word in it isn't lost).
+            let phrase = Phrase(samples: open, paused: true)
+            reset()
+            return phrase
+        }
+        if Double(levels.count) * frameSeconds >= longest {
+            // Too long: cut at the quietest frame of its last third; the rest starts the next one.
+            let from = levels.count * 2 / 3
+            let cut = QuietCut.cut(levels: levels, from: from) + 1
+            let phrase = Phrase(samples: Array(open[..<(cut * Self.frame)]), paused: false)
+            open.removeFirst(cut * Self.frame)
+            levels.removeFirst(cut)
+            spoke = levels.contains { $0 > threshold }
+            quietFrames = 0
+            return phrase
+        }
+        return nil
+    }
+}
+
+/// A word the recognizer heard, and when (seconds).
+public struct TimedWord: Equatable {
+    public var word: String
+    public var start: Double
+    public var end: Double
+
+    public init(word: String, start: Double, end: Double) {
+        self.word = word
+        self.start = start
+        self.end = end
+    }
+}
+
+extension Captions {
+    /// `text` (what was recognized) cut into sentences, each timed by its first and last word.
+    public static func sentences(_ text: String, words: [TimedWord], offset: Double) -> [TimedText] {
+        guard !words.isEmpty else { return [] }
+        var out: [TimedText] = []
+        var i = 0
+        for sentence in SpokenText.sentences(text) {
+            let count = max(1, sentence.split(whereSeparator: \.isWhitespace).count)
+            let first = words[min(i, words.count - 1)]
+            let last = words[min(i + count - 1, words.count - 1)]
+            out.append(TimedText(start: offset + first.start, end: offset + last.end, text: sentence))
+            i += count
+        }
+        return out
+    }
+}
+
+extension SpokenText {
+    /// The word being said `fraction` (0 to 1) of the way through saying `text`, when the time is
+    /// spread over the words by their length. A UTF-16 range, as NSString counts.
+    public static func wordRange(in text: String, at fraction: Double) -> NSRange? {
+        var words: [NSRange] = []
+        var start: String.Index?
+        for i in text.indices {
+            let inWord = text[i].isLetter || text[i].isNumber || ((text[i] == "'" || text[i] == "’") && start != nil)
+            if inWord, start == nil { start = i }
+            if !inWord, let s = start {
+                words.append(NSRange(s..<i, in: text))
+                start = nil
+            }
+        }
+        if let s = start { words.append(NSRange(s..<text.endIndex, in: text)) }
+        guard !words.isEmpty else { return nil }
+        let total = words.reduce(0) { $0 + $1.length + 1 }
+        var target = Double(total) * min(max(fraction, 0), 1)
+        for w in words {
+            target -= Double(w.length + 1)
+            if target < 0 { return w }
+        }
+        return words.last
+    }
+}
+
+/// The voices the tools speak with: Kokoro's best two women's and two men's (its own quality
+/// grades put Heart and Bella first, then Michael and Fenrir). Open source (Apache 2.0); they run
+/// on this Mac.
+public struct NeuralVoice: Equatable {
+    public var id: String
+    public var name: String
+    public var female: Bool
+
+    public static let all = [
+        NeuralVoice(id: "af_heart", name: "Heart", female: true),
+        NeuralVoice(id: "af_bella", name: "Bella", female: true),
+        NeuralVoice(id: "am_michael", name: "Michael", female: false),
+        NeuralVoice(id: "am_fenrir", name: "Fenrir", female: false),
+    ]
+
+    public static func named(_ id: String?) -> NeuralVoice {
+        all.first { $0.id == id } ?? all[0]
     }
 }
 
@@ -300,9 +449,10 @@ public struct VoiceInfo: Equatable {
     }
 }
 
-/// The four voices on offer: the two best women's and the two best men's voices this Mac has for
-/// the language. Best means the highest quality (Premium, then Enhanced), then the ones that sound
-/// most natural (the order of the lists below).
+/// The macOS voices used while the Kokoro voices aren't there yet (first download, or it failed):
+/// the two best women's and the two best men's voices this Mac has for the language. Best means
+/// the highest quality (Premium, then Enhanced), then the ones that sound most natural (the order
+/// of the lists below).
 public enum VoiceLineup {
     static let women = ["Ava", "Zoe", "Serena", "Matilda", "Allison", "Samantha", "Susan", "Joelle", "Noelle",
                         "Karen", "Moira", "Tessa", "Kate", "Fiona", "Veena", "Isha", "Victoria"]
@@ -314,7 +464,7 @@ public enum VoiceLineup {
         best(voices, female: true) + best(voices, female: false)
     }
 
-    static func best(_ voices: [VoiceInfo], female: Bool) -> [VoiceInfo] {
+    public static func best(_ voices: [VoiceInfo], female: Bool) -> [VoiceInfo] {
         let names = female ? women : men
         let theirs = voices.filter { v in
             if names.contains(v.name) { return true }

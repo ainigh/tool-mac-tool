@@ -190,18 +190,22 @@ struct MenuPill: View {
 
 /// The voice and speed every tool speaks with.
 struct VoiceChoice: View {
-    @State private var voice = VoiceSettings.voice()?.identifier ?? ""
+    @State private var voice = VoiceSettings.voice
     @State private var speed = VoiceSettings.speed
 
     static let speeds: [Double] = [0.75, 1, 1.25, 1.5, 1.75, 2]
 
     var body: some View {
-        let voices = VoiceSettings.voices()
-        let current = voices.first { $0.identifier == voice } ?? VoiceSettings.voice()
         HStack(spacing: 6) {
-            MenuPill(title: current.map(\.name) ?? "Voice",
-                     help: "The voice (all the chats speak with it too): two women's and two men's, the best this Mac has",
-                     items: voiceItems(voices, current: current))
+            MenuPill(title: voice.name,
+                     help: "The voice (all the chats speak with it too): Kokoro, open source, running on this Mac",
+                     items: NeuralVoice.all.map { v -> (String, Bool, () -> Void) in
+                         (VoiceSettings.label(v), v == voice, {
+                             VoiceSettings.voice = v
+                             voice = v
+                             Speaker.preview()
+                         })
+                     })
             MenuPill(title: Self.speedLabel(speed), help: "How fast it speaks",
                      items: Self.speeds.map { s -> (String, Bool, () -> Void) in
                          (Self.speedLabel(s), s == speed, {
@@ -210,21 +214,6 @@ struct VoiceChoice: View {
                          })
                      })
         }
-    }
-
-    /// The four voices (choosing one says hello in it), and where to get better ones.
-    func voiceItems(_ voices: [AVSpeechSynthesisVoice], current: AVSpeechSynthesisVoice?) -> [(String, Bool, () -> Void)] {
-        var items: [(String, Bool, () -> Void)] = voices.map { v in
-            (VoiceSettings.label(v), v.identifier == current?.identifier, {
-                VoiceSettings.voiceID = v.identifier
-                voice = v.identifier
-                Speaker.preview(v)
-            })
-        }
-        if VoiceSettings.canDownloadBetter {
-            items.append(("Download Premium voices (System Settings)…", false, { VoiceSettings.openVoiceDownloads() }))
-        }
-        return items
     }
 
     static func speedLabel(_ s: Double) -> String {
@@ -247,6 +236,7 @@ enum ReadAloudWindow {
 /// Paste or type something and it's read out, the word being said lit up as it goes.
 struct ReadAloudView: View {
     @ObservedObject var speaker: Speaker
+    @ObservedObject private var neural = Neural.shared
     let close: () -> Void
     @AppStorage("readAloudText") private var text = ""
     @State private var message: String?
@@ -258,7 +248,10 @@ struct ReadAloudView: View {
     var body: some View {
         GlassScaffold(clock: clock, mood: speaker.speaking && !speaker.paused ? .streaming : .idle,
                       dot: speaker.speaking ? (speaker.paused ? .thinking : .streaming) : .ready,
-                      status: speaker.speaking ? (speaker.paused ? "Paused" : "Reading…") : (message ?? "Read aloud"),
+                      status: speaker.speaking
+                          ? (speaker.paused ? "Paused"
+                             : neural.voices.isReady ? "Reading…" : "Reading with the Mac's voice while \(VoiceSettings.voice.name) gets ready…")
+                          : (message ?? Neural.status(neural.voices, what: "the voices") ?? "Read aloud"),
                       ink: ink, close: close) {
             VoiceChoice()
         } main: {
@@ -297,6 +290,7 @@ struct ReadAloudView: View {
                     .monospacedDigit()
             }
         }
+        .onAppear { _ = Neural.shared.voiceModel() }      // the first time, start downloading it now
     }
 
     /// What's being read, the word being said in white.
@@ -357,6 +351,7 @@ enum DictateWindow {
 /// stopped, then copy it or keep it with Glass's other dictations (glass-dictation-<date>.md).
 struct DictateView: View {
     @ObservedObject var listener: Listener
+    @ObservedObject private var neural = Neural.shared
     let close: () -> Void
     @AppStorage("dictationDraft") private var note = ""
     /// The note as it was when listening started; what's heard goes after it.
@@ -373,14 +368,15 @@ struct DictateView: View {
     var body: some View {
         GlassScaffold(clock: clock, mood: listener.on ? (listener.level > 0.35 ? .streaming : .typing) : .idle,
                       dot: listener.problem != nil ? .trouble : listening ? .streaming : .ready,
-                      status: listener.on ? "Listening… pauses are fine"
-                          : listener.finishing ? "Writing down the last words…" : (message ?? "Dictate"),
+                      status: Neural.status(neural.ears, what: "speech recognition").map { listening ? $0 + " (it's recording meanwhile)" : $0 }
+                          ?? (listener.on ? "Listening… pauses are fine"
+                              : listener.finishing ? "Writing down the last words…" : (message ?? "Dictate")),
                       ink: ink, close: close) {
             EmptyView()
         } main: {
             VStack(spacing: 10) {
                 if let problem = listener.problem {
-                    VoiceProblem(text: problem, action: "Try again") { record() }
+                    VoiceProblem(text: problem, action: "Try again") { listener.on ? listener.start() : record() }
                 }
                 if listening {
                     ScrollViewReader { proxy in
@@ -433,6 +429,7 @@ struct DictateView: View {
         .onChange(of: listener.level) { level in
             if level > 0.5 { clock.nudge(0.04) }
         }
+        .onAppear { _ = Neural.shared.earModel() }        // the first time, start downloading it now
     }
 
     func record() {
@@ -554,12 +551,14 @@ final class TranscribeModel: ObservableObject {
 
 struct TranscribeView: View {
     @ObservedObject var model: TranscribeModel
+    @ObservedObject private var neural = Neural.shared
     let close: () -> Void
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
     @State private var dropping = false
 
     var status: String {
+        if model.running, let getting = Neural.status(neural.ears, what: "speech recognition") { return getting }
         if model.running { return "Transcribing \(model.name)… \(Int(model.progress * 100))%" }
         if model.finished { return "Done: \(model.name)" }
         return "Transcribe a file"
