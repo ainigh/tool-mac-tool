@@ -140,8 +140,10 @@ the opposite colors, smaller the more you write. When you send, your text lifts 
 spreads through the glass and the old reply slides off. The panel swells a little when text
 changes and settles 15 seconds later.
 
-The top is kept clear for the reply: **every control sits in a row along the bottom**, and only
-the status light shows until the pointer is over the panel. Then the row fades in: the model
+The top is kept clear for the reply: **every control sits in a row along the bottom**, and they
+stay hidden (only the status light shows) so nothing but the reply is on the glass. **Double-click
+the glass** to show them; they go again 10 seconds after you last used them (not while the
+pointer is over them), or at another double-click. The row has: the model
 (click its name to switch), how you talk, the system prompt, memory on or off, the speaker (when
 replies are spoken), a ⋯ menu (model, memory, prompts, settings), and on the right new chat (⌘N),
 shrink to just the box, keep on top, and close (⌘W). **Drag the panel by any part of it** that
@@ -190,13 +192,35 @@ pasted anywhere.
   approve each one, Settings has **Ask me first**, and then the chat asks **Remember "…"?** or
   **Forget "…"?**. Any other `[[…]]` (Bash's `[[ -f x ]]`, say) and anything inside code is left
   as it is.
+- **This Mac.** With the date and time, the model is told what this Mac is (model, chip, memory,
+  cores, macOS) and how long it has been on since it started up. Settings can turn that off.
+- **Say "close" or "exit"** (or "bye", "go away", "close the window") while it listens and the
+  window closes at once, without asking the model. Longer ways of saying it go to the model, which
+  can close it with its `close_window` tool.
 - **Long chats** send only their newest messages. The app asks Ollama for the context window set
   in Settings (8K tokens to start) and fills it with the system message, as much of the
   conversation as fits, and room for the reply, so the start (with the memory) is never cut off.
 - **Every chat is saved** as `glass-chat-<time>.md` in the Glass folder, in Glass's format, so it
   shows up in Glass's transcripts too.
 
-### Tools (Glass)
+### Model tools
+
+Tools built into the app that the chat's model can call (when tools are on, and it's a model that
+can call tools). Each is **one way**: the model is only told it was done and carries on. The
+**Model tools** window (the Alarm, Open link and Clipboard tiles, or the chat's ⋯ menu) turns each
+on or off, holds its description (when the model should call it, like a prompt; **Restore
+default** brings the original back) and has **Try it**.
+
+- **Diagram** (`draw_diagram`): the model describes what to draw; the Diagram tool's own model
+  draws it in its window, which comes up on screen. The chat never sees the diagram.
+- **Alarm** (`sound_alarm`): a loud two-tone beep for the number of seconds the model asks (1 to
+  600), with a small card at the top of the screen to **Stop** it (or Esc).
+- **Open link** (`open_url`): opens a web page (http or https only) in your default browser; the
+  chat stays where it is.
+- **Clipboard** (`copy_to_clipboard`): puts text on the clipboard.
+- **Close the chat** (`close_window`): closes the chat when you say you're done.
+
+### Shortcuts (Model tools)
 
 Lets the chat's model run your **Apple Shortcuts**. Add shortcuts from the list of the ones you
 have, and for each write **when to call it** (like a prompt: what it does, when the model should
@@ -214,7 +238,8 @@ newer, mistral and others can): with one that can't, the chat answers without th
 
 ### Diagram (Glass)
 
-A glass canvas covering most of the screen (90% of it). Type, or press the mic and say, what you
+A glass canvas covering most of the screen (90% of it). It opens from its tile, or when the chat's
+model draws something (see Model tools). Type, or press the mic and say, what you
 want drawn: the model answers with a [Mermaid](https://mermaid.js.org) diagram and it's drawn
 there. Ask for a change ("add a cache between the app and the database") and it redraws from the
 diagram as it stands: each request sends the current diagram and only the previous exchange, no
@@ -223,8 +248,9 @@ fix. **Undo** goes back to the diagram before (and again to come forward), **Mer
 code beside the canvas to read or edit (and **Draw this**), and you can copy the Mermaid or the
 SVG. Pinch to zoom. Mermaid's script is downloaded once, the first time (from cdn.jsdelivr.net),
 into `~/Library/Application Support/ToolMacTool/mermaid`. The model is the chat's unless Settings
-picks another for diagrams. As in the chat, the controls fade in along the bottom and any part of
-the glass drags it.
+picks another for diagrams. As in the chat, the controls along the bottom are hidden until you
+double-click the glass, any part of the glass drags it, and saying "close" while it listens
+closes it.
 
 ### Prompts (Glass)
 
@@ -285,7 +311,8 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
-                              ShortcutTools (running shortcuts, the Tools window),
+                              ShortcutTools (running shortcuts, the Tools window), ModelTools (the built-in
+                              tools, the alarm, this Mac), BuildTools,
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               MemoryView, HUD, Updater

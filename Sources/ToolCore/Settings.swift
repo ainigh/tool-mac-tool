@@ -149,6 +149,10 @@ public struct AppSettings: Codable, Equatable {
     /// Apple Shortcuts the chat's model may run, and whether it may.
     public var shortcuts: [ShortcutTool] = []
     public var toolsOn = true
+    /// The tools built into the app (diagram, alarm, link, clipboard, close).
+    public var builtins = BuiltinTool.defaults
+    /// The model is told what this Mac is and how long it's been on.
+    public var shareMacInfo = true
 
     public static let defaultOllama = "http://127.0.0.1:11434"
 
@@ -157,7 +161,7 @@ public struct AppSettings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case ollama, model, diagramModel, contextTokens, temperature, thinking, mode, promptID, memoryOn,
              autoRemember, timeZone, location, clock24, personaScope, memoryPrompt, prompts, personas,
-             shortcuts, toolsOn
+             shortcuts, toolsOn, builtins, shareMacInfo
     }
 
     public init(from decoder: Decoder) throws {
@@ -185,6 +189,8 @@ public struct AppSettings: Codable, Equatable {
         take(.personas, &s.personas)
         take(.shortcuts, &s.shortcuts)
         take(.toolsOn, &s.toolsOn)
+        take(.builtins, &s.builtins)
+        take(.shareMacInfo, &s.shareMacInfo)
         self = s.tidied()
     }
 
@@ -200,6 +206,7 @@ public struct AppSettings: Codable, Equatable {
         for voice in NeuralVoice.all where !s.personas.contains(where: { $0.voice == voice.id }) {
             s.personas.append(Persona.for(voice.id, in: []))
         }
+        s.builtins = BuiltinTool.complete(s.builtins)
         if s.memoryPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             s.memoryPrompt = MemoryStore.defaultInstruction
         }

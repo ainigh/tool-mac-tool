@@ -60,8 +60,8 @@ public struct ShortcutTool: Codable, Equatable, Identifiable {
 
     /// The enabled tools by the name the model calls them (a second "get_weather" becomes
     /// "get_weather_2"), in order.
-    public static func callable(_ tools: [ShortcutTool]) -> [(name: String, tool: ShortcutTool)] {
-        var used = Set<String>()
+    public static func callable(_ tools: [ShortcutTool], reserved: Set<String> = []) -> [(name: String, tool: ShortcutTool)] {
+        var used = reserved
         var out: [(String, ShortcutTool)] = []
         for t in tools where t.enabled && !t.shortcut.isEmpty {
             let base = functionName(t.shortcut)

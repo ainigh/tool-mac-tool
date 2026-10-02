@@ -34,6 +34,8 @@ final class DiagramModel: ObservableObject {
     @Published private(set) var models: [String] = []
 
     let prefs = Preferences.shared
+    /// Closes the window (set when it's made).
+    var onClose: (() -> Void)?
     /// Saying what to draw (Parakeet is fetched the first time it listens).
     let listener = Listener()
     private var exchange: (ask: String, reply: String)?
@@ -50,6 +52,12 @@ final class DiagramModel: ObservableObject {
         listener.pauseToEnd = 1.4
         listener.onUtterance = { [weak self] said in
             guard let self else { return }
+            // "Close", "exit": the window goes, nothing is drawn.
+            if VoiceCommand.parse(said) == .close {
+                self.input = ""
+                self.onClose?()
+                return
+            }
             self.input = said
             self.send()
         }
@@ -87,6 +95,14 @@ final class DiagramModel: ObservableObject {
         pendingAsk = text
         repaired = false
         ask(turns)
+    }
+
+    /// Draws what another model described (the chat's draw_diagram tool): whatever's under way
+    /// stops, and this is sent as if typed.
+    func request(_ description: String) {
+        if busy { stop() }
+        input = description
+        send()
     }
 
     private func ask(_ turns: [ChatTurn]) {
@@ -217,7 +233,10 @@ enum DiagramWindow {
                 diagram.listener.stop()
                 panel.orderOut(nil)
             }
-            let host = FirstClickHostingView(rootView: DiagramView(diagram: diagram, close: close,
+            diagram.onClose = close
+            let reveal = Reveal()
+            panel.onDoubleClick = { reveal.toggle() }
+            let host = FirstClickHostingView(rootView: DiagramView(diagram: diagram, reveal: reveal, close: close,
                                                                    pin: { on in panel.level = on ? .floating : .normal }))
             host.sizingOptions = []
             panel.contentView = host
@@ -246,12 +265,14 @@ enum DiagramWindow {
 /// itself can be opened beside the canvas, edited and drawn.
 struct DiagramView: View {
     @ObservedObject var diagram: DiagramModel
+    /// The controls, shown by a double-click.
+    @ObservedObject var reveal: Reveal
+    var hovering: Bool { reveal.shown }
     let close: () -> Void
     let pin: (Bool) -> Void
 
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
-    @State private var hovering = false
     @State private var pinned = true
     @State private var showCode = false
     @State private var editing = ""
@@ -310,13 +331,11 @@ struct DiagramView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 6)
             controls
+                .onHover { reveal.hold($0) }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 10)
         }
         .background(GlassCard(clock: clock, mood: mood, paused: still, radius: 30))
-        .onHover { h in
-            withAnimation(h ? .easeOut(duration: 0.25) : .easeInOut(duration: 1.2)) { hovering = h }
-        }
         .padding(DiagramWindow.margin)
         .environment(\.colorScheme, .dark)
         .animation(.easeOut(duration: 0.2), value: showCode)
