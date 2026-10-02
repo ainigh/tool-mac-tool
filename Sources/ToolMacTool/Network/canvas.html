@@ -1,0 +1,106 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!-- The diagram tool's canvas (DiagramView.swift copies this folder next to Mermaid's script and
+     opens it). Diagrams that are graphs (flowcharts, mind maps, state, class, ER, sequence,
+     timeline and architecture diagrams) are drawn as a network (network.js); anything else
+     (pie, gantt, ...) by Mermaid itself. -->
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+               font-family: -apple-system, "SF Pro Rounded", sans-serif; -webkit-user-select: none; }
+  #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #stage svg { display: block; }
+  #empty { color: rgba(255,255,255,.28); font: 600 24px -apple-system, "SF Pro Rounded", sans-serif;
+           text-align: center; line-height: 1.4; }
+</style>
+<script src="icons.js"></script>
+<script src="icon-set.js"></script>
+<script src="icon-brands.js"></script>
+<script src="icon-match.js"></script>
+<script src="mermaid.js"></script>
+<script src="network.js"></script>
+<script src="mermaid-__MERMAID_VERSION__.min.js"></script>
+</head><body>
+<div id="stage"><div id="empty">Your diagram appears here.<br>Describe it below, or press the mic and say it.</div></div>
+<script>
+  const stage = document.getElementById('stage');
+  const emptyHTML = stage.innerHTML;
+  const lib = window.mermaid || null;
+  function post(m) {
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tmt) window.webkit.messageHandlers.tmt.postMessage(JSON.stringify(m));
+    else window.lastPost = m;
+  }
+  if (lib) lib.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict',
+    themeVariables: Object.assign({ background: 'transparent', fontFamily: '-apple-system, "SF Pro Rounded", sans-serif', fontSize: '16px',
+      pieStrokeColor: 'rgba(0,0,0,.35)', pieOuterStrokeColor: 'rgba(255,255,255,.15)', pieSectionTextColor: '#fff' },
+      // Pie slices (and the like) in the network view's colors.
+      Object.fromEntries(['#8b5cf6', '#06b6d4', '#f59e0b', '#ec4899', '#10b981', '#3b82f6', '#f97316', '#84cc16', '#d946ef', '#14b8a6', '#ef4444', '#6366f1']
+        .map((c, i) => ['pie' + (i + 1), c]))) });
+  let n = 0;
+  let shown = null; // what's drawn: { kind: 'network', model } or { kind: 'mermaid' }
+
+  // Mermaid's own drawing, as large as fits.
+  function fitMermaid() {
+    const svg = stage.querySelector('svg');
+    if (!svg || !svg.viewBox || !svg.viewBox.baseVal) return;
+    const box = svg.viewBox.baseVal;
+    if (!box.width || !box.height) return;
+    const w = stage.clientWidth - 16, h = stage.clientHeight - 16;
+    const scale = Math.min(w / box.width, h / box.height, 2.5);
+    svg.style.maxWidth = 'none';
+    svg.setAttribute('width', box.width * scale);
+    svg.setAttribute('height', box.height * scale);
+  }
+  async function drawMermaid(code) {
+    const mine = 'm' + (++n);
+    try {
+      await lib.parse(code);
+      const { svg } = await lib.render(mine, code);
+      stage.innerHTML = svg;
+      fitMermaid();
+    } finally {
+      for (const x of [mine, 'd' + mine]) { const el = document.getElementById(x); if (el && !stage.contains(el)) el.remove(); }
+    }
+  }
+  // Mermaid's complaint about code, or null when it reads fine (or Mermaid isn't here to ask).
+  async function complaint(code) {
+    if (!lib) return null;
+    try { await lib.parse(code); return null; } catch (e) { return String((e && (e.message || e.str)) || e); }
+  }
+
+  async function draw(code, id) {
+    try {
+      const model = MermaidNetwork.model(code);
+      if (model && model.errors.length) {
+        // Lines the network couldn't read: if Mermaid can't either, the model gets to fix them.
+        const bad = await complaint(code);
+        if (bad) throw new Error(bad);
+      }
+      if (model) {
+        MermaidNetwork.draw(stage, model);
+        shown = { kind: 'network', model };
+      } else {
+        const kind = MindMapMermaid.detect(code);
+        if (!kind) throw new Error('This isn’t Mermaid: it should start with a diagram type, such as flowchart TD');
+        if (!lib) throw new Error('Mermaid’s script isn’t here to draw a ' + kind + ' (it’s downloaded once, from cdn.jsdelivr.net)');
+        await drawMermaid(code);
+        shown = { kind: 'mermaid' };
+      }
+      post({ id: id, ok: true });
+    } catch (e) {
+      post({ id: id, ok: false, error: String((e && (e.message || e.str)) || e) });
+    }
+  }
+  function clearStage() { stage.innerHTML = emptyHTML; shown = null; }
+  function svgText() { const s = stage.querySelector('svg'); return s ? s.outerHTML : ''; }
+  let resizing = 0;
+  window.addEventListener('resize', () => {
+    if (!shown) return;
+    if (shown.kind === 'mermaid') return fitMermaid();
+    MermaidNetwork.fit(stage);
+    // A window much changed in shape may suit another layout: drawn again once it settles.
+    clearTimeout(resizing);
+    resizing = setTimeout(() => { if (shown && shown.kind === 'network') MermaidNetwork.draw(stage, shown.model, { quiet: true }); }, 400);
+  });
+  post({ ready: true });
+</script>
+</body></html>

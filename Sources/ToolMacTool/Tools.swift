@@ -63,7 +63,7 @@ enum Tools {
         id: "diagram",
         name: "Diagram",
         title: "Draw a diagram (Mermaid)",
-        subtitle: "Say or type what you want drawn, and the model draws it as a Mermaid diagram on a big glass canvas. Ask for changes and it redraws from the current diagram. The chat's model can open it too (draw_diagram), describing what to draw.",
+        subtitle: "Say or type what you want drawn: the model writes it in Mermaid and the app draws it as a network on a big glass canvas, every node an icon picked from its name. Ask for changes and it redraws from the current diagram. The chat's model can open it too (draw_diagram), describing what to draw.",
         symbol: "point.3.connected.trianglepath.dotted",
         open: { model in DiagramWindow.show(model.diagram) })
 
