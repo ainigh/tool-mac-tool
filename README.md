@@ -91,10 +91,17 @@ folders, macOS may ask again after an update. If something was refused, the tool
 
 - **Read aloud.** Paste or type text and press **Read** (⌘Return), or **Paste & read** what's on
   the clipboard. The word being said is lit up; **Pause** and **Stop** do what they say. The pills
-  at the top pick the voice and the speed; every tool that speaks uses them. For better voices,
-  download a Premium or Enhanced one in System Settings → Accessibility → Spoken Content. **Save
-  audio…** writes it to a .wav file instead.
-- **Dictate.** **Record** (⌘R), talk for as long as you like (pauses don't stop it), **Stop**. Then
+  at the top pick the voice and the speed; every tool that speaks uses them. There are four voices,
+  two women's and two men's: the best this Mac has for its language (Premium first, then Enhanced,
+  then the most natural-sounding: Ava and Zoe, Evan and Jamie when they're there). Choosing one says
+  hello in it. While any of the four isn't Premium, the menu's last line opens System Settings →
+  Accessibility → Spoken Content, where **Manage Voices** downloads better ones; they show up in the
+  menu once downloaded. **Save audio…** writes it to a .wav file instead.
+- **Dictate.** **Record** (⌘R), talk for as long as you like (pauses don't stop it), **Stop**. After
+  Stop it takes a second to write down the last words. Nothing you say should go missing: when the
+  recognizer starts over after a pause, what it had is kept; it's handed over to a fresh recognizer
+  at a pause before its one-minute limit; and switching microphones (AirPods connecting) carries
+  on where it was. Then
   edit it, **Copy** it, or **Keep note** (⌘S), which adds it to that day's
   `glass-dictation-<date>.md` in the Glass folder (where Glass keeps its own dictations, so its
   transcript view lists them) and empties the box for the next one. What you're writing is kept if

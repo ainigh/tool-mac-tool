@@ -220,3 +220,118 @@ public enum Dictation {
         return f.string(from: date)
     }
 }
+
+/// What live speech recognition has written down so far. The recognizer keeps revising its guess
+/// as it hears more, but now and then (after a pause, mostly) it starts over and its next guess
+/// holds only the new words. Those restarts are caught here, so nothing said before one is lost.
+public struct LiveTranscript: Equatable {
+    /// Done: finished recognitions, and guesses the recognizer started over from.
+    public private(set) var settled = ""
+    /// The recognizer's current guess, which may still change.
+    public private(set) var guess = ""
+
+    public init() {}
+
+    public var text: String { Self.join(settled, guess) }
+
+    /// The recognizer's latest guess.
+    public mutating func heard(_ said: String) {
+        let said = said.trimmingCharacters(in: .whitespacesAndNewlines)
+        if said.isEmpty {
+            settle()
+            return
+        }
+        if Self.startsOver(from: guess, to: said) { settle() }
+        guess = said
+    }
+
+    /// The guess is final (the recognition ended, or a new one takes over).
+    public mutating func settle() {
+        settled = Self.join(settled, guess)
+        guess = ""
+    }
+
+    public mutating func clear() {
+        settled = ""
+        guess = ""
+    }
+
+    /// A revision keeps most of what came before; a restart is shorter and shares little of its
+    /// start. When unsure it counts as a restart: a repeated word can be deleted, a lost one can't.
+    static func startsOver(from old: String, to new: String) -> Bool {
+        let a = words(old), b = words(new)
+        guard !a.isEmpty, b.count < a.count else { return false }
+        let shared = zip(a, b).prefix { $0 == $1 }.count
+        return shared * 2 < a.count
+    }
+
+    static func words(_ s: String) -> [String] {
+        s.lowercased().split(whereSeparator: \.isWhitespace).map { $0.filter { $0.isLetter || $0.isNumber } }
+    }
+
+    public static func join(_ a: String, _ b: String) -> String {
+        if a.isEmpty { return b }
+        if b.isEmpty { return a }
+        return a + " " + b
+    }
+}
+
+/// A system voice, as much of it as picking one needs.
+public struct VoiceInfo: Equatable {
+    public enum Quality: Int, Comparable {
+        case standard, enhanced, premium
+        public static func < (a: Quality, b: Quality) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    public var identifier: String
+    public var name: String
+    /// "en-US"
+    public var language: String
+    public var quality: Quality
+    /// nil when the system doesn't say.
+    public var female: Bool?
+
+    public init(identifier: String, name: String, language: String, quality: Quality, female: Bool?) {
+        self.identifier = identifier
+        self.name = name
+        self.language = language
+        self.quality = quality
+        self.female = female
+    }
+}
+
+/// The four voices on offer: the two best women's and the two best men's voices this Mac has for
+/// the language. Best means the highest quality (Premium, then Enhanced), then the ones that sound
+/// most natural (the order of the lists below).
+public enum VoiceLineup {
+    static let women = ["Ava", "Zoe", "Serena", "Matilda", "Allison", "Samantha", "Susan", "Joelle", "Noelle",
+                        "Karen", "Moira", "Tessa", "Kate", "Fiona", "Veena", "Isha", "Victoria"]
+    static let men = ["Evan", "Jamie", "Nathan", "Lee", "Tom", "Aaron", "Alex", "Oliver", "Daniel", "Arthur",
+                      "Malcolm", "Gordon", "Rishi", "Fred"]
+
+    /// Women first, then men; fewer when the Mac doesn't have that many.
+    public static func pick(_ voices: [VoiceInfo]) -> [VoiceInfo] {
+        best(voices, female: true) + best(voices, female: false)
+    }
+
+    static func best(_ voices: [VoiceInfo], female: Bool) -> [VoiceInfo] {
+        let names = female ? women : men
+        let theirs = voices.filter { v in
+            if names.contains(v.name) { return true }
+            if (female ? men : women).contains(v.name) { return false }
+            return v.female == female
+        }
+        func rank(_ v: VoiceInfo) -> Int { names.firstIndex(of: v.name) ?? names.count }
+        let sorted = theirs.sorted { a, b in
+            if a.quality != b.quality { return a.quality > b.quality }
+            if rank(a) != rank(b) { return rank(a) < rank(b) }
+            return a.name < b.name
+        }
+        var out: [VoiceInfo] = []
+        for v in sorted where !out.contains(where: { $0.name == v.name }) {
+            out.append(v)
+            if out.count == 2 { break }
+        }
+        return out
+    }
+}

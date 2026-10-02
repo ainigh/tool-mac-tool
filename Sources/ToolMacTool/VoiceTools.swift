@@ -200,13 +200,8 @@ struct VoiceChoice: View {
         let current = voices.first { $0.identifier == voice } ?? VoiceSettings.voice()
         HStack(spacing: 6) {
             MenuPill(title: current.map(\.name) ?? "Voice",
-                     help: "The voice (all the chats speak with it too). More voices: System Settings → Accessibility → Spoken Content",
-                     items: voices.map { v -> (String, Bool, () -> Void) in
-                         (VoiceSettings.label(v), v.identifier == voice, {
-                             VoiceSettings.voiceID = v.identifier
-                             voice = v.identifier
-                         })
-                     })
+                     help: "The voice (all the chats speak with it too): two women's and two men's, the best this Mac has",
+                     items: voiceItems(voices, current: current))
             MenuPill(title: Self.speedLabel(speed), help: "How fast it speaks",
                      items: Self.speeds.map { s -> (String, Bool, () -> Void) in
                          (Self.speedLabel(s), s == speed, {
@@ -215,6 +210,21 @@ struct VoiceChoice: View {
                          })
                      })
         }
+    }
+
+    /// The four voices (choosing one says hello in it), and where to get better ones.
+    func voiceItems(_ voices: [AVSpeechSynthesisVoice], current: AVSpeechSynthesisVoice?) -> [(String, Bool, () -> Void)] {
+        var items: [(String, Bool, () -> Void)] = voices.map { v in
+            (VoiceSettings.label(v), v.identifier == current?.identifier, {
+                VoiceSettings.voiceID = v.identifier
+                voice = v.identifier
+                Speaker.preview(v)
+            })
+        }
+        if VoiceSettings.canDownloadBetter {
+            items.append(("Download Premium voices (System Settings)…", false, { VoiceSettings.openVoiceDownloads() }))
+        }
+        return items
     }
 
     static func speedLabel(_ s: Double) -> String {
@@ -357,11 +367,14 @@ struct DictateView: View {
     @State private var ink = Double.random(in: 0..<360)
 
     var words: Int { note.split(whereSeparator: \.isWhitespace).count }
+    /// Listening, or writing down the last words after Stop.
+    var listening: Bool { listener.on || listener.finishing }
 
     var body: some View {
         GlassScaffold(clock: clock, mood: listener.on ? (listener.level > 0.35 ? .streaming : .typing) : .idle,
-                      dot: listener.problem != nil ? .trouble : listener.on ? .streaming : .ready,
-                      status: listener.on ? "Listening… pauses are fine" : (message ?? "Dictate"),
+                      dot: listener.problem != nil ? .trouble : listening ? .streaming : .ready,
+                      status: listener.on ? "Listening… pauses are fine"
+                          : listener.finishing ? "Writing down the last words…" : (message ?? "Dictate"),
                       ink: ink, close: close) {
             EmptyView()
         } main: {
@@ -369,7 +382,7 @@ struct DictateView: View {
                 if let problem = listener.problem {
                     VoiceProblem(text: problem, action: "Try again") { record() }
                 }
-                if listener.on {
+                if listening {
                     ScrollViewReader { proxy in
                         ScrollView {
                             Text(note.isEmpty ? "…" : note)
@@ -392,9 +405,10 @@ struct DictateView: View {
                     listener.on ? listener.stop() : record()
                 }
                 .keyboardShortcut("r", modifiers: .command)
+                .disabled(listener.finishing)
                 PillButton(title: "Keep note") { keep() }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || listener.on)
+                    .disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || listening)
                 PillButton(title: "Copy") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(note, forType: .string)
@@ -402,7 +416,7 @@ struct DictateView: View {
                 }
                 .disabled(note.isEmpty)
                 PillButton(title: "Clear") { note = "" }
-                    .disabled(note.isEmpty || listener.on)
+                    .disabled(note.isEmpty || listening)
                 Spacer()
                 if let savedTo {
                     Button { NSWorkspace.shared.show(savedTo) } label: { Text(savedTo.lastPathComponent).underline() }
@@ -413,7 +427,7 @@ struct DictateView: View {
             }
         }
         .onChange(of: listener.text) { heard in
-            guard listener.on else { return }
+            guard listening, !heard.isEmpty else { return }
             note = before.isEmpty ? heard : before + (before.hasSuffix("\n") ? "" : " ") + heard
         }
         .onChange(of: listener.level) { level in

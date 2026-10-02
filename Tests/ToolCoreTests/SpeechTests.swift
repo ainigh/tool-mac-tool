@@ -111,4 +111,59 @@ final class SpeechTests: XCTestCase {
 
         """)
     }
+
+    func testLiveTranscriptKeepsRevisions() {
+        var t = LiveTranscript()
+        t.heard("I scream")
+        t.heard("Ice cream is")
+        t.heard("Ice cream is great, isn't it")
+        XCTAssertEqual(t.text, "Ice cream is great, isn't it")
+        t.heard("Ice cream is great. Isn't it?")
+        XCTAssertEqual(t.text, "Ice cream is great. Isn't it?")
+    }
+
+    func testLiveTranscriptKeepsWhatCameBeforeARestart() {
+        var t = LiveTranscript()
+        t.heard("The meeting is on Tuesday at noon.")
+        t.heard("Bring")                                  // started over after a pause
+        t.heard("Bring the slides")
+        XCTAssertEqual(t.text, "The meeting is on Tuesday at noon. Bring the slides")
+        t.heard("")                                       // and again, with nothing yet
+        t.heard("Thanks")
+        XCTAssertEqual(t.text, "The meeting is on Tuesday at noon. Bring the slides Thanks")
+    }
+
+    func testLiveTranscriptSettles() {
+        var t = LiveTranscript()
+        t.heard("One two three")
+        t.settle()
+        t.heard("Four")
+        XCTAssertEqual(t.settled, "One two three")
+        XCTAssertEqual(t.text, "One two three Four")
+        t.clear()
+        XCTAssertEqual(t.text, "")
+    }
+
+    func testVoiceLineupPicksTwoWomenAndTwoMen() {
+        func v(_ name: String, _ lang: String, _ q: VoiceInfo.Quality, _ female: Bool? = nil) -> VoiceInfo {
+            VoiceInfo(identifier: "\(lang).\(name).\(q)", name: name, language: lang, quality: q, female: female)
+        }
+        let voices = [
+            v("Samantha", "en-US", .standard), v("Samantha", "en-US", .enhanced), v("Ava", "en-US", .premium),
+            v("Zoe", "en-US", .enhanced), v("Allison", "en-US", .enhanced),
+            v("Fred", "en-US", .standard), v("Daniel", "en-GB", .standard), v("Evan", "en-US", .enhanced),
+            v("Jamie", "en-GB", .premium), v("Rocko", "en-US", .standard, false),
+        ]
+        XCTAssertEqual(VoiceLineup.pick(voices).map(\.identifier),
+                       ["en-US.Ava.premium", "en-US.Zoe.enhanced", "en-GB.Jamie.premium", "en-US.Evan.enhanced"])
+    }
+
+    func testVoiceLineupFallsBackOnWhatTheSystemSays() {
+        let voices = [
+            VoiceInfo(identifier: "a", name: "Amélie", language: "fr-CA", quality: .enhanced, female: true),
+            VoiceInfo(identifier: "t", name: "Thomas", language: "fr-FR", quality: .standard, female: false),
+            VoiceInfo(identifier: "x", name: "Mystery", language: "fr-FR", quality: .premium, female: nil),
+        ]
+        XCTAssertEqual(VoiceLineup.pick(voices).map(\.identifier), ["a", "t"])
+    }
 }
