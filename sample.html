@@ -1,0 +1,2037 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glass — Ollama</title>
+<link rel="stylesheet" href="glass-ui.css">
+<!-- three.js for the 3D character (glass-character.js); only fetched when the character is on -->
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.min.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+  "@pixiv/three-vrm":"https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js"}}</script>
+<script>if (/[?&]float\b/.test(location.search)) document.documentElement.classList.add('float');   // glass float's window</script>
+<style>
+:root{
+  --h:200;            /* live hue, driven by the background engine */
+  --glow:0;           /* live activity level */
+  --mic:0;            /* live mic loudness (voice) */
+  --tts:0;            /* live loudness of the spoken reply */
+  --font: ui-rounded, "SF Pro Rounded", "Nunito", "Segoe UI Variable Display", system-ui, sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;color:#fff;font-family:var(--font);overflow:hidden}
+
+/* ---------- rainbow behind the glass ---------- */
+#bg{position:fixed;left:-10%;top:-10%;width:120%;height:120%;filter:blur(34px) saturate(1.25);z-index:0}
+
+/* ---------- glass panel ---------- */
+.stage{position:fixed;inset:0;display:grid;place-items:center;padding:clamp(18px,3.5vmin,40px);z-index:1}
+.glass{
+  position:relative;width:min(1040px,100%);height:100%;
+  display:flex;flex-direction:column;border-radius:30px;overflow:hidden;isolation:isolate;
+  background:
+    linear-gradient(165deg,rgba(255,255,255,.16),rgba(255,255,255,.03) 45%,rgba(255,255,255,.07)),
+    rgba(10,10,22,.34);
+  /* frost: the body can clear the glass (focus) or fog it (confusion, sleep) */
+  backdrop-filter:blur(calc(26px + var(--frost, 0px))) saturate(170%);
+  -webkit-backdrop-filter:blur(calc(26px + var(--frost, 0px))) saturate(170%);
+  border:1px solid rgba(255,255,255,.2);
+  box-shadow:
+    0 30px 90px rgba(0,0,0,.5),
+    inset 0 1px 0 rgba(255,255,255,.3),
+    inset 0 -1px 0 rgba(255,255,255,.06),
+    0 0 calc(30px + var(--glow) * 90px) hsla(var(--h),100%,62%,calc(.12 + var(--glow) * .3)),
+    0 calc(40px - var(--mic) * 20px) calc(var(--mic) * 120px) hsla(calc(var(--h) + 180),100%,62%,calc(var(--mic) * .45)),
+    0 0 calc(20px + max(0, var(--glow-out, 0)) * 110px) hsla(var(--h),100%,70%,calc(max(0, var(--glow-out, 0)) * .45)),
+    0 0 calc(var(--warm, 0) * 90px) hsla(335,100%,68%,calc(var(--warm, 0) * .5)),
+    0 0 calc(var(--alarm, 0) * 80px) hsla(355,100%,58%,calc(var(--alarm, 0) * .55));
+  transform-origin:50% 55%;
+  will-change:transform;
+}
+/* the body's inner layer: color gathering inside, sphere shading, the light sweep, warm/alarm tints */
+.aura{position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;overflow:hidden;
+  background:
+    radial-gradient(38% 30% at 32% 24%, rgba(255,255,255,calc(var(--round, 0) * .5)), transparent 70%),
+    radial-gradient(circle at 50% 50%, transparent 52%, rgba(0,0,0,calc(var(--round, 0) * .4)) 100%),
+    radial-gradient(60% 55% at 50% 50%, hsla(var(--h),100%,70%,calc(var(--glow-in, 0) * .38)), transparent 72%),
+    radial-gradient(130% 120% at 50% 50%, transparent 45%, hsla(335,100%,70%,calc(var(--warm, 0) * .22))),
+    radial-gradient(130% 120% at 50% 50%, transparent 40%, hsla(355,100%,60%,calc(var(--alarm, 0) * .3)))}
+.aura::after{content:"";position:absolute;top:-20%;bottom:-20%;width:38%;left:0;transform:translateX(var(--shine, -200%)) skewX(-18deg);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.28),transparent);filter:blur(6px)}
+/* dim: the content steps back (sleeping as a sphere, shy, offline) */
+.glass > .half, .glass > .divider{opacity:calc(1 - var(--dim, 0))}
+/* the part of a reply you talked over and never heard */
+.unheard{opacity:.22;filter:blur(1.5px);transition:opacity 1.2s ease,filter 1.2s ease}
+.glass.shaped{transition:scale 2.6s cubic-bezier(.45,0,.2,1)}
+/* bulge: swells when text changes, relaxes slowly afterwards */
+.glass{
+  scale:1;
+  transition:scale 2.6s cubic-bezier(.45,0,.2,1), border-radius 2.6s cubic-bezier(.45,0,.2,1);
+}
+.glass.bulge{
+  scale:1.035;border-radius:42px;
+  transition:scale .75s cubic-bezier(.34,1.56,.64,1), border-radius .75s cubic-bezier(.34,1.56,.64,1);
+}
+/* convex lens highlight that appears with the bulge */
+.glass::after{
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:0;
+  background:
+    radial-gradient(120% 70% at 50% -10%, rgba(255,255,255,.22), transparent 55%),
+    radial-gradient(90% 60% at 50% 115%, hsla(var(--h),100%,70%,.12), transparent 60%),
+    radial-gradient(140% 140% at 50% 50%, transparent 62%, rgba(0,0,0,.28));
+  transition:opacity 2.6s ease;
+}
+.glass.bulge::after{opacity:1;transition:opacity .6s ease}
+
+/* fine grain so the glass reads as a material */
+.glass::before{
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:.07;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.half{flex:1 1 0;min-height:0;display:flex;flex-direction:column;position:relative}
+.top{padding:16px 30px 20px}
+.bottom{padding:20px 30px 14px;transition:background .4s}
+.glass.focused .bottom{background:linear-gradient(to top,hsla(calc(var(--h) + 180),90%,60%,.07),transparent 70%)}
+
+.divider{
+  position:relative;height:2px;margin:0 30px;border-radius:2px;flex:none;
+  background:linear-gradient(90deg,transparent,hsl(var(--h) 100% 72%),hsl(calc(var(--h) + 90) 100% 72%),hsl(calc(var(--h) + 180) 100% 72%),transparent);
+  opacity:calc(.3 + var(--glow) * .7 + var(--tts) * .5);
+  box-shadow:0 0 calc(6px + var(--glow) * 20px + var(--tts) * 30px + var(--mic) * 24px) hsla(var(--h),100%,65%,.7);
+  transform:scaleY(calc(1 + var(--tts) * 1.2 + var(--mic)));
+}
+/* while a file is transcribed the divider fills up like a progress bar */
+.divider::after{content:"";position:absolute;left:0;top:-1px;bottom:-1px;width:var(--progress,0%);border-radius:2px;
+  opacity:0;background:linear-gradient(90deg,#fff,hsl(var(--h) 100% 88%));box-shadow:0 0 14px hsl(var(--h) 100% 75%);
+  transition:width .5s ease,opacity .6s ease}
+.glass.transcribing .divider::after{opacity:.95;animation:shimmer 1.4s ease-in-out infinite}
+@keyframes shimmer{50%{filter:brightness(1.5)}}
+
+/* what you can do with a finished transcript */
+#tactions{flex:none;margin-top:12px}
+#tactions .label{font-size:12px;color:rgba(255,255,255,.6);margin-right:4px;max-width:40%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#attach{max-width:50%}
+#attach .n{overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- bars ---------- */
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none;font-size:13px}
+.top .bar{margin-bottom:14px}
+.bottom .bar{margin-top:10px;color:rgba(255,255,255,.42);font-size:12px}
+.st{display:flex;align-items:center;gap:9px;min-width:0;color:rgba(255,255,255,.72)}
+#status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#dot{width:9px;height:9px;border-radius:50%;flex:none;background:#777;transition:background .3s,box-shadow .3s}
+#dot[data-kind=ok]{background:#6dffb0;box-shadow:0 0 10px #6dffb0}
+#dot[data-kind=think]{background:#ffd36b;box-shadow:0 0 12px #ffd36b;animation:pulse 1s ease-in-out infinite}
+#dot[data-kind=stream]{background:hsl(var(--h) 100% 70%);box-shadow:0 0 14px hsl(var(--h) 100% 65%)}
+#dot[data-kind=err]{background:#ff6b81;box-shadow:0 0 12px #ff6b81}
+@keyframes pulse{50%{transform:scale(.55);opacity:.6}}
+
+/* voice pill: state + a live level meter (mic while hearing, voice while speaking) */
+#vstatus{position:relative;flex:none;padding:3px 11px;border-radius:999px;font-size:12px;white-space:nowrap;overflow:hidden;
+  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.75);
+  transition:border-color .3s,box-shadow .3s,color .3s,opacity .3s}
+#vstatus::before{content:"";position:absolute;inset:0;z-index:-1;transform-origin:left;transform:scaleX(var(--lvl,0));
+  background:linear-gradient(90deg,hsla(calc(var(--h) + 180),100%,70%,.35),hsla(var(--h),100%,70%,.35))}
+#vstatus[hidden]{display:none}
+#vstatus[data-kind=down]{border-color:rgba(255,107,129,.55);color:#ffb3c0;cursor:pointer}
+#vstatus[data-kind=starting]{opacity:.7}
+#vstatus[data-kind=muted],#vstatus[data-kind=paused]{opacity:.5}
+#vstatus[data-kind=hearing]{border-color:hsla(calc(var(--h) + 180),100%,75%,.8);box-shadow:0 0 14px hsla(calc(var(--h) + 180),100%,65%,.45);color:#fff}
+#vstatus[data-kind=transcribing]{border-color:rgba(255,211,107,.7)}
+#vstatus[data-kind=speaking]{border-color:hsla(var(--h),100%,75%,.8);box-shadow:0 0 14px hsla(var(--h),100%,65%,.45);color:#fff}
+
+.ctl{display:flex;gap:8px;align-items:center;flex:none;
+  opacity:0;visibility:hidden;translate:0 -6px;
+  transition:opacity 1.6s ease, translate 1.6s ease, visibility 0s linear 1.6s}
+.glass.show-ctl .ctl{opacity:1;visibility:visible;translate:0 0;
+  transition:opacity .3s ease, translate .3s ease, visibility 0s}
+/* buttons and selects come from glass-ui.css */
+#voice{max-width:140px}
+#folder{max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#folder.on{border-color:hsla(var(--h),100%,75%,.6);box-shadow:0 0 14px hsla(var(--h),100%,65%,.3)}
+#file{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%;text-align:right}
+
+/* ---------- text wells ---------- */
+.well{position:relative;flex:1;min-height:0}
+#out,#in,#ghost{
+  position:absolute;inset:0;
+  font-family:var(--font);font-weight:650;line-height:1.2;letter-spacing:-.012em;
+  white-space:pre-wrap;overflow-wrap:anywhere;overflow:hidden;
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.25) transparent;
+}
+
+/* response: flowing rainbow ink */
+#out{
+  font-size:96px;padding-right:4px;
+  background-image:linear-gradient(100deg,
+    hsl(var(--h) 95% 80%),
+    hsl(calc(var(--h) + 45) 95% 78%),
+    hsl(calc(var(--h) + 100) 95% 80%),
+    hsl(calc(var(--h) + 45) 95% 78%),
+    hsl(var(--h) 95% 80%));
+  background-size:300% 100%;background-attachment:local;
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:ink 9s linear infinite;
+  filter:drop-shadow(0 2px 14px rgba(0,0,0,.25)) brightness(calc(1 + var(--tts) * .2));
+}
+@keyframes ink{to{background-position:300% 0}}
+#out.empty::after{content:var(--empty-hint,"Ask anything below.");font-size:clamp(22px,3.4vw,38px);opacity:.55}
+#out.error{background-image:none;color:#ffb3c0}
+
+.caret{display:inline-block;width:.42em;height:.95em;vertical-align:-.1em;margin-left:.08em;border-radius:.12em;
+  background:hsl(var(--h) 100% 82%);box-shadow:0 0 16px hsl(var(--h) 100% 65%);animation:blink 1s steps(2,start) infinite}
+body.thinking .caret{animation:breathe .9s ease-in-out infinite}
+@keyframes blink{to{visibility:hidden}}
+@keyframes breathe{50%{transform:scaleY(.35);opacity:.5}}
+
+/* prompt: complementary color */
+#in,#ghost{color:hsl(calc(var(--h) + 180) 90% 83%)}
+#in{font-size:clamp(22px,3.4vw,40px);background:transparent;border:0;outline:0;resize:none;caret-color:#fff;width:100%;height:100%}
+#in::placeholder{color:rgba(255,255,255,.3)}
+#ghost{pointer-events:none}
+
+/* wipes */
+#ghost.wipe-up{animation:wipeUp .55s cubic-bezier(.65,0,.25,1) forwards}
+@keyframes wipeUp{
+  from{clip-path:inset(0 0 0 0);transform:none;filter:blur(0);opacity:1}
+  to{clip-path:inset(0 0 100% 0);transform:translateY(-34px);filter:blur(8px);opacity:.25}}
+#out.wipe-side{animation:wipeSide .42s cubic-bezier(.65,0,.25,1) forwards,ink 9s linear infinite}
+@keyframes wipeSide{
+  from{clip-path:inset(0 0 0 0);transform:none;opacity:1}
+  to{clip-path:inset(0 0 0 100%);transform:translateX(40px);opacity:.2}}
+
+@media (max-width:760px){
+  .top{padding:12px 16px 14px}.bottom{padding:14px 16px 10px}.divider{margin:0 16px}
+  .bottom .bar span:first-child{display:none}#file{max-width:100%}
+  select{max-width:110px}#folder{max-width:100px}#status{display:none}
+  .ctl{flex-wrap:wrap;justify-content:flex-end}
+}
+/* ---------- float: the panel alone over the desktop, in its own window (glass float) ----------
+   the window is clear: its colors move inside the panel, and a margin around it keeps room for the glow */
+html.float,html.float body{background:transparent}
+html.float .stage{padding:26px;animation:floatIn .6s cubic-bezier(.2,.9,.3,1.15) both}
+html.float .glass{width:100%}
+html.float #bg{position:absolute;left:-12%;top:-12%;width:124%;height:124%;z-index:-2;pointer-events:none;
+  filter:blur(30px) saturate(1.25) brightness(.62)}
+/* the controls (on hover) lie over the top bar and wrap, instead of running off the narrow panel */
+html.float .top .bar{position:relative}
+html.float .ctl{position:absolute;top:-6px;left:-6px;right:-6px;z-index:5;flex-wrap:wrap;justify-content:flex-end;
+  padding:6px;border-radius:20px;background:rgba(10,10,22,.5);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+html.float select{max-width:150px}
+html.float .ctl .float-only,html.float .ctl .float-sep{order:-1}      /* the window's own buttons first */
+html.float .ctl .float-sep{width:1px;align-self:stretch;margin:4px 2px;background:rgba(255,255,255,.18)}
+@keyframes floatIn{from{opacity:0;transform:scale(.9) translateY(14px)}}
+
+/* ---------- character: a 3D character in place of the panel (glass-character.js) ----------
+   the rainbow gives way to a clear background (the desktop itself, in the float window), the reply
+   and your message sit in small glass cards under the character, and the menu floats beside it */
+#char{display:none}
+html.char #bg{display:none}
+html.char body{background:radial-gradient(90% 70% at 50% 28%,#1a1c2c,#08080f 72%)}
+html.char.float,html.char.float body{background:transparent}
+html.char .glass{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;row-gap:8px;
+  grid-template-rows:minmax(0,1.5fr) minmax(0,.8fr) auto minmax(0,.46fr);
+  grid-template-areas:"char ctl" "out ctl" "act ctl" "in ctl";
+  width:min(720px,100%);background:none;border:0;border-radius:0;box-shadow:none;overflow:visible;isolation:auto;
+  backdrop-filter:none;-webkit-backdrop-filter:none;transform:none !important;will-change:auto;scale:1 !important}
+html.char .glass::before,html.char .glass::after{display:none}
+html.char .glass > :not(#char,.top,.bottom){display:none}
+html.char .top,html.char .top > .bar{display:contents}
+html.char #char{display:block;grid-area:char;position:relative;min-height:0}
+html.char .st{grid-area:char;align-self:start;justify-self:start;z-index:2;max-width:70%;font-size:12px;
+  padding:4px 11px;border-radius:999px;background:rgba(10,10,22,.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+html.char .top > .well{grid-area:out}
+html.char #tactions{grid-area:act;margin:0}
+html.char .bottom{grid-area:in;padding:8px 18px 6px}
+html.char .bottom .bar span:first-child{display:none}
+/* the reply and your message: small glass cards; the reply points up at whoever says it */
+html.char .top > .well,html.char .bottom{border-radius:22px;border:1px solid rgba(255,255,255,.18);
+  background:linear-gradient(165deg,rgba(255,255,255,.13),rgba(255,255,255,.03) 50%),rgba(10,10,22,.46);
+  backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);
+  box-shadow:0 14px 40px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.25),
+    0 0 calc(10px + var(--tts) * 40px) hsla(var(--h),100%,65%,calc(.1 + var(--tts) * .35))}
+html.char .top > .well::before{content:"";position:absolute;top:-8px;left:50%;width:14px;height:14px;
+  translate:-50% 0;rotate:45deg;background:rgba(40,40,60,.7);border:1px solid rgba(255,255,255,.18);border-right:0;border-bottom:0}
+html.char #out{inset:12px 18px}
+html.char .bottom.focused,html.char .glass.focused .bottom{border-color:hsla(calc(var(--h) + 180),100%,80%,.5)}
+/* the menu: a column beside the character (it scrolls if the window is short); faint until you come near */
+html.char .ctl,html.float.char .ctl{grid-area:ctl;grid-row:1 / -1;position:relative;inset:auto;z-index:3;
+  display:flex;flex-direction:column;flex-wrap:nowrap;justify-content:safe center;align-items:center;gap:5px;
+  min-height:0;max-height:100%;overflow-y:auto;scrollbar-width:none;padding:4px 2px;background:none;border-radius:0;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  opacity:.6;visibility:visible;translate:none;transition:opacity .4s ease}
+html.char .ctl::-webkit-scrollbar{display:none}
+html.char .glass.show-ctl .ctl{opacity:1}
+html.char .ctl > *{flex:none}
+html.char .ctl button,html.char .ctl select{padding:5px 10px;background-color:rgba(14,14,28,.5)}      /* readable over any desktop */
+html.char .ctl select{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='white' stroke-opacity='.8' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center,
+  linear-gradient(180deg,rgba(255,255,255,.2),rgba(255,255,255,.05) 52%,rgba(255,255,255,.1)),rgba(14,14,28,.5)}
+html.char .ctl select{max-width:132px;padding-right:26px}
+html.char #folder{max-width:132px}
+html.char .ctl .float-sep{width:22px;height:1px;margin:0;align-self:center}
+@media (max-width:760px){ html.char .glass{grid-template-rows:minmax(0,1.3fr) minmax(0,.8fr) auto minmax(0,.5fr)} }
+@media (prefers-reduced-motion:reduce){
+  html.float .stage{animation:none}
+  #out{animation:none}#ghost.wipe-up,#out.wipe-side{animation-duration:.01s}
+  .caret,body.thinking .caret,#dot[data-kind=think],.glass.transcribing .divider::after{animation:none}
+  .glass.bulge{scale:1}
+}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+
+<div class="stage">
+  <main class="glass">
+    <div class="aura" aria-hidden="true"></div>
+    <div id="char" aria-hidden="true"></div>
+    <section class="half top">
+      <header class="bar">
+        <div class="st">
+          <i id="dot"></i><span id="status">Connecting to Ollama…</span>
+          <span id="vstatus" data-kind="starting" hidden>voice starting…</span>
+        </div>
+        <div class="ctl">
+          <select id="model" aria-label="Model" title="Model"></select>
+          <button id="newchat" aria-label="New chat" title="New chat (forget the conversation so far)">✦</button>
+          <button id="audiofile" title="Transcribe an audio file (mp3, m4a, …) — or just drop one here">🎧 File</button>
+          <button id="library" aria-label="Your transcripts" title="Your transcripts, in the layout view">📚</button>
+          <select id="voice" aria-label="Reply voice" class="voice-only" title="Reply voice" hidden></select>
+          <button id="mic" aria-label="Listening" aria-pressed="true" class="voice-only" title="Listening on/off" hidden>🎙</button>
+          <button id="spk" aria-label="Speak replies" aria-pressed="true" class="voice-only" title="Speak replies on/off" hidden>🔊</button>
+          <button id="phones" aria-label="Headphones mode" aria-pressed="false" class="voice-only" title="Headphones mode: talk over a reply to interrupt it (off = speakers, no voice interruption)" hidden>🎧</button>
+          <button id="host" aria-label="Ollama address" title="Change Ollama address">⚙</button>
+          <button id="folder" title="Folder where chats are saved">Choose folder</button>
+          <select id="handsfree" aria-label="Hands-free mode" title="Hands-free mode: what Glass does with your voice on its own" hidden>
+            <option value="chat">Conversation (hands-free)</option>
+            <option value="record">Recording only</option>
+            <option value="off">Off</option>
+          </select>
+          <button id="askfirst" aria-label="Ask before actions" title="Ask before doing things (on/off)">✋</button>
+          <button id="bodybtn" aria-label="Body language" title="Body language: preview gestures, turn it on/off">🎭</button>
+          <button id="lookbtn" aria-label="Look" title="Look: the glass panel, or a 3D character">🧍</button>
+          <button id="soundbtn" aria-label="Sounds" title="Sounds: on/off, volume, preview">🔔</button>
+          <button id="pin" class="float-only" aria-label="Keep on top" aria-pressed="true" title="Keep Glass above other windows" hidden>📌</button>
+          <button id="unfloat" class="float-only" aria-label="Open in the browser" title="Open Glass in the browser instead" hidden>↗</button>
+          <button id="fclose" class="float-only" aria-label="Close" title="Close the floating Glass (⌘W)" hidden>✕</button>
+          <i class="float-sep" aria-hidden="true" hidden></i>
+        </div>
+      </header>
+      <div class="well"><div id="out" class="empty" aria-live="polite"></div></div>
+      <div id="tactions" class="gx-row" hidden>
+        <span class="label" id="tlabel"></span>
+        <button id="t-stop" class="danger" title="Stop transcribing (Esc)">Stop</button>
+        <button id="t-layout" class="primary" title="Open in the layout view">📐 Layout</button>
+        <button id="t-break" class="primary" title="The model reads the whole transcript 15 times, once per bucket: topics, entities, commitments, emotions, advice…">🧩 Break it down</button>
+        <button id="t-chat" title="Attach the transcript to your next message">💬 Chat about it</button>
+        <button id="t-copy" title="Copy the text">Copy</button>
+        <button id="t-txt" title="Download as text">.txt</button>
+        <button id="t-srt" title="Download subtitles (SRT)">.srt</button>
+        <button id="t-vtt" title="Download subtitles (WebVTT)">.vtt</button>
+        <button id="t-close" aria-label="Hide transcript actions" title="Hide">✕</button>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <section class="half bottom">
+      <div class="well">
+        <textarea id="in" aria-label="Message" placeholder="Type here…" spellcheck="false" autofocus></textarea>
+        <div id="ghost" aria-hidden="true"></div>
+      </div>
+      <footer class="bar">
+        <span>Enter to send, Shift+Enter for a new line, Esc to stop, double-click for settings, drop an audio file to transcribe</span>
+        <span id="attach" class="chip" hidden title="Sent along with your next message">📎 <span class="n"></span><button title="Detach" aria-label="Detach transcript">✕</button></span>
+        <span id="file">Not saving yet. Choose a folder.</span>
+      </footer>
+    </section>
+  </main>
+</div>
+<input id="audioin" type="file" accept="audio/*,video/*,.mp3,.m4a,.wav,.aac,.ogg,.oga,.opus,.flac,.webm,.mp4,.mov" hidden>
+
+<script src="glass-config.js"></script>   <!-- the default service addresses, from the Glass service (optional) -->
+<script src="glass-ui.js"></script>
+<script src="glass-body.js"></script>
+<script src="glass-character.js"></script>
+<script src="glass-sound.js"></script>
+<script src="glass-chunks.js"></script>
+<script src="glass-analysis.js"></script>
+<script>
+/* =========================================================
+   helpers
+   ========================================================= */
+const $ = s => document.querySelector(s);
+const root = document.documentElement;
+const out = $('#out'), inp = $('#in'), ghost = $('#ghost'), glass = $('.glass');
+const statusEl = $('#status'), dot = $('#dot'), modelSel = $('#model');
+const folderBtn = $('#folder'), fileLbl = $('#file'), hostBtn = $('#host');
+
+const ls = {
+  get:(k,d)=>{ try{ return localStorage.getItem(k) ?? d }catch{ return d } },
+  set:(k,v)=>{ try{ localStorage.setItem(k,v) }catch{} }
+};
+const pad = n => String(n).padStart(2,'0');
+const stamp = (d=new Date()) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+const clock = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+
+// Two services, composed here: Ollama (the model) and glassvoice (speech). Served by the Glass service,
+// Ollama is reached through it (/ollama, same origin); otherwise both are called straight from the page,
+// and each allows pages from this machine (http://localhost:*, http://127.0.0.1:*).
+const pageIsLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//.test(location.href);
+let host = GlassUI.ollamaUrl();        // Ollama
+let vbase = GlassUI.voiceUrl();     // glassvoice
+let busy = false, ctrl = null;
+let history = [];                 // the conversation so far, so the model remembers earlier turns
+let attachment = null;            // {name, text}: a transcript that goes along with the next message
+const MAX_TURNS = 20;
+const viaGlass = () => host === location.origin + '/ollama';     // Glass forwards to Ollama for us
+const startHint = () => viaGlass()
+  ? `Can't reach Ollama${window.GLASS_CONFIG?.ollama_upstream ? ' at ' + GLASS_CONFIG.ollama_upstream : ''} (Glass passes your messages on to it).\n\nStart it with:\nollama serve`
+  : `Can't reach Ollama at ${host}.\n\nStart it with:\n` +
+    (pageIsLocal ? 'ollama serve' : `OLLAMA_ORIGINS="${location.origin === 'null' ? '*' : location.origin}" ollama serve`);
+
+const outText = document.createTextNode('');
+out.append(outText);
+const caret = document.createElement('span'); caret.className = 'caret';
+
+function setStatus(t, kind){ statusEl.textContent = t; dot.dataset.kind = kind || ''; }
+
+/* =========================================================
+   text fitting — binary search the largest font that fits
+   ========================================================= */
+function fit(el, {min=13, max=110, ceil} = {}){
+  el.style.overflowY = 'hidden';
+  const fits = () => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1;
+  let lo = min, hi = (ceil ? Math.min(max, ceil) : max) + 1;
+  while (hi - lo > 1){
+    const mid = (lo + hi) >> 1;
+    el.style.fontSize = mid + 'px';
+    if (fits()) lo = mid; else hi = mid;
+  }
+  el.style.fontSize = lo + 'px';
+  if (!fits()) el.style.overflowY = 'auto';   // too long even at min size: allow scrolling
+  return lo;
+}
+let outRaf = 0, outFree = false;
+function fitOut(growOnly){
+  if (!growOnly) outFree = true;              // a full refit wins over a pending capped one
+  if (outRaf) return;
+  outRaf = requestAnimationFrame(() => {
+    outRaf = 0;
+    const free = outFree; outFree = false;
+    if (out.classList.contains('empty')) return;
+    const cur = parseFloat(out.style.fontSize) || 110;
+    fit(out, {max:104, ceil: free ? undefined : cur});
+    if (busy) out.scrollTop = out.scrollHeight;
+  });
+}
+function fitIn(){
+  if (!inp.value){ inp.style.fontSize = ''; inp.style.overflowY = 'hidden'; return; }
+  fit(inp, {max:84});
+  inp.scrollTop = inp.scrollHeight;
+}
+new ResizeObserver(() => { fitIn(); fitOut(false); }).observe(glass);
+
+/* =========================================================
+   rainbow engine (canvas behind the glass)
+   ========================================================= */
+const bg = $('#bg'), g = bg.getContext('2d');
+let W = 0, H = 0;
+function resizeBg(){ W = bg.width = Math.max(48, Math.round(innerWidth*.12)); H = bg.height = Math.max(48, Math.round(innerHeight*.12)); }
+resizeBg(); addEventListener('resize', resizeBg);
+
+/* float (glass float): the page fills its own clear window. The colors move into the panel, so they
+   tilt and squeeze with it; the bars and edges drag the window; links open in the browser. */
+const FLOAT = document.documentElement.classList.contains('float');
+if (FLOAT){
+  const native = (name, ...a) => { try{ return window.pywebview?.api?.[name]?.(...a) ?? Promise.resolve(null); }
+                                   catch{ return Promise.resolve(null); } };
+  glass.prepend(bg);
+  document.querySelectorAll('.stage, .glass, .half, .bar, .st, #status, .divider, .well, #char')
+    .forEach(e => e.classList.add('pywebview-drag-region'));
+  document.querySelectorAll('.float-only, .float-sep').forEach(e => { e.hidden = false; });
+  window.open = u => { native('browser', new URL(u, location.href).href); return null; };
+  const pin = $('#pin');
+  const showPin = on => { pin.ariaPressed = String(!!on); pin.classList.toggle('off', !on);
+                          pin.title = on ? 'Kept above other windows (click to let it go behind)' : 'Keep Glass above other windows'; };
+  const ready = () => native('state').then(st => st && showPin(st.on_top));
+  window.pywebview?.api ? ready() : addEventListener('pywebviewready', ready);
+  pin.addEventListener('click', () => native('pin', pin.ariaPressed !== 'true').then(showPin));
+  $('#unfloat').addEventListener('click', () => native('unfloat'));
+  $('#fclose').addEventListener('click', () => native('close'));
+  addEventListener('keydown', e => { if (e.metaKey && e.key.toLowerCase() === 'w'){ e.preventDefault(); native('close'); } });
+}
+
+// viewport fraction -> canvas fraction (canvas overhangs the screen by 10%)
+const cv = v => (v + .1) / 1.2;
+
+const N = 7;
+const blobs = Array.from({length:N}, (_,i) => ({
+  x:Math.random(), y:Math.random(),
+  vx:(Math.random()-.5)*.24, vy:(Math.random()-.5)*.24,
+  r:.3 + Math.random()*.22, ho:i*(360/N)
+}));
+const ripples = [];
+const S = { mode:'idle', modeT:0, energy:.2, kick:0, flash:0, save:0, err:0,
+            hue:Math.random()*360, mx:.5, my:.5, lastKey:0, t:0,
+            // voice layer: state from the voice engine, live mic level, loudness of the spoken reply
+            vstate:'', mic:0, micT:0, tts:0, ttsPrev:0, hear:0, speech:null, lastVR:0 };
+const BASE = { idle:.2, typing:.45, thinking:.7, streaming:.95, done:.55, error:.6 };
+
+function setMode(m){ S.mode = m; S.modeT = 0; document.body.classList.toggle('thinking', m === 'thinking'); }
+function ripple(x, y, power = 1, hue){
+  ripples.push({ x:cv(x), y:cv(y), r:0, p:power, life:1, h: hue ?? S.hue });
+  if (ripples.length > 50) ripples.shift();
+}
+const mixHue = (a, b, t) => { const d = ((b - a + 540) % 360) - 180; return (a + d*t + 360) % 360; };
+
+// loudness of the reply being spoken right now, from the envelope sent with speak_start
+function ttsLevel(){
+  const sp = S.speech; if (!sp) return 0;
+  const i = Math.floor((performance.now() - sp.t0) / 1000 * sp.fps);
+  if (i >= sp.env.length){ S.speech = null; return 0; }
+  return i < 0 ? 0 : sp.env[i];
+}
+
+function frame(ts){
+  const t = ts/1000, dt = Math.min(.05, t - (S.t || t)); S.t = t; S.modeT += dt;
+
+  if (S.mode === 'typing' && performance.now() - S.lastKey > 1400) setMode('idle');
+  if (S.mode === 'done'   && S.modeT > 2.5) setMode('idle');
+  if (S.mode === 'error'  && S.modeT > 4)   setMode('idle');
+
+  // voice: your voice pulls the light down to the input, the reply's voice pushes it up to the answer
+  const vst = S.vstate;
+  S.mic += (S.micT - S.mic) * Math.min(1, dt*14);
+  S.micT *= Math.pow(.05, dt);                          // fades if level events stop
+  const tl = ttsLevel();
+  S.tts += (tl - S.tts) * Math.min(1, dt*(tl > S.tts ? 30 : 10));
+  S.hear += ((vst === 'hearing' || vst === 'transcribing' ? 1 : 0) - S.hear) * Math.min(1, dt*4);
+  const VBOOST = vst === 'hearing' ? .25 + S.mic*.9 : vst === 'transcribing' ? .35
+               : vst === 'speaking' ? .1 + S.tts*.45 : vst === 'listening' ? S.mic*.25 : 0;
+  if (vst === 'hearing' && S.mic > .35 && t - S.lastVR > .14){
+    S.lastVR = t; ripple(.5 + (Math.random() - .5)*.35, .8, .25 + S.mic*.9, S.hue + 180);
+  }
+  if (vst === 'speaking' && S.tts > .5 && S.ttsPrev <= .5 && t - S.lastVR > .1){
+    S.lastVR = t; ripple(.5 + (Math.random() - .5)*.4, .28, .3 + S.tts*.8, S.hue + Math.random()*90);
+  }
+  S.ttsPrev = S.tts;
+  body.mood(BODY.on ? moodNow() : 'idle');
+  body.live(BODY.on ? { lean: vst === 'hearing' ? S.mic : 0, mouth: vst === 'speaking' ? S.tts : 0,
+                        attend: vst === 'hearing' ? 1 : 0, lookX: REDUCED ? 0 : live.look.x, lookY: REDUCED ? 0 : live.look.y }
+                    : {lean:0, mouth:0, attend:0, lookX:0, lookY:0});
+  // depth: the colors behind the glass drift the other way from your hand
+  if (!REDUCED) bg.style.transform = `translate(${(-live.look.x*14).toFixed(1)}px,${(-live.look.y*10).toFixed(1)}px)`;
+  const L = body.levers;
+
+  S.energy += ((BASE[S.mode] ?? .2) + VBOOST - S.energy) * Math.min(1, dt*2.5);
+  S.kick  *= Math.pow(.2, dt);
+  S.flash *= Math.pow(.05, dt);
+  S.save  *= Math.pow(.15, dt);
+  S.err   += ((S.mode === 'error' ? 1 : 0) - S.err) * Math.min(1, dt*3);
+
+  const E = S.energy + S.kick;
+  S.hue = (S.hue + dt*(5 + E*75)) % 360;
+  const m = Math.min(W, H);
+
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = `hsl(${(S.hue+220)%360} 45% ${4 + S.flash*20}%)`;
+  g.fillRect(0, 0, W, H);
+  g.globalCompositeOperation = 'lighter';
+
+  blobs.forEach((b, i) => {
+    const sp = .25 + E*1.7;
+    // wander: each blob's heading turns slowly, so it drifts in curves instead of straight lines
+    const w = dt*(.5 + E*.6)*(Math.sin(t*.21 + i*1.9) + .6*Math.sin(t*.53 + i*.7));
+    const cw = Math.cos(w), sw = Math.sin(w);
+    [b.vx, b.vy] = [b.vx*cw - b.vy*sw, b.vx*sw + b.vy*cw];
+    b.x += b.vx*dt*sp; b.y += b.vy*dt*sp;
+    if (S.mode === 'thinking'){                      // blobs gather into an orbit while waiting
+      const a = t*1.9 + i*Math.PI*2/N;
+      b.x += (.5 + Math.cos(a)*.26 - b.x)*dt*2.4;
+      b.y += (.5 + Math.sin(a)*.26 - b.y)*dt*2.4;
+    }
+    if (vst === 'transcribing'){                     // your words condensing: a tight swirl at the input
+      const a = -t*2.4 + i*Math.PI*2/N;
+      b.x += (.5 + Math.cos(a)*.2 - b.x)*dt*2.2;
+      b.y += (.8 + Math.sin(a)*.12 - b.y)*dt*2.2;
+    } else if (vst === 'hearing'){
+      b.y += (.8 - b.y)*dt*(.4 + S.mic*1.6);
+    } else if (vst === 'speaking'){
+      b.y += (.3 - b.y)*dt*(.3 + S.tts*1.2);
+    }
+    b.x += (S.mx - b.x)*dt*.05; b.y += (S.my - b.y)*dt*.05;   // lean toward the pointer
+    if (L.pull){                                     // the body draws the colors in (+) or pushes them out (-)
+      const k = dt * 1.6 * L.pull;
+      b.x += (.5 - b.x) * k; b.y += (.5 - b.y) * k;
+    }
+    // soft walls: past the edge a blob is eased back rather than bounced
+    b.vx += (b.x < 0 ? -b.x : b.x > 1 ? 1 - b.x : 0)*dt*3;
+    b.vy += (b.y < 0 ? -b.y : b.y > 1 ? 1 - b.y : 0)*dt*3;
+    const vm = Math.hypot(b.vx, b.vy), vcap = .17;
+    if (vm > vcap){ b.vx *= vcap/vm; b.vy *= vcap/vm; }
+    b.x = Math.min(1.25, Math.max(-.25, b.x)); b.y = Math.min(1.25, Math.max(-.25, b.y));
+
+    let h = (S.hue + b.ho) % 360;
+    h = mixHue(h, 350 + (i%2)*18, S.err*.85);   // errors bleed red
+    h = mixHue(h, 150, S.save*.75);             // saves wash green
+    h = mixHue(h, (S.hue + 180 + b.ho) % 360, S.hear*.35);   // your voice: the input's complementary hue
+    const pulse = S.mode === 'thinking' ? .2*Math.sin(t*5 + i*1.3) : 0;
+    const breath = .07*Math.sin(t*.7 + i*2.3);       // each blob breathes on its own beat
+    const R = b.r*m*1.7*(1 + .28*E + pulse + breath + S.tts*.22 + (vst === 'hearing' ? S.mic*.3 : 0));
+    const a = Math.min(.95, .32 + .38*Math.min(1, E) + S.flash*.3);
+    const gr = g.createRadialGradient(b.x*W, b.y*H, 0, b.x*W, b.y*H, R);
+    gr.addColorStop(0, `hsla(${h},95%,${55 + S.flash*15}%,${a})`);
+    gr.addColorStop(1, `hsla(${h},95%,50%,0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  });
+
+  for (let k = ripples.length - 1; k >= 0; k--){
+    const r = ripples[k];
+    r.r += dt*m*(.8 + r.p*.9);
+    r.life -= dt*.75/(.55 + r.p*.45);
+    if (r.life <= 0){ ripples.splice(k,1); continue; }
+    g.strokeStyle = `hsla(${r.h},100%,72%,${r.life*.85*Math.min(1, r.p + .2)})`;
+    g.lineWidth = Math.max(1, m*.035*r.life*Math.min(1.4, r.p));
+    g.beginPath(); g.arc(r.x*W, r.y*H, r.r, 0, Math.PI*2); g.stroke();
+    if (r.r > m*.08){                                   // a fainter echo ring trails inside, like a drop in water
+      g.strokeStyle = `hsla(${(r.h + 40) % 360},100%,78%,${r.life*.35*Math.min(1, r.p + .2)})`;
+      g.beginPath(); g.arc(r.x*W, r.y*H, r.r*.62, 0, Math.PI*2); g.stroke();
+    }
+  }
+
+  let shown = mixHue(S.hue, 352, S.err*.8); shown = mixHue(shown, 150, S.save*.6);
+  shown = mixHue(shown, 335, Math.min(1, L.warm)*.55); shown = mixHue(shown, 355, Math.min(1, L.alarm)*.7);
+  root.style.setProperty('--h', shown.toFixed(1));
+  root.style.setProperty('--glow', Math.max(0, Math.min(1.6, E*.55 + S.flash + S.save*.5 + S.tts*.3 + L.glowOut*.4 - L.dim*.3)).toFixed(3));
+  const micShown = vst === 'hearing' ? S.mic : vst === 'listening' ? S.mic*.4 : 0;
+  root.style.setProperty('--mic', micShown.toFixed(3));
+  root.style.setProperty('--tts', S.tts.toFixed(3));
+  vs.style.setProperty('--lvl', (vst === 'speaking' ? S.tts : vst === 'hearing' || vst === 'listening' ? S.mic : 0).toFixed(3));
+  if (CH) CH.live({ mouth: S.speech ? S.tts : 0, speech: S.speech, hue: shown,
+                    lookX: REDUCED ? 0 : live.look.x, lookY: REDUCED ? 0 : live.look.y });
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* =========================================================
+   body language (glass-body.js): the panel nods, shakes, tilts, shrinks,
+   leans in, recoils, curls into a sphere… see "personality" below
+   ========================================================= */
+const body = GlassBody.attach(glass);
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const live = GlassUI.liven(glass, {speed: () => Math.min(2, S.energy + S.kick)});   // sheen + iridescent rim follow the pointer
+const BODY = { on: ls.get('body-on', '1') === '1', tags: ls.get('body-tags', '1') === '1' };
+function act(names, opts){ if (!BODY.on) return; CH?.play(names); return body.play(names, opts); }
+/* sounds (glass-sound.js): through the voice engine when it's up, else in the browser */
+const cue = (name, opts) => GlassSound.play(name, opts);
+let everUp = false;
+function shake(){ act('shake'); }
+
+/* =========================================================
+   saving to a local folder
+   (served by the Glass service: to its folder instead, next to the
+   recordings and the memory; see "the Glass service" below)
+   ========================================================= */
+const GLASS = GlassUI.glass;
+const canPickFolder = 'showDirectoryPicker' in window;
+let dirHandle = null, pendingHandle = null, fileHandle = null;
+let logFile = null;                    // Glass service: this chat's file in its folder
+let fullLog = '', unsaved = '', writeQ = Promise.resolve();
+
+function idb(){ return new Promise((res, rej) => {
+  const r = indexedDB.open('glass-ollama', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});}
+async function kvGet(k){ const db = await idb(); return new Promise(res => {
+  const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(undefined); }); }
+async function kvSet(k, v){ const db = await idb(); return new Promise(res => {
+  const tx = db.transaction('kv','readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = res; }); }
+
+async function appendFile(text){
+  const f = await fileHandle.getFile();
+  const w = await fileHandle.createWritable({keepExistingData:true});
+  await w.seek(f.size); await w.write(text); await w.close();
+}
+function flush(){
+  writeQ = writeQ.then(async () => {
+    if (!(dirHandle || GLASS) || !unsaved) return;
+    const chunk = unsaved; unsaved = '';
+    try{
+      if (GLASS){                        // the first block starts the file (with a title), the rest append to it
+        const r = await GlassUI.api('/api/log', logFile ? {file:logFile, text:chunk}
+                                                       : {text:chunk, title:`Glass chat, ${new Date().toLocaleString()}`});
+        logFile = r.file;
+        fileLbl.textContent = `Saved to ${GlassUI.folderName(r.folder)}/${r.file}`;
+        S.save = 1; ripple(.5, .5, .7, 150);
+        return;
+      }
+      if (!fileHandle){
+        fileHandle = await dirHandle.getFileHandle(`ollama-chat-${stamp()}.md`, {create:true});
+        await appendFile(`# Ollama chat, ${new Date().toLocaleString()}\n\n`);
+      }
+      await appendFile(chunk);
+      fileLbl.textContent = `Saved to ${dirHandle.name}/${fileHandle.name}`;
+      S.save = 1; ripple(.5, .5, .7, 150);
+    }catch(e){
+      unsaved = chunk + unsaved;
+      fileLbl.textContent = GLASS ? `Couldn't save the chat (${e.message}). It's tried again with your next message.`
+                                  : `Couldn't write the file (${e.message}). Choose the folder again.`;
+      setMode('error'); shake();
+    }
+  });
+  return writeQ;
+}
+function useDir(h){
+  dirHandle = h; pendingHandle = null; fileHandle = null;
+  folderBtn.textContent = '📁 ' + h.name; folderBtn.classList.add('on');
+  fileLbl.textContent = `Saving to ${h.name}. A new file starts with your next message.`;
+  S.save = .8; S.kick += .6; ripple(.85, .08, 1.3, 150);
+  if (unsaved) flush();
+}
+async function chooseFolder(){
+  if (!canPickFolder) return downloadLog();
+  try{
+    if (pendingHandle){
+      const p = await pendingHandle.requestPermission({mode:'readwrite'});
+      if (p === 'granted') return useDir(pendingHandle);
+      pendingHandle = null;
+    }
+    const h = await window.showDirectoryPicker({mode:'readwrite', id:'glass-ollama'});
+    useDir(h); kvSet('dir', h);
+  }catch(e){ if (e.name !== 'AbortError'){ fileLbl.textContent = e.message; setMode('error'); shake(); } }
+}
+async function restoreFolder(){
+  if (!canPickFolder){
+    folderBtn.textContent = 'Download log';
+    fileLbl.textContent = 'Folder saving needs Chrome or Edge. Use Download log instead.';
+    return;
+  }
+  try{
+    const h = await kvGet('dir'); if (!h) return;
+    if (await h.queryPermission({mode:'readwrite'}) === 'granted') useDir(h);
+    else { pendingHandle = h; folderBtn.textContent = '↻ ' + h.name; fileLbl.textContent = `Click ↻ ${h.name} to keep saving there.`; }
+  }catch{}
+}
+function downloadLog(){
+  if (!fullLog){ fileLbl.textContent = 'Nothing to download yet.'; return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([`# Ollama chat, ${new Date().toLocaleString()}\n\n` + fullLog], {type:'text/markdown'}));
+  a.download = `ollama-chat-${stamp()}.md`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  S.save = 1;
+}
+function record(user, reply, model, t0, note, via){
+  const block = `### ${clock(t0)} · you${via ? ` (${via})` : ''}\n\n${user}\n\n### ${clock(new Date())} · ${model}${note ? ` (${note})` : ''}\n\n${reply}\n\n---\n\n`;
+  fullLog += block; unsaved += block;
+  return flush();
+}
+
+/* =========================================================
+   voice: glassvoice streams events (Server-Sent Events) and takes commands (POST)
+   ========================================================= */
+const vs = $('#vstatus'), voiceSel = $('#voice');
+const micBtn = $('#mic'), spkBtn = $('#spk'), phonesBtn = $('#phones');
+const VOICES = [['af_heart','Heart (F)'],['af_bella','Bella (F)'],['af_nicole','Nicole (F)'],
+                ['am_michael','Michael (M)'],['am_fenrir','Fenrir (M)'],['am_puck','Puck (M)'],
+                ['bf_emma','Emma (F, UK)'],['bm_george','George (M, UK)'],['bm_fable','Fable (M, UK)']];
+VOICES.forEach(([v, label]) => voiceSel.append(new Option(label, v)));
+
+// Settings: glassvoice's own (e.g. --headphones, --voice) unless you changed them here (remembered).
+const userCfg = (() => { try{ return JSON.parse(ls.get('voiceCfg', '{}')) || {} }catch{ return {} } })();
+delete userCfg.onlyMe;                               // speaker identification is gone: everyone is heard
+const V = { on:false, link:'down', host:'down', state:'', err:'', es:null,
+            cfg:Object.assign({ listen:true, speak:true, headphones:false, voice:'af_heart' }, userCfg) };
+function adoptEngineCfg(c){
+  if (!c) return;
+  for (const k of ['listen', 'headphones', 'voice']) if (k in c) V.cfg[k] = c[k];
+  Object.assign(V.cfg, userCfg);
+}
+let curSpeech = null;
+
+// Several Glass tabs: only the most recently focused one acts on what you say.
+const tabId = Math.random().toString(36).slice(2);
+let leader = tabId;
+const bc = 'BroadcastChannel' in window ? new BroadcastChannel('glass-voice') : null;
+const tabs = new Set([tabId]);            // the open tabs: when the leader closes, every tab picks the same next one
+function claim(){ leader = tabId; bc?.postMessage({leader:tabId}); }
+if (bc) bc.onmessage = e => {
+  const d = e.data || {};
+  if (d.hello){ tabs.add(d.hello); bc.postMessage({here:tabId}); }
+  if (d.here) tabs.add(d.here);
+  if (d.leader){ tabs.add(d.leader); leader = d.leader; }
+  if (d.left){
+    tabs.delete(d.left);
+    if (d.left === leader) leader = [...tabs].sort()[0];
+  }
+};
+bc?.postMessage({hello:tabId});
+addEventListener('focus', claim);
+addEventListener('pagehide', () => bc?.postMessage({left:tabId}));
+addEventListener('pageshow', e => { if (e.persisted){ tabs.add(tabId); bc?.postMessage({hello:tabId}); } });   // back from the bfcache
+
+// speak / stop / duck go one after another: sent in parallel, they can reach the engine out of order
+// (sentences swapped, or a sentence landing after the stop meant to silence it)
+let vqueue = Promise.resolve();
+function vpost(m){
+  if (!['speak', 'stop', 'duck'].includes(m.type)) return vpost1(m);
+  const p = vqueue.then(() => vpost1(m));
+  vqueue = p.catch(() => null);
+  return p;
+}
+async function vpost1(m){
+  if (!V.on) return null;
+  try{
+    const r = await fetch(vbase + '/api/command', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(m) });
+    const j = await r.json();
+    if (V.link !== 'up'){ V.link = 'up'; vrender(); }
+    return j;
+  }catch{
+    if (V.link !== 'down'){ V.link = 'down'; V.state = ''; vrender(); }
+    return null;
+  }
+}
+const sendCfg = () => Object.keys(userCfg).length && vpost({type:'config', cfg:userCfg});
+const voiceUp = () => V.on && V.link === 'up' && V.host === 'up';
+
+function vrender(){
+  document.querySelectorAll('.voice-only').forEach(e => e.hidden = !V.on);
+  vs.hidden = !V.on;
+  S.vstate = voiceUp() ? V.state : '';
+  updatePlaceholder();
+  if (!V.on) return;
+  let text, kind = V.state || 'listening';
+  if (V.link === 'down' || V.host === 'down'){ text = 'voice offline'; kind = 'down'; }
+  else if (V.host === 'starting'){ text = 'voice starting…'; kind = 'starting'; }
+  else text = ({ listening:'🎙 listening', hearing:'🎙 hearing you…', transcribing:'✍️ transcribing…',
+                 speaking:'🔊 speaking', muted:'🎙 muted', paused:'🎙 paused' })[V.state] || '🎙 ready';
+  vs.textContent = text; vs.dataset.kind = kind;
+  vs.title = V.link === 'down' ? `The voice service isn't answering at ${vbase}. Click for how to start it.` +
+                                 (pageIsLocal ? '' : ` (and allow this page: GLASSVOICE_ORIGINS="${location.origin === 'null' ? '*' : location.origin}")`)
+    : V.host === 'down' ? `${V.err || 'Voice engine not running'}. Click to retry.`
+    : 'Listening to everyone near the mic';
+  micBtn.classList.toggle('off', !V.cfg.listen);
+  spkBtn.classList.toggle('off', !V.cfg.speak);
+  phonesBtn.classList.toggle('off', !V.cfg.headphones);
+  micBtn.ariaPressed = !!V.cfg.listen; spkBtn.ariaPressed = !!V.cfg.speak;
+  phonesBtn.ariaPressed = !!V.cfg.headphones;
+  voiceSel.value = V.cfg.voice;
+}
+function updatePlaceholder(){
+  const talkable = voiceUp() && V.cfg.listen;
+  inp.placeholder = S.vstate === 'hearing' ? 'Hearing you…'
+                  : S.vstate === 'transcribing' ? 'Writing down what you said…'
+                  : attachment ? `Ask about ${attachment.name}…`
+                  : talkable ? 'Type or talk…' : 'Type here…';
+  root.style.setProperty('--empty-hint', talkable ? '"Ask anything below, or just talk, or drop an audio file."'
+                                                  : '"Ask anything below, or drop an audio file."');
+}
+
+function setCfg(patch){
+  Object.assign(V.cfg, patch); Object.assign(userCfg, patch);
+  ls.set('voiceCfg', JSON.stringify(userCfg));
+  sendCfg();
+  vrender(); showControls();
+  S.kick += .4; ripple(.6, .08, 1, S.hue + 180);
+}
+
+function vconnect(){
+  if (V.es) V.es.close();
+  const es = V.es = new EventSource(vbase + '/api/events');
+  es.onopen = () => { V.link = 'up'; vrender(); };
+  es.onmessage = e => { let m; try{ m = JSON.parse(e.data) }catch{ return } onVoice(m); };
+  es.onerror = () => {                         // the browser retries on its own; recreate if it gave up
+    V.link = 'down'; V.state = ''; S.speech = null; vrender();
+    if (es.readyState === EventSource.CLOSED) setTimeout(() => { if (V.es === es) vconnect(); }, 2000);
+  };
+}
+
+function onVoiceState(st){
+  const prev = V.state; V.state = st;
+  if (st === prev) return;
+  if (st === 'hearing'){ S.kick += .5; ripple(.5, .85, .9, S.hue + 180); textChanged(); cue('hear'); }
+  else if (st === 'transcribing'){ S.flash = Math.max(S.flash, .25); }
+  else if (st === 'speaking'){ ripple(.5, .3, 1.1); }
+}
+
+function onVoice(m){
+  switch (m.type){
+    case 'level': S.micT = m.mic || 0; return;          // animation only, no re-render
+    case 'speak_start':
+      S.speech = { env:m.env || [], fps:m.fps || 30, t0:performance.now(), vis:m.visemes || null };   // vis: lip-sync for the character
+      if (turn){ const i = turn.sentences.findIndex((x, k) => k > turn.playing && x.text === m.text); if (i >= 0) turn.playing = i; }
+      return;
+    case 'duck':
+      if (m.on && m.by === 'voice') act('perk', {amp:.7});                   // ears up: is that you talking?
+      return;
+    case 'speak_done': S.speech = null; return;
+    case 'hello':
+      V.host = m.host; V.err = m.error || ''; V.state = m.state || '';
+      adoptEngineCfg(m.config);
+      if (m.host === 'up'){ sendCfg(); if (!everUp){ everUp = true; cue('ready'); } }
+      break;
+    case 'host':
+      var wasHost = V.host;
+      V.host = m.host; V.err = m.error || '';
+      if (m.host === 'up'){ sendCfg(); S.flash = .4; ripple(.15, .06, 1, S.hue + 180); act('perk'); cue(everUp ? 'online' : 'ready'); everUp = true; }
+      else { if (m.host === 'down' && wasHost === 'up') cue('offline'); V.state = ''; S.speech = null; }
+      break;
+    case 'ready': adoptEngineCfg(m.config); break;
+    case 'status': onVoiceState(m.state); if (m.state === 'hearing') wake(); break;
+    case 'transcript': onTranscript(m); break;
+    case 'barge_in':                                     // you talked over it: stop reading and generating
+      curSpeech?.cancel();
+      if (ctrl && !T.running) ctrl.abort();
+      applyCut(m.heard);
+      S.speech = null; S.flash = .6; S.kick += .8; ripple(.5, .8, 1.8, S.hue + 180);
+      act('recoil'); cue('barge'); wake();
+      break;
+    case 'warning': case 'error':
+      setStatus('Voice: ' + m.message, m.type === 'error' ? 'err' : ''); break;
+  }
+  vrender();
+}
+
+function onTranscript(m){
+  const text = (m.text || '').trim();
+  if (!text) return;
+  if (leader === null) claim();
+  if (leader !== tabId) return;
+  voiceInput(text);
+}
+
+const waitIdle = () => new Promise(r => { const t = () => busy ? setTimeout(t, 30) : r(); t(); });
+async function voiceInput(text){
+  if (T.running){ setStatus('Transcribing a file: say it again when it’s done', ''); return; }
+  if (busy){ curSpeech?.cancel(); if (ctrl) ctrl.abort(); await waitIdle(); }
+  const typed = inp.value.trim();
+  inp.value = typed ? typed + ' ' + text : text;     // keep anything you had half-typed
+  fitIn(); textChanged(); S.kick += .6; ripple(.5, .78, 1.2, S.hue + 180);
+  act('micronod'); cue('got');                         // got it
+  send('voice');
+}
+
+// Turns markdown into something pleasant to hear.
+const speakable = t => t
+  .replace(/`([^`]*)`/g, '$1')
+  .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+  .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  .replace(/https?:\/\/\S+/g, '')
+  .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+/gm, '')
+  .replace(/[*_~|#]+/g, '')
+  .replace(/\s+/g, ' ').trim();
+
+// Streams a reply to the voice engine sentence by sentence, so speech starts before the reply ends.
+function makeSpeech(t){
+  let buf = '', inCode = false, active = V.cfg.speak && voiceUp(), consumed = 0;
+  function emit(s){
+    const start = consumed; consumed += s.length;
+    let said = '';
+    s.split('```').forEach((part, i) => {
+      if (i > 0){ inCode = !inCode; if (inCode) said += ' The code is on screen. '; }
+      if (!inCode) said += part;
+    });
+    const clean = speakable(said);
+    if (/[\p{L}\p{N}]/u.test(clean)){
+      t?.sentences.push({text:clean, start, end:consumed});
+      vpost({type:'speak', text:clean, voice:V.cfg.voice});
+    }
+  }
+  return {
+    push(chunk){
+      if (!active) return;
+      buf += chunk;
+      const re = /[.!?…]+["')\]]*\s+|\n\s*\n/g;
+      let m, cut = 0;
+      while ((m = re.exec(buf))){ emit(buf.slice(cut, m.index + m[0].length)); cut = m.index + m[0].length; }
+      buf = buf.slice(cut);
+    },
+    flush(){ if (active && buf.trim()) emit(buf); buf = ''; },
+    cancel(){ active = false; buf = ''; }
+  };
+}
+
+// every control asks first (glass dialog); "✋" in the settings turns asking off
+const ask = (title, body, ok, extra = {}) => GlassUI.confirm({title, body, ok, ...extra});
+micBtn.addEventListener('click', async () => {
+  const on = !V.cfg.listen;
+  if (await ask(on ? 'Turn the microphone on?' : 'Turn the microphone off?',
+                on ? 'Glass will listen for your voice again.' : 'Glass stops listening until you turn it back on.',
+                on ? 'Turn on' : 'Turn off')){ setCfg({listen: on}); cue(on ? 'mic_on' : 'mic_off'); }
+});
+spkBtn.addEventListener('click', async () => {
+  const on = !V.cfg.speak;
+  if (!await ask(on ? 'Speak replies?' : 'Stop speaking replies?',
+                 on ? 'Replies will be read out as they arrive.' : 'Replies will only be shown. Anything being read out stops now.',
+                 on ? 'Speak them' : 'Stop speaking')) return;
+  if (!on){ vpost({type:'stop'}); S.speech = null; }
+  setCfg({speak: on});
+});
+phonesBtn.addEventListener('click', async () => {
+  const on = !V.cfg.headphones;
+  if (await ask(on ? 'Switch to headphones mode?' : 'Switch to speakers mode?',
+                on ? 'Talking over a reply interrupts it right away. Only use this with headphones, or the reply can interrupt itself.'
+                   : 'Over speakers, talking doesn\'t interrupt a reply (it would hear itself). Press Esc instead.',
+                'Switch')) setCfg({headphones: on});
+});
+voiceSel.addEventListener('change', async () => {
+  const label = voiceSel.selectedOptions[0]?.textContent || voiceSel.value;
+  if (await ask(`Use the voice “${label}”?`, 'Replies will be read in this voice from now on.', 'Use it')) setCfg({voice: voiceSel.value});
+  else voiceSel.value = V.cfg.voice;
+});
+vs.addEventListener('click', async () => {
+  if (V.link === 'up' && V.host === 'down'){
+    if (await ask('Restart the voice engine?', `${V.err || 'It stopped working.'}\n\nWhat's missing is listed at ${vbase}/`, 'Restart')) vpost({type:'restart'});
+  } else if (V.link === 'down'){
+    await GlassUI.alert({title:'Voice is off', body:`Glass can't reach glassvoice at ${vbase}.\n\n` +
+      'In a terminal, run:\nglassvoice\n\nIt checks this machine, fetches what\'s missing, and can start voice at login from then on. ' +
+      'Glass connects by itself as soon as it answers.' +
+      (pageIsLocal ? '' : `\n\nThis page's origin also has to be allowed: GLASSVOICE_ORIGINS="${location.origin === 'null' ? '*' : location.origin}"`)});
+  }
+});
+
+// the server answers pings with the engine's state; failures mean the server itself is gone
+let vretry = 0;
+setInterval(async () => {
+  if (!V.on){                                // off (it answered without a live voice): look again now and then
+    if (++vretry % 6 === 0){ const h = await vhealth(); if (h.ok && h.command) vinit(h); }
+    return;
+  }
+  const r = await vpost({type:'ping'});
+  if (r?.error === 'commands disabled'){ vinit(await vhealth()); return; }   // it came up without a live voice (--no-mic)
+  if (r && r.host && r.host !== V.host){ V.host = r.host; if (r.host !== 'up') V.state = ''; vrender(); }
+  if (V.link === 'up' && V.es && V.es.readyState === EventSource.CLOSED) vconnect();
+}, 5000);
+
+// voice on unless the service answers without a live voice (glassvoice serve --no-mic);
+// not answering (yet) keeps trying, e.g. while the service starts at login
+function vinit(h){
+  V.on = !h.ok || !!h.command;
+  if (V.on) vconnect();
+  else if (V.es){ V.es.close(); V.es = null; }
+  vrender();
+}
+
+/* =========================================================
+   Ollama
+   ========================================================= */
+let modelsGen = 0;
+async function loadModels(){
+  const gen = ++modelsGen, at = host;        // a slow answer from an old address must not overwrite a newer one
+  setStatus('Connecting to Ollama…', 'think');
+  try{
+    const r = await fetch(at + '/api/tags');
+    if (!r.ok) throw new Error(r.status);
+    const names = ((await r.json()).models || []).map(m => m.name).sort();
+    if (gen !== modelsGen) return;
+    modelSel.innerHTML = '';
+    if (!names.length){
+      modelSel.append(new Option('No models', ''));
+      setStatus('No models installed. Run: ollama pull llama3.2', 'err'); return;
+    }
+    names.forEach(n => modelSel.append(new Option(n, n)));
+    const saved = ls.get('model'); if (saved && names.includes(saved)) modelSel.value = saved;
+    setStatus('Ready', 'ok'); S.flash = .5; ripple(.5, .5, 1.4);
+  }catch{
+    if (gen !== modelsGen) return;
+    modelSel.innerHTML = ''; modelSel.append(new Option('Offline', ''));
+    setStatus(`Can't reach Ollama at ${at}`, 'err'); setMode('error');
+    showError(startHint());
+  }
+}
+
+function showError(msg){
+  out.classList.remove('empty'); out.classList.add('error');
+  out.querySelectorAll('.unheard').forEach(e => e.remove());   // a cut-off reply's faded tail must not trail the error
+  outText.data = msg; out.style.fontSize = '64px'; fitOut(false);
+  setMode('error'); shake();
+}
+
+function wipeInput(text){
+  ghost.textContent = text;
+  ghost.style.fontSize = getComputedStyle(inp).fontSize;
+  ghost.classList.remove('wipe-up'); void ghost.offsetWidth; ghost.classList.add('wipe-up');
+  ghost.onanimationend = e => { if (e.animationName === 'wipeUp'){ ghost.textContent = ''; ghost.classList.remove('wipe-up'); } };
+}
+function wipeOut(){
+  return new Promise(res => {
+    if (!outText.data){ res(); return; }
+    out.classList.add('wipe-side');
+    // finish on whichever comes first: the timer, the wipe animation ending, or a frame-based
+    // deadline, so a late or lost timer can never leave a message stuck at "Thinking…"
+    let done = false;
+    const onEnd = e => { if (e.animationName === 'wipeSide') finish(); };
+    const finish = () => {
+      if (done) return; done = true;
+      out.removeEventListener('animationend', onEnd);
+      outText.data = ''; out.querySelectorAll('.unheard').forEach(e => e.remove());
+      out.classList.remove('wipe-side', 'error'); res();
+    };
+    out.addEventListener('animationend', onEnd);
+    setTimeout(finish, 430);
+    const t0 = performance.now();
+    const tick = () => { if (done) return; if (performance.now() - t0 > 520) finish(); else requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+}
+
+async function send(via){
+  const text = inp.value.trim();
+  if (!text){ S.kick += .3; return; }
+  if (busy){
+    if (T.running || !ctrl){ shake(); return; }          // a file is being transcribed: that one isn't interrupted
+    curSpeech?.cancel(); ctrl.abort(); act('recoil', {amp:.7}); cue('barge');   // barging in by typing: stop the reply, then send
+    await waitIdle();
+  }
+  const model = modelSel.value;
+  if (!model){ showError('No model selected. Check that Ollama is running, then reload.'); return; }
+
+  busy = true;
+  ctrl = new AbortController();              // now, not after the wipe: Esc / barge-in meanwhile must stop it
+  // Glass service: what Glass remembers goes along (fetched while the old reply wipes away)
+  const memQ = GLASS ? Promise.race([GlassUI.api('/api/memory').then(m => m.prompt || '', () => ''),
+                                     new Promise(r => setTimeout(() => r(''), 2000))]) : Promise.resolve('');
+  curSpeech?.cancel();
+  const prev = turn;                         // a new message cuts off any reply still being read out
+  vpost({type:'stop'}).then(r => r?.heard && applyCut(r.heard, prev));
+  S.speech = null;
+  wake(); act('lean'); if (via !== 'voice') cue('send');
+  wipeInput(inp.value); inp.value = ''; fitIn();
+  S.kick += 1.1; S.flash = .5; ripple(.5, .8, 1.8); ripple(.5, .8, 1.1, S.hue + 120);
+  setMode('thinking'); setStatus('Thinking…', 'think');
+
+  await wipeOut();
+  out.classList.remove('empty', 'error');
+  out.style.fontSize = '104px';
+  out.append(caret);
+
+  const t = turn = { reply:'', sentences:[], playing:-1, cut:null, msg:null };
+  const sp = curSpeech = makeSpeech(t);
+  const rd = makeReader(), mem = makeRemember();
+  const t0 = new Date();
+  const att = attachment, userMsg = withAttachment(text);   // what this turn actually sends
+  let reply = '', stopped = false, failed = null, n = 0, first = true;
+
+  try{
+    const memPrompt = await memQ;
+    // one system message, first: many models' chat templates (Qwen, Gemma, Mistral…) refuse a second one
+    const system = [BODY.on && BODY.tags ? GlassBody.PROMPT : '', memPrompt || ''].filter(Boolean).join('\n\n');
+    const res = await fetch(host + '/api/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'}, signal: ctrl.signal,
+      body: JSON.stringify({ model, stream:true, messages:[
+        ...(system ? [{role:'system', content:system}] : []),
+        ...history, {role:'user', content:userMsg}] })
+    });
+    if (!res.ok){
+      let msg = `${res.status} ${res.statusText}`;
+      try{ const j = await res.json(); if (j.error) msg = j.error; }catch{}
+      if (res.status === 403 || res.status === 502) msg = startHint();
+      throw new Error(msg);
+    }
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    read: while (true){
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line) continue;
+        const j = JSON.parse(line);
+        if (j.error) throw new Error(j.error);
+        const msg = j.message || {};
+        if (msg.thinking){                              // reasoning models: hidden, but felt
+          S.kick = Math.min(1.3, S.kick + .025);
+          if (first) setStatus('Reasoning…', 'think');
+        }
+        const piece = msg.content ? rd.push(mem.push(msg.content)) : '';   // [[remember: …]] and [[gesture]] tags are taken out here
+        if (piece){
+          if (first){ first = false; setMode('streaming'); setStatus(model, 'stream'); S.flash = .8; ripple(.5, .3, 1.5); act('perk', {amp:.5}); }
+          reply += piece; t.reply = reply;
+          outText.appendData(piece);
+          sp.push(piece);
+          n++;
+          S.kick = Math.min(1.4, S.kick + .045);
+          if (n % 12 === 0) ripple(.25 + Math.random()*.5, .15 + Math.random()*.3, .45, S.hue + Math.random()*120);
+          fitOut(true);
+        }
+        if (j.done){
+          if (GlassUI.glass) GlassUI.api('/api/glass/usage', {model, prompt_tokens:j.prompt_eval_count,
+                                        output_tokens:j.eval_count}).catch(() => {});   // for the monitor (glassmon)
+          break read;
+        }
+      }
+    }
+  }catch(e){
+    if (e.name === 'AbortError') stopped = true;
+    else failed = e instanceof TypeError ? new Error(startHint()) : e;
+  }
+
+  const rest = rd.push(mem.flush()) + rd.flush();
+  if (rest && !stopped && !failed){ reply += rest; t.reply = reply; outText.appendData(rest); sp.push(rest); }
+  caret.remove(); busy = false; ctrl = null;
+  if (stopped || failed){
+    sp.cancel();
+    if (stopped){ vpost({type:'stop'}).then(r => r?.heard && applyCut(r.heard, t)); S.speech = null; act('recoil', {amp:.5}); }
+  }
+  else { sp.flush(); rd.done(); if (reply && !t.sentences.length) cue('reply'); }   // not read out: a soft bell says it's done
+  if (reply && !failed){                      // remember the turn; an interrupted one only up to what you heard
+    const said = t.cut !== null ? reply.slice(0, t.cut).trimEnd() + ' … [interrupted]'
+               : stopped ? reply + ' … [interrupted]' : reply;
+    t.msg = {role:'assistant', content:said};
+    history.push({role:'user', content:userMsg}, t.msg);
+    if (attachment === att) setAttachment(null);   // it's in the conversation now (unless a new one was attached meanwhile)
+    history = history.slice(-MAX_TURNS*2);
+  }
+
+  if (failed){
+    cue('error');
+    if (reply){ setStatus('Error: ' + failed.message, 'err'); setMode('error'); shake(); }
+    else { showError(failed.message); setStatus('Error', 'err'); }
+  } else {
+    if (!reply){ out.classList.add('empty'); }
+    setMode('done'); setStatus(stopped ? 'Stopped' : 'Done', 'ok');
+    S.flash = .4; ripple(.5, .3, 1.2, S.hue + 60);
+    if (GLASS && mem.facts.length) rememberFacts(mem.facts);
+  }
+  fitOut(false);
+
+  if (reply || failed){
+    const logged = reply || `> error: ${failed.message.replace(/\n+/g,' ')}`;
+    const note = failed ? 'error' : stopped ? 'stopped' : '';
+    await record(text, logged, model, t0, note, via);
+  }
+  if (via !== 'voice') inp.focus();
+}
+
+async function newChat(){
+  if (!await ask('Start a new chat?', 'The model forgets this conversation. Your saved chat log keeps it.', 'New chat')) return;
+  if (ctrl){ ctrl.abort(); await waitIdle(); }
+  await writeQ;                                                 // the last reply lands in the old chat, not the new one
+  curSpeech?.cancel(); vpost({type:'stop'}); S.speech = null;
+  history = []; fileHandle = null; logFile = null;
+  wipeOut().then(() => { out.classList.remove('error'); out.classList.add('empty'); });
+  setStatus('New chat', 'ok'); setMode('done'); act('spin'); cue('spin');
+  S.flash = .5; S.kick += .9; ripple(.5, .5, 1.8); ripple(.5, .5, 1.1, S.hue + 180);
+  if (dirHandle || (GLASS && G.folder))
+    fileLbl.textContent = `Saving to ${GLASS ? GlassUI.folderName(G.folder) : dirHandle.name}. A new file starts with your next message.`;
+  showControls(); inp.focus();
+}
+
+/* =========================================================
+   activity -> visuals
+   ========================================================= */
+inp.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(); return; }
+  if (e.key === 'Escape') return;            // handled on window
+  S.lastKey = performance.now();
+  if (!busy && S.mode !== 'typing') setMode('typing');
+  if (e.key === 'Backspace' || e.key === 'Delete'){
+    S.hue = (S.hue - 9 + 360) % 360; S.kick += .08;
+    ripple(.35 + Math.random()*.3, .74, .3, S.hue + 180);
+  } else if (e.key.length === 1){
+    S.kick += .12;
+    ripple(.3 + Math.random()*.4, .72, .35);
+  }
+});
+inp.addEventListener('input', fitIn);
+inp.addEventListener('paste', () => { S.kick += .8; S.flash = .5; ripple(.5, .75, 1.3); });
+inp.addEventListener('focus', () => { glass.classList.add('focused'); S.kick += .25; });
+inp.addEventListener('blur',  () => { glass.classList.remove('focused'); });
+function stopAll(){
+  if (ctrl) ctrl.abort();
+  stopTranscription(); curSpeech?.cancel();
+  const t = turn;
+  vpost({type:'stop'}).then(r => r?.heard && applyCut(r.heard, t));
+  S.speech = null;
+}
+addEventListener('keydown', e => { if (e.key === 'Escape') stopAll(); });
+addEventListener('pointermove', e => { S.mx = cv(e.clientX/innerWidth); S.my = cv(e.clientY/innerHeight); });
+addEventListener('pointerdown', e => { ripple(e.clientX/innerWidth, e.clientY/innerHeight, .6); S.kick += .15; });
+$('.bottom').addEventListener('click', e => { if (e.target.tagName !== 'BUTTON') inp.focus(); });
+addEventListener('focus', () => { S.flash = .3; });
+
+let modelNow = '';
+modelSel.addEventListener('focus', () => { modelNow = modelSel.value; });
+modelSel.addEventListener('change', async () => {
+  if (!await ask(`Switch to ${modelSel.value}?`, 'Your next message goes to this model.', 'Switch')){
+    modelSel.value = modelNow || ls.get('model', modelSel.value); return;
+  }
+  modelNow = modelSel.value;
+  ls.set('model', modelSel.value); setStatus(modelSel.value, 'ok');
+  if (GLASS) GlassUI.api('/api/glass', {model:modelSel.value}).catch(() => {});   // hands-free uses it too
+  S.kick += .7; ripple(.6, .08, 1.2, S.hue + 90);
+});
+// a labelled text field for a dialog's extra area: fieldBox() holds them, field() adds one
+function fieldBox(){
+  const box = document.createElement('div');
+  box.style.cssText = 'display:flex;flex-direction:column;gap:10px;flex:1;min-width:0';
+  return box;
+}
+function field(box, label, value, placeholder, type = 'url'){
+  const row = document.createElement('label'), name = document.createElement('span'), f = document.createElement('input');
+  row.style.cssText = 'display:flex;flex-direction:column;gap:4px;font-size:13px;color:rgba(255,255,255,.75)';
+  name.textContent = label;
+  f.type = type; f.value = value; f.placeholder = placeholder; f.spellcheck = false;
+  f.className = 'gx-input';
+  f.style.cssText = 'min-width:0;font:inherit;font-size:14px;color:#fff;padding:9px 14px;border-radius:14px;' +
+    'background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.24);outline:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.2)';
+  row.append(name, f); box.append(row); return f;
+}
+hostBtn.addEventListener('click', async () => {
+  const box = fieldBox();
+  const dflt = (value, d) => value === d ? '' : value;          // empty = the default
+  const oField = field(box, 'Ollama (the model)', dflt(host, GlassUI.defaults.ollama), GlassUI.defaults.ollama);
+  const vField = field(box, 'glassvoice (the voice)', dflt(vbase, GlassUI.defaults.glassvoice), GlassUI.defaults.glassvoice);
+  setTimeout(() => oField.focus(), 60);
+  if (!await GlassUI.confirm({title:'Addresses', body:'Where Glass finds the model and the voice. Empty = the default.',
+                              ok:'Use them', extra:box, always:true})) return;
+  GlassUI.setOllamaUrl(oField.value); GlassUI.setVoiceUrl(vField.value);
+  const vChanged = GlassUI.voiceUrl() !== vbase;
+  applyHost(); loadModels();
+  if (vChanged) vhealth().then(vinit);
+});
+$('#newchat').addEventListener('click', newChat);
+folderBtn.addEventListener('click', async () => {
+  if (GLASS){                          // the Glass service's folder: a Finder dialog (macOS) or a path
+    if (!G.canChoose){ chooseGlassFolder(); return; }            // that dialog asks by itself
+    if (await ask('Choose another folder?', `Glass keeps your conversations, recordings and memory in ${G.folder || 'its folder'}.`,
+                  'Choose folder')) chooseGlassFolder();
+    return;
+  }
+  if (!canPickFolder){
+    if (await ask('Download the chat log?', 'Saves everything so far as a Markdown file.', 'Download')) downloadLog();
+    return;
+  }
+  if (await ask(pendingHandle ? `Keep saving to ${pendingHandle.name}?` : 'Choose a folder for your chats?',
+                'Each chat is saved there as a Markdown file as you go.', pendingHandle ? 'Keep saving' : 'Choose folder')) chooseFolder();
+});
+const askBtn = $('#askfirst');
+const renderAsk = () => { askBtn.classList.toggle('off', !GlassUI.askFirst); askBtn.ariaPressed = GlassUI.askFirst; askBtn.title = GlassUI.askFirst ? 'Asking before actions (click to stop asking)' : 'Not asking before actions (click to ask again)'; };
+askBtn.addEventListener('click', async () => {
+  if (GlassUI.askFirst && !await GlassUI.confirm({title:'Stop asking before actions?', always:true, ok:'Stop asking',
+      body:'Buttons will act right away. Dropping an audio file still asks before transcribing.'})) return;
+  GlassUI.setAskFirst(!GlassUI.askFirst); renderAsk(); showControls();
+  S.flash = .3; ripple(.9, .06, 1, S.hue + 60);
+});
+renderAsk();
+// dialogs are part of the light show
+addEventListener('glassui:ask', () => { S.kick += .5; ripple(.5, .5, 1.1, S.hue + 40); act('lean', {amp:.6}); cue('ask'); });
+addEventListener('glassui:answer', e => {
+  if (e.detail.ok){ S.flash = .35; ripple(.5, .5, 1.4); act('micronod'); cue('yes'); } else { act('shake', {amp:.35}); cue('no'); }
+});
+addEventListener('beforeunload', e => { if (unsaved && (dirHandle || GLASS)){ flush(); } });
+
+/* =========================================================
+   controls: appear on double-click, fade after 1 minute
+   ========================================================= */
+let ctlTimer = 0;
+function showControls(){
+  glass.classList.add('show-ctl');
+  clearTimeout(ctlTimer);
+  ctlTimer = setTimeout(() => {
+    glass.classList.remove('show-ctl');
+    if (document.activeElement && document.activeElement.closest('.ctl')) inp.focus();
+  }, 60000);
+}
+addEventListener('dblclick', e => {
+  showControls();
+  S.flash = .35; ripple(e.clientX/innerWidth, e.clientY/innerHeight, 1);
+});
+// using a control counts as activity, so it doesn't vanish mid-use
+$('.ctl').addEventListener('pointerdown', () => { if (glass.classList.contains('show-ctl')) showControls(); });
+$('.ctl').addEventListener('change', showControls);
+
+/* =========================================================
+   bulge: any text change swells the panel,
+   15 s after the last change it smooths back out
+   ========================================================= */
+let bulgeTimer = 0;
+function textChanged(){
+  glass.classList.add('bulge');
+  clearTimeout(bulgeTimer);
+  bulgeTimer = setTimeout(() => glass.classList.remove('bulge'), 15000);
+}
+// every text node / element change inside the panel (reply streaming, status, file label, wipes)
+new MutationObserver(textChanged).observe(glass, { characterData:true, childList:true, subtree:true });
+// typing doesn't touch the DOM, so listen to the textarea directly
+inp.addEventListener('input', textChanged);
+
+/* =========================================================
+   audio files: drop one (or 🎧 File) -> confirm -> the transcript streams in above
+   ========================================================= */
+const tact = $('#tactions'), tlabel = $('#tlabel'), audioIn = $('#audioin'), attachEl = $('#attach');
+const T = { running:false, ctrl:null, file:null, segs:[], language:'', duration:0, id:null, t0:0 };
+
+function setAttachment(a){
+  attachment = a;
+  attachEl.hidden = !a;
+  if (a){ act('gulp', {amp:.6}); cue('attach'); }
+  if (a) attachEl.querySelector('.n').textContent = `${a.name} transcript`;
+  updatePlaceholder();
+}
+const withAttachment = text => attachment
+  ? `${text}\n\n---\nTranscript of ${attachment.name}:\n${attachment.text}` : text;
+attachEl.querySelector('button').addEventListener('click', async () => {
+  if (await ask('Detach the transcript?', `Your next message won't include ${attachment?.name}.`, 'Detach')) setAttachment(null);
+});
+
+function showActions(mode){               // 'running' | 'done' | null
+  tact.hidden = !mode;
+  if (!mode) return;
+  tact.classList.remove('float'); void tact.offsetWidth; tact.classList.add('float');
+  $('#t-stop').hidden = mode !== 'running';
+  for (const id of ['t-layout','t-break','t-chat','t-copy','t-txt','t-srt','t-vtt','t-close']) $('#' + id).hidden = mode !== 'done';
+  $('#t-break').hidden = mode !== 'done' || !T.segs.length;
+  $('#t-layout').hidden = mode !== 'done' || !T.id;
+  tlabel.textContent = mode === 'running' ? `🎧 ${T.file.name}` : `🎧 ${T.file.name} · ${T.segs.length ? words() + ' words' : 'no speech'}`;
+}
+const words = () => T.segs.reduce((n, x) => n + x.text.split(/\s+/).filter(Boolean).length, 0);
+
+const LANGS = [['', 'Detect language'], ['en','English'], ['es','Spanish'], ['fr','French'], ['de','German'], ['it','Italian'],
+  ['pt','Portuguese'], ['nl','Dutch'], ['pl','Polish'], ['ru','Russian'], ['uk','Ukrainian'], ['tr','Turkish'], ['ar','Arabic'],
+  ['hi','Hindi'], ['ja','Japanese'], ['ko','Korean'], ['zh','Chinese'], ['yo','Yoruba'], ['sw','Swahili']];
+
+async function offerFile(f){
+  if (!f) return;
+  if (!GlassUI.isAudio(f)){
+    await GlassUI.alert({title:"That isn't an audio file", body:`${f.name} can't be transcribed. Drop an mp3, m4a, wav, ogg, flac or webm file.`});
+    return;
+  }
+  if (!(await vhealth()).transcribe){
+    await GlassUI.alert({title:"Can't transcribe here", body: health.ok
+      ? `The voice service at ${vbase} isn't transcribing files (mlx-whisper missing?).`
+      : `The voice service isn't answering at ${vbase}.\nIn a terminal, run:\nglassvoice` +
+        (pageIsLocal ? '' : `\n(this page's origin also needs GLASSVOICE_ORIGINS="${location.origin === 'null' ? '*' : location.origin}")`)});
+    return;
+  }
+  if (T.running && !await ask('Stop the current transcription?', `${T.file.name} is still being transcribed.`, 'Stop it', {danger:true})) return;
+  const lang = document.createElement('select');
+  LANGS.forEach(([v, n]) => lang.append(new Option(n, v)));
+  lang.value = ls.get('transcribe-lang', '');
+  const mb = f.size / 1048576;
+  const dur = await audioDuration(f);
+  const ok = await GlassUI.confirm({ always:true, ok:'Transcribe', cancel:'Not now', extra:lang,
+    title:`Transcribe ${f.name}?`,
+    body:`${dur ? GlassUI.fmt(dur) + ' of audio · ' : ''}${mb >= 1 ? mb.toFixed(1) + ' MB' : Math.max(1, Math.round(f.size/1024)) + ' KB'}\n` +
+         'The text appears above as it’s transcribed, on this machine.' });
+  if (!ok) return;
+  ls.set('transcribe-lang', lang.value);
+  transcribe(f, lang.value);
+}
+function audioDuration(f){
+  return new Promise(res => {
+    const a = document.createElement('audio'), url = URL.createObjectURL(f);
+    const done = d => { URL.revokeObjectURL(url); res(isFinite(d) ? d : 0); };
+    a.preload = 'metadata'; a.onloadedmetadata = () => done(a.duration); a.onerror = () => done(0);
+    setTimeout(() => done(0), 1500);
+    a.src = url;
+  });
+}
+
+async function transcribe(f, lang){
+  if (T.running) stopTranscription();
+  if (busy){ curSpeech?.cancel(); if (ctrl) ctrl.abort(); await waitIdle(); }
+  Object.assign(T, { running:true, file:f, segs:[], language:lang || '', duration:0, id:null, t0:performance.now(),
+                     ctrl:new AbortController() });   // Stop works from the first moment
+  busy = true;
+  curSpeech?.cancel(); vpost({type:'stop'}); S.speech = null;
+  glass.classList.add('transcribing'); root.style.setProperty('--progress', '0%');
+  showActions('running');
+  S.kick += 1.2; S.flash = .6; ripple(.5, .5, 2); setMode('thinking'); act('gulp');      // swallows the file
+  setStatus(`Reading ${f.name}…`, 'think');
+  await wipeOut();
+  out.classList.remove('empty', 'error'); out.style.fontSize = '64px'; out.append(caret);
+  let failed = null, stopped = false;
+  try{
+    if (T.ctrl.signal.aborted) throw new DOMException('Stopped', 'AbortError');   // stopped before the upload began
+    let res = await upload(f, lang);
+    if (res.status === 415){                        // the server has no ffmpeg: decode in the browser
+      setStatus('Decoding in the browser…', 'think');
+      const sig = T.ctrl.signal, wav = await toWav16k(f);
+      if (sig.aborted) throw new DOMException('Stopped', 'AbortError');   // Stop/Esc while decoding
+      res = await upload(wav, lang, 'wav');
+    }
+    if (!res.ok){
+      let msg = `${res.status} ${res.statusText}`;
+      try{ const j = await res.json(); if (j.error) msg = j.error; }catch{}
+      throw new Error(msg);
+    }
+    await readTranscript(res);
+  }catch(e){
+    if (e.name === 'AbortError') stopped = true;
+    else failed = e.name === 'EncodingError'
+      ? new Error(`Couldn't decode ${f.name}. Install ffmpeg where the server runs (brew install ffmpeg).`)
+      : e instanceof TypeError ? new Error('Lost the connection to the Glass server.') : e;
+  }
+  caret.remove(); busy = false; T.running = false; T.ctrl = null;
+  glass.classList.remove('transcribing');
+  if (failed && !T.segs.length){ showError(failed.message); setStatus('Transcription failed', 'err'); showActions(null); return; }
+  if (!T.segs.length){ out.classList.add('empty'); }
+  const text = GlassUI.toText(T.segs), began = new Date(Date.now() - (performance.now() - T.t0));
+  if (T.segs.length){
+    try{
+      const id = await GlassUI.transcripts.save({ name:f.name, segments:T.segs, language:T.language, duration:T.duration,
+                                                  audio:f, partial:stopped || !!failed });
+      if (!T.running) T.id = id;
+    }catch(e){ console.warn('saving the transcript failed', e); }
+    record(`🎧 ${f.name}`, text, 'whisper', began,
+           stopped ? 'stopped' : failed ? 'error' : '', 'file');
+  }
+  if (T.running) return;                      // a newer file took over while this one was being saved
+  setStatus(failed ? 'Error: ' + failed.message : `${stopped ? 'Stopped' : 'Done'} · ${f.name}` +
+            (T.language ? ` · ${langName(T.language)}` : ''), failed ? 'err' : 'ok');
+  setMode(failed ? 'error' : 'done'); S.flash = .5; ripple(.5, .3, 1.6, S.hue + 60);
+  if (failed){ act('shake'); cue('error'); } else if (stopped){ act('recoil', {amp:.5}); cue('no'); }
+  else { act(['exhale', 'shine']); cue('bell'); }
+  fitOut(false);
+  showActions('done');
+}
+function upload(body, lang, as){
+  const q = new URLSearchParams({ lang, name: as ? 'audio.' + as : T.file.name });
+  return fetch(vbase + '/api/transcribe?' + q, { method:'POST', body, signal:T.ctrl.signal,
+                                         headers:{'Content-Type':'application/octet-stream'} });
+}
+async function readTranscript(res){
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = '', first = true;
+  while (true){
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0){
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      if (ev.type === 'info') T.duration = ev.duration;
+      else if (ev.type === 'language'){ T.language = ev.language; ripple(.15, .06, .9, S.hue + 120); }
+      else if (ev.type === 'progress'){
+        const p = ev.total ? ev.done / ev.total : 0, el = (performance.now() - T.t0) / 1000;
+        root.style.setProperty('--progress', (p*100).toFixed(1) + '%');
+        const eta = p > .04 && p < 1 ? ` · about ${GlassUI.fmt(el/p - el)} left` : '';
+        setStatus(`Transcribing ${T.file.name} · ${Math.round(p*100)}%${eta}`, 'stream');
+      }
+      else if (ev.type === 'segment'){
+        if (first){ first = false; setMode('streaming'); S.flash = .6; }
+        T.segs.push(ev);
+        if (T.segs.length % 3 === 0) act('micronod', {amp:.3});
+        outText.appendData((T.segs.length > 1 ? ' ' : '') + ev.text);
+        S.kick = Math.min(1.4, S.kick + .3);
+        ripple(.2 + Math.random()*.6, .15 + Math.random()*.3, .6, S.hue + Math.random()*120);
+        fitOut(true);
+      }
+      else if (ev.type === 'error') throw new Error(ev.message);
+    }
+  }
+}
+function stopTranscription(){ if (T.ctrl) T.ctrl.abort(); }
+const langName = c => { try{ return new Intl.DisplayNames([navigator.language || 'en'], {type:'language'}).of(c) || c }catch{ return c } };
+
+/* decode in the browser (Web Audio), resample to 16 kHz mono, wrap as 16-bit WAV */
+async function toWav16k(f){
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try{ decoded = await ac.decodeAudioData(await f.arrayBuffer()); }
+  finally{ ac.close(); }
+  const len = Math.max(1, Math.ceil(decoded.duration * 16000));
+  const oc = new OfflineAudioContext(1, len, 16000);
+  const src = oc.createBufferSource(); src.buffer = decoded; src.connect(oc.destination); src.start();
+  const pcm = (await oc.startRendering()).getChannelData(0);
+  const b = new ArrayBuffer(44 + pcm.length*2), v = new DataView(b);
+  const str = (o, x) => { for (let i = 0; i < x.length; i++) v.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length*2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, pcm.length*2, true);
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i*2, Math.max(-1, Math.min(1, pcm[i])) * 32767, true);
+  return new Blob([b], {type:'audio/wav'});
+}
+
+/* the transcript's actions, each asking first */
+const base = () => GlassUI.baseName(T.file?.name);
+$('#t-stop').addEventListener('click', async () => {
+  if (T.running && await ask('Stop transcribing?', 'What’s been transcribed so far is kept.', 'Stop', {danger:true})) stopTranscription();
+});
+$('#t-layout').addEventListener('click', async () => {
+  if (await ask('Open in the layout view?', 'A new tab shows the transcript with timestamps, playback and formatting.', 'Open'))
+    window.open(`transcript.html?id=${encodeURIComponent(T.id)}`, '_blank');
+});
+$('#t-chat').addEventListener('click', async () => {
+  if (!await ask('Chat about this transcript?', `Your next message will include the transcript of ${T.file.name}, so you can ask about it.`, 'Attach')) return;
+  setAttachment({ name:T.file.name, text:GlassUI.toText(T.segs) });
+  inp.focus(); S.kick += .6; ripple(.5, .8, 1.3, S.hue + 180);
+});
+$('#t-copy').addEventListener('click', async () => {
+  if (!await ask('Copy the transcript?', `${words()} words to the clipboard.`, 'Copy')) return;
+  try{ await navigator.clipboard.writeText(GlassUI.toText(T.segs)); setStatus('Copied to the clipboard', 'ok'); cue('tick'); }
+  catch{ setStatus("Couldn't copy (clipboard blocked)", 'err'); }
+});
+for (const [id, ext, fn, type] of [['t-txt','txt', s => GlassUI.toText(s) + '\n','text/plain'],
+                                   ['t-srt','srt', GlassUI.toSrt,'application/x-subrip'],
+                                   ['t-vtt','vtt', GlassUI.toVtt,'text/vtt']]){
+  $('#' + id).addEventListener('click', async () => {
+    if (!await ask(`Download ${base()}.${ext}?`, ext === 'txt' ? 'The transcript as plain text.' : 'Subtitles with timestamps.', 'Download')) return;
+    GlassUI.download(`${base()}.${ext}`, fn(T.segs), type); S.flash = .4; ripple(.85, .06, 1, 150); cue('tick');
+  });
+}
+$('#t-break').addEventListener('click', async () => {
+  const model = modelSel.value;
+  if (!model){ showError('No model selected. Check that Ollama is running, then reload.'); return; }
+  const item = T.id ? await GlassUI.transcripts.get(T.id).catch(() => null) : null;
+  const saved = item?.analysis || null;
+  if (!saved && !await ask(`Break down ${T.file.name}?`,
+      `${model} reads the whole transcript once per bucket (15 times): title and topics, entities, concepts, commitments, ` +
+      'what’s important and urgent, timelines, patterns, emotions, steps, subtext, relationships, roles, a summary and advice.\n' +
+      'A transcript too long for that is first read in sections into notes. The results fill a grid as they arrive.', 'Break it down')) return;
+  openBreakdown({ name:T.file.name, segments:T.segs, duration:T.duration, id:T.id, model, saved });
+});
+$('#t-close').addEventListener('click', () => showActions(null));
+
+/* the breakdown grid (glass-analysis.js) is part of the light show too */
+let breakdownOpen = false;                     // a breakdown streams without busy: don't doze off over it
+function openBreakdown({name, segments, duration, id, model, saved}){
+  breakdownOpen = true;
+  const stage = $('.stage');
+  stage.inert = true; inp.blur();
+  const at = r => [(r.left + r.width/2) / innerWidth, (r.top + r.height/2) / innerHeight];
+  let chunks = 0;
+  GlassAnalysis.open({ name, segments, duration, host, model, saved, ask,
+    onSave: async result => {
+      if (!id) return;
+      try{ const item = await GlassUI.transcripts.get(id); if (item) await GlassUI.transcripts.save({...item, analysis:result}); }
+      catch(e){ console.warn('saving the breakdown failed', e); }
+    },
+    onEvent(type, d){
+      if (type === 'start'){ setMode('thinking'); S.kick += 1; S.flash = .5; ripple(.5, .5, 1.8); cue('send'); }
+      else if (type === 'cell'){ const [x, y] = at(d.rect); ripple(x, y, .6, S.hue + d.i*24); }
+      else if (type === 'chunk'){
+        if (S.mode !== 'streaming') setMode('streaming');
+        S.kick = Math.min(1.2, S.kick + .02);
+        if (++chunks % 40 === 0) ripple(Math.random(), Math.random(), .35, S.hue + Math.random()*120);
+      }
+      else if (type === 'cell-done'){ const [x, y] = at(d.rect); S.flash = Math.max(S.flash, .3); ripple(x, y, 1.1, S.hue + 60); cue('tick'); }
+      else if (type === 'cell-error'){ setMode('error'); cue('error'); }
+      else if (type === 'done'){ setMode('done'); S.flash = .6; ripple(.5, .5, 2, S.hue + 60); cue('bell');
+                                 setStatus(`Breakdown done · ${name}`, 'ok');
+                                 record(`🧩 breakdown of ${name}`, GlassAnalysis.toMarkdown(name, d), d.model, new Date(), '', 'file'); }
+      else if (type === 'close'){ breakdownOpen = false; stage.inert = false; setMode('done'); act('wake'); S.kick += .6; ripple(.5, .5, 1.4); inp.focus(); }
+    } });
+}
+$('#audiofile').addEventListener('click', () => audioIn.click());
+audioIn.addEventListener('change', () => { const f = audioIn.files[0]; audioIn.value = ''; offerFile(f); });
+$('#library').addEventListener('click', async () => {
+  if (await ask('Open your transcripts?', 'A new tab lists every transcript, in the layout view.', 'Open')) window.open('transcript.html', '_blank');
+});
+
+/* drag an audio file anywhere onto the page */
+let dragDepth = 0, dropHint = null;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+addEventListener('dragenter', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (++dragDepth === 1){
+    dropHint = document.createElement('div'); dropHint.className = 'gx-drop'; dropHint.textContent = 'Drop to transcribe';
+    glass.append(dropHint); glass.classList.add('bulge'); S.kick += .6; wake(); act('perk');
+  }
+});
+addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0){ dragDepth = 0; dropHint?.remove(); dropHint = null; } });
+addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; dropHint?.remove(); dropHint = null;
+  ripple(e.clientX/innerWidth, e.clientY/innerHeight, 1.8);
+  cue('drop');
+  offerFile(e.dataTransfer.files[0]);
+});
+
+/* =========================================================
+   personality: which pose the glass holds, and when it dozes off
+   ========================================================= */
+let inCode = false, sleeping = false, lastActive = performance.now(), sphereUntil = 0;
+const SLEEP_AFTER = 120000;                        // ms of quiet before it curls up into a sphere
+function moodNow(){
+  const now = performance.now();
+  if (sleeping || now < sphereUntil) return 'sleepy';
+  if (T.running) return 'digesting';
+  if (S.vstate === 'hearing') return 'attentive';
+  if (S.mode === 'thinking') return 'pondering';
+  if (busy && inCode) return 'focused';
+  if (S.vstate === 'speaking' || S.speech) return 'speaking';
+  if (S.mode === 'error') return 'tense';
+  if (V.on && (V.link === 'down' || V.host === 'down')) return 'dim';
+  return 'idle';
+}
+function wake(){
+  lastActive = performance.now();
+  if (sleeping){ sleeping = false; act('wake'); cue('wake'); S.flash = .4; ripple(.5, .5, 1.6); }
+}
+setInterval(() => {
+  const quiet = !busy && !T.running && !breakdownOpen && !inp.value && !S.speech && !['hearing','speaking','transcribing'].includes(S.vstate)
+                && !GlassUI.isOpen;
+  if (BODY.on && !sleeping && quiet && performance.now() - lastActive > SLEEP_AFTER){ sleeping = true; cue('sleep'); }
+}, 1000);
+['keydown', 'pointerdown', 'wheel', 'dragenter'].forEach(ev => addEventListener(ev, wake, {passive:true}));
+let moved = 0;
+addEventListener('pointermove', e => { moved += Math.abs(e.movementX) + Math.abs(e.movementY); if (moved > 60){ moved = 0; wake(); } });
+
+/* reading a reply as it streams: hidden [[tags]] win, otherwise the opening words decide */
+function makeReader(){
+  const tf = GlassBody.tags();
+  let read = false, tagged = false, text = '', lists = 0;
+  return {
+    push(chunk){
+      const r = tf.push(chunk);
+      if (r.tags.length){ tagged = true; read = true; perform(r.tags.map(name => ({name, amp:1}))); }
+      if (!text) r.text = r.text.replace(/^\s+/, '');     // no leading gap where a tag was
+      text += r.text;
+      if (!read && (text.length > 60 || /[.!?…]\s/.test(text))){ read = true; perform(GlassBody.read(text)); }
+      const n = (text.match(/(^|\n)\s*([-*•]|\d+[.)])\s+\S/g) || []).length;   // a list growing: tiny nods, counting along
+      if (n > lists){ lists = n; if (n > 1) act('micronod', {amp:.5}); }
+      const code = ((text.match(/```/g) || []).length % 2) === 1;
+      if (code !== inCode){ inCode = code; if (code) act('focus'); }
+      return r.text;
+    },
+    flush(){ const rest = tf.flush(); text += rest; if (!read && text){ read = true; perform(GlassBody.read(text)); } return rest; },
+    done(){
+      inCode = false;
+      if (/\?\s*$/.test(text.trim())) act('tilt');                        // it asked you something: head tilted, waiting
+      else if (!tagged) act('micronod', {amp:.5});
+    },
+  };
+}
+function perform(list){
+  const names = list.filter(g => g.name !== 'sphere').map(g => g.name);
+  if (list.some(g => g.name === 'sphere')) sphereUntil = performance.now() + 1800;
+  if (names.length) act(names, {amp: list[0]?.amp ?? 1});
+}
+
+/* 🎭: try every gesture, turn body language or the model's own gestures on/off */
+$('#bodybtn').addEventListener('click', () => {
+  const box = document.createElement('div');
+  box.style.cssText = 'display:flex;flex-direction:column;gap:12px;width:100%';
+  const grid = document.createElement('div'); grid.className = 'gx-row';
+  [...GlassBody.GESTURES.filter(g => g !== 'micronod'), 'sphere'].forEach(name => {
+    const b = document.createElement('button'); b.textContent = name;
+    b.addEventListener('click', () => {
+      if (name === 'sphere'){ sphereUntil = performance.now() + 2600; return; }
+      body.play(name); CH?.play(name);
+    });
+    grid.append(b);
+  });
+  const toggles = document.createElement('div'); toggles.className = 'gx-row';
+  const mk = (label, key) => {
+    const b = document.createElement('button');
+    const draw = () => { b.textContent = `${label}: ${BODY[key] ? 'on' : 'off'}`; b.classList.toggle('on', BODY[key]); };
+    b.addEventListener('click', () => { BODY[key] = !BODY[key]; ls.set('body-' + key, BODY[key] ? '1' : '0'); draw(); });
+    draw(); return b;
+  };
+  toggles.append(mk('Body language', 'on'), mk('Model chooses gestures', 'tags'));
+  box.append(grid, toggles);
+  GlassUI.alert({ title:'Body language', ok:'Done', extra:box,
+    body:'Tap a gesture to see it. The glass also moves by itself: it leans in when you talk, ponders while thinking, ' +
+         'nods, shakes, shrugs or shrinks with what the reply says, flinches when you interrupt, and curls into a sphere when left alone.' });
+});
+
+/* 🔔: sounds on/off, volume, and a preview of every sound */
+GlassSound.use({ engine: m => vpost(m), engineUp: () => voiceUp(), base: () => vbase + '/sfx/' });
+$('#soundbtn').addEventListener('click', () => {
+  const box = document.createElement('div');
+  box.style.cssText = 'display:flex;flex-direction:column;gap:12px;width:100%';
+  const row = document.createElement('div'); row.className = 'gx-row';
+  const onBtn = document.createElement('button');
+  const draw = () => { onBtn.textContent = `Sounds: ${GlassSound.on ? 'on' : 'off'}`; onBtn.classList.toggle('on', GlassSound.on);
+                       $('#soundbtn').classList.toggle('off', !GlassSound.on); };
+  onBtn.addEventListener('click', () => { GlassSound.setOn(!GlassSound.on); draw(); if (GlassSound.on) cue('yes'); });
+  const vol = document.createElement('input');
+  vol.type = 'range'; vol.min = 0; vol.max = 100; vol.value = Math.round(GlassSound.volume * 100);
+  vol.title = 'Volume'; vol.style.cssText = 'flex:1;min-width:120px;accent-color:hsl(var(--h) 100% 72%)';
+  vol.addEventListener('change', () => { GlassSound.setVolume(vol.value / 100); cue('tick', {force:true}); });
+  row.append(onBtn, vol); draw();
+  const grid = document.createElement('div'); grid.className = 'gx-row';
+  GlassSound.SOUNDS.forEach(([name, what]) => {
+    const b = document.createElement('button'); b.textContent = name.replace('_', ' '); b.title = what;
+    b.addEventListener('click', () => GlassSound.play(name, {force:true}));
+    grid.append(b);
+  });
+  box.append(row, grid);
+  GlassUI.alert({ title:'Sounds', ok:'Done', extra:box,
+    body:'Little sounds for what’s happening: hearing you, sent, interrupted, done, a file in, asleep and awake. ' +
+         'Hover a sound to see what it means, click to hear it. They play under the voice, and the mic ignores them.' });
+});
+$('#soundbtn').classList.toggle('off', !GlassSound.on);
+
+/* =========================================================
+   look: the glass panel, or a 3D character in its place (glass-character.js), moved by the
+   same body: it nods, shrugs, waves, blinks, follows your pointer with its eyes, and its lips
+   follow the voice (visemes from glassvoice). The menu floats in a column beside it and the
+   rainbow gives way to a clear background. Your own .vrm / .glb is kept in IndexedDB.
+   ========================================================= */
+let CH = null, lookBusy = null;
+const LOOK = { mode: ls.get('look', 'glass'), url: ls.get('char-model-url', ''), name: ls.get('char-model-name', ''),
+               builtin: ls.get('char-builtin', 'frog') };
+const BUILTINS = { frog: 'the tree frog', glass: 'the glass creature' };
+async function charModel(){
+  if (LOOK.url) return LOOK.url;
+  try{ const f = await kvGet('char-model'); if (f?.blob) return f.blob; }catch{}
+  return 'builtin:' + LOOK.builtin;
+}
+function lookFailed(title, e, quiet){
+  const msg = `${e?.message || e}`;
+  if (quiet) setStatus(`${title}: ${msg}`, 'err');
+  else GlassUI.alert({ title, body: msg });
+}
+function setLook(mode, {quiet} = {}){
+  return lookBusy = (async () => {
+    await lookBusy?.catch(() => {});
+    const char = mode === 'char';
+    LOOK.mode = char ? 'char' : 'glass'; ls.set('look', LOOK.mode);
+    $('#lookbtn').classList.toggle('on', char);
+    if (!char){ root.classList.remove('char'); CH?.show(false); fitOut(false); return; }
+    if (!CH){
+      try{ await GlassCharacter.load(); }
+      catch(e){
+        LOOK.mode = 'glass'; ls.set('look', 'glass'); $('#lookbtn').classList.remove('on');
+        return lookFailed('Couldn’t load the 3D character', new Error('three.js didn’t load (the first time it’s fetched from ' +
+          'cdn.jsdelivr.net, then the browser keeps it), or this browser has no WebGL. ' + (e?.message || '')), quiet);
+      }
+      const model = await charModel();
+      CH = GlassCharacter.attach($('#char'), { body, model, reduce: REDUCED });
+      try{ await CH.ready; }
+      catch(e){                                    // your model didn't load: the built-in one instead
+        CH.stop(); CH = GlassCharacter.attach($('#char'), { body, reduce: REDUCED });
+        lookFailed('Couldn’t load your model, showing the built-in character', e, quiet);
+        await CH.ready.catch(err => { CH.stop(); CH = null; throw err; });
+      }
+    }
+    root.classList.add('char'); CH.show(true); fitOut(false);
+  })().catch(e => { root.classList.remove('char'); lookFailed('Couldn’t show the character', e, quiet); });
+}
+function useModel(src, name){
+  LOOK.name = name || ''; ls.set('char-model-name', LOOK.name);
+  if (!CH) return setLook('char');
+  return CH.setModel(src).catch(e => lookFailed('Couldn’t load that model', e));
+}
+$('#lookbtn').addEventListener('click', () => {
+  const box = document.createElement('div');
+  box.style.cssText = 'display:flex;flex-direction:column;gap:12px;width:100%';
+  const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title;
+                                     b.addEventListener('click', fn); return b; };
+  const which = document.createElement('div'); which.className = 'gx-row';
+  const note = document.createElement('div'); note.style.cssText = 'font-size:12px;opacity:.7';
+  const draw = () => {
+    glassB.classList.toggle('on', LOOK.mode === 'glass'); charB.classList.toggle('on', LOOK.mode === 'char');
+    note.textContent = 'Model: ' + (LOOK.url ? LOOK.url : LOOK.name || BUILTINS[LOOK.builtin] || BUILTINS.frog);
+  };
+  const glassB = mk('Glass panel', 'The glass panel with the colors behind it', () => setLook('glass').then(draw));
+  const charB = mk('3D character', 'A character in place of the panel', () => setLook('char').then(draw));
+  which.append(glassB, charB);
+  const models = document.createElement('div'); models.className = 'gx-row';
+  const pick = document.createElement('input'); pick.type = 'file'; pick.accept = '.vrm,.glb'; pick.hidden = true;
+  pick.addEventListener('change', async () => {
+    const f = pick.files?.[0]; if (!f) return;
+    LOOK.url = ''; ls.set('char-model-url', '');
+    await kvSet('char-model', { name: f.name, blob: f });
+    await useModel(f, f.name); draw();
+  });
+  models.append(
+    ...Object.entries({ frog: ['🐸 Tree frog', 'A realistic tree frog: wet skin, red eyes that blink from below, a throat that breathes'],
+                        glass: ['✨ Glass creature', 'A small iridescent glass creature that takes the live colors'] })
+      .map(([k, [label, title]]) => mk(label, title, async () => {
+        LOOK.url = ''; ls.set('char-model-url', ''); LOOK.builtin = k; ls.set('char-builtin', k);
+        await kvSet('char-model', null); await useModel('builtin:' + k); draw(); })),
+    mk('Your model… (.vrm / .glb)', 'A VRM (VRoid Studio…) or a rigged .glb (Ready Player Me, Avaturn, Character Creator…)', () => pick.click()),
+    mk('From a URL…', 'A .vrm or .glb on the web (it has to allow other sites to load it: CORS)', async () => {
+      const u = prompt('Address of a .vrm or .glb model:', LOOK.url || 'https://');
+      if (u === null) return;
+      LOOK.url = /^https?:\/\/.+/.test(u.trim()) ? u.trim() : ''; ls.set('char-model-url', LOOK.url);
+      await useModel(LOOK.url || await charModel(), ''); draw();
+    }), pick);
+  box.append(which, models, note); draw();
+  GlassUI.alert({ title: 'Look', ok: 'Done', extra: box,
+    body: 'Glass can be a panel or a 3D character. The character moves with the same body language, looks at your pointer, ' +
+          'blinks, and moves its lips with the voice. Bring your own: a VRM from VRoid Studio, or a rigged .glb with ' +
+          'ARKit or Oculus viseme blend shapes for the most realistic lip-sync.' });
+});
+if (LOOK.mode === 'char') setLook('char', {quiet: true});
+
+/* =========================================================
+   barging: talking (or typing) over a reply. What you actually heard is kept;
+   the rest fades out on screen and is left out of the conversation.
+   ========================================================= */
+let turn = null;               // {reply, sentences:[{text,start,end}], playing, cut, msg}
+function applyCut(heard, t = turn){
+  if (!t) return;
+  let cut = null;
+  if (heard){
+    const i = t.sentences.findIndex((x, k) => k >= Math.max(0, t.playing) && x.text === heard.text);
+    const sent = t.sentences[i >= 0 ? i : t.playing];
+    if (sent){
+      cut = sent.start + Math.round((heard.fraction ?? 1) * (sent.end - sent.start));
+      while (cut < sent.end && !/\s/.test(t.reply[cut] || ' ')) cut++;       // finish the word being said
+    }
+  } else if (t.playing >= 0) cut = t.sentences[t.playing].end;
+  if (cut === null || cut >= t.reply.length) return;
+  t.cut = cut;
+  const heardText = t.reply.slice(0, cut).trimEnd();
+  if (t.msg) t.msg.content = heardText + ' … [interrupted]';
+  if (t === turn && outText.data.startsWith(heardText.slice(0, 20))){       // still on screen: fade the unheard part
+    out.querySelectorAll('.unheard').forEach(e => e.remove());
+    outText.data = t.reply.slice(0, cut);
+    const u = document.createElement('span'); u.className = 'unheard'; u.textContent = t.reply.slice(cut);
+    out.insertBefore(u, caret.parentNode === out ? caret : null);
+    fitOut(false);
+  }
+}
+
+/* typing over the voice turns it down; it comes back when you pause */
+let typeDuck = 0;
+inp.addEventListener('keydown', e => {
+  if (e.key.length !== 1 || !voiceUp() || !(S.vstate === 'speaking' || S.speech)) return;
+  if (!typeDuck) vpost({type:'duck', gain:.35});
+  clearTimeout(typeDuck);
+  typeDuck = setTimeout(() => { typeDuck = 0; vpost({type:'duck', gain:1}); }, 1600);
+});
+
+/* =========================================================
+   the Glass service: its folder, the hands-free mode, the memory,
+   and a heartbeat so the hands-free agent lets this page do the talking
+   ========================================================= */
+const hfSel = $('#handsfree');
+const G = { folder:'', mode:'', canChoose:false };
+const MODES = {
+  chat:   'When no Glass page is open, Glass listens and answers out loud by itself, and saves the conversation to your folder.',
+  record: 'Glass writes down everything it hears into a recording in your folder, and doesn\u2019t answer by itself.',
+  off:    'Glass only listens while this page is open.',
+};
+function showGlass(st){                // the service's state (GET/POST /api/glass)
+  if (!st) return;
+  if (st.folder && st.folder !== G.folder){
+    if (G.folder) logFile = null;      // another folder: the next message starts a new file there
+    G.folder = st.folder;
+    const name = GlassUI.folderName(st.folder);
+    folderBtn.textContent = '📁 ' + name; folderBtn.classList.add('on');
+    folderBtn.title = `Conversations, recordings and memory are kept in ${st.folder}`;
+    if (!logFile) fileLbl.textContent = `Saving to ${name}. A new file starts with your next message.`;
+  }
+  if ('can_choose_folder' in st) G.canChoose = !!st.can_choose_folder;
+  if (st.mode) showMode(st.mode);
+}
+function showMode(m){
+  G.mode = m;
+  if (document.activeElement !== hfSel) hfSel.value = m;
+  hfSel.title = `Hands-free: ${hfSel.selectedOptions[0]?.textContent || m}. ${MODES[m] || ''}`;
+}
+async function chooseGlassFolder(){
+  try{
+    if (G.canChoose){
+      setStatus('Choose a folder in the Finder window…', 'think');
+      const r = await GlassUI.api('/api/glass/choose-folder', {});
+      setStatus('Ready', 'ok');
+      if (r.cancelled || !r.folder) return;
+      showGlass(await GlassUI.api('/api/glass'));
+    } else {
+      const box = fieldBox(), f = field(box, 'Folder', G.folder, '~/Documents/Glass', 'text');
+      setTimeout(() => f.focus(), 60);
+      if (!await GlassUI.confirm({title:'Where should Glass keep things?', ok:'Use it', extra:box, always:true,
+          body:'A folder on the machine running Glass, for your conversations, recordings and memory. It\u2019s made if it doesn\u2019t exist.'})) return;
+      const path = f.value.trim();
+      if (!path || path === G.folder) return;
+      showGlass(await GlassUI.api('/api/glass', {folder:path}));
+    }
+    S.save = .8; S.kick += .6; ripple(.85, .08, 1.3, 150); cue('tick');
+  }catch(e){ fileLbl.textContent = `Couldn't use that folder (${e.message}).`; setStatus('Ready', 'ok'); setMode('error'); shake(); }
+}
+hfSel.addEventListener('change', async () => {
+  const m = hfSel.value, label = hfSel.selectedOptions[0]?.textContent || m;
+  if (!await ask(`Hands-free: ${label}?`, MODES[m], 'Switch')){ hfSel.value = G.mode; return; }
+  try{
+    showGlass(await GlassUI.api('/api/glass', {mode:m}));
+    setStatus(`Hands-free: ${label}`, 'ok'); cue('tick'); S.kick += .7; ripple(.6, .08, 1.2, S.hue + 90);
+  }catch(e){ hfSel.value = G.mode; setStatus(`Couldn't switch (${e.message})`, 'err'); shake(); }
+});
+/* [[remember: a fact]], anywhere in a reply (the memory prompt asks for it): taken out before
+   anything is shown, spoken, kept or logged. A tag can arrive split across chunks, so an
+   unfinished one waits for the next chunk. */
+function makeRemember(){
+  const TAG = /\s*\[\[\s*remember\s*:([\s\S]*?)\]\]/gi;
+  const facts = [];
+  let hold = '';
+  const keep = f => { f = f.replace(/\s+/g, ' ').trim(); if (f) facts.push(f); };
+  const unfinished = tail => {                     // could `tail` ("[[rem", "[[remember: my na") still become a tag?
+    if (tail.length > 600 || tail.includes(']]')) return false;
+    const t = tail.slice(2).replace(/^\s+/, '').toLowerCase();
+    return 'remember'.startsWith(t) || /^remember\s*(:|$)/.test(t);
+  };
+  return {
+    facts,
+    push(chunk){
+      let s = hold + chunk; hold = '';
+      s = s.replace(TAG, (_, f) => { keep(f); return ''; });
+      const open = s.lastIndexOf('[[');
+      if (open >= 0 && unfinished(s.slice(open))){
+        let at = open; while (at > 0 && /\s/.test(s[at - 1])) at--;   // with the space before it
+        hold = s.slice(at); s = s.slice(0, at);
+      } else if (s.endsWith('[')){ hold = '['; s = s.slice(0, -1); }
+      return s;
+    },
+    flush(){                                        // the reply ended inside a tag: keep what it said
+      const s = hold; hold = '';
+      const m = /^\s*\[\[\s*remember\s*:([\s\S]*)$/i.exec(s);
+      if (m){ keep(m[1].replace(/\]$/, '')); return ''; }
+      return s;
+    },
+  };
+}
+async function rememberFacts(facts){
+  for (const f of facts){
+    try{
+      const r = await GlassUI.api('/api/memory', {add:f});
+      if (r.added){ setStatus(`Remembered: ${f}`, 'ok'); cue('tick'); S.save = Math.max(S.save, .8); ripple(.5, .3, 1, 150); }
+    }catch(e){ console.warn('remembering failed', e); }
+  }
+}
+async function beat(){                 // while this page pings, the hands-free agent lets it answer
+  try{
+    const r = await GlassUI.api('/api/glass/page', {id:tabId});
+    if (!G.folder) showGlass(await GlassUI.api('/api/glass'));   // the service came (back) up
+    else if (r.mode) showMode(r.mode);
+  }catch{}
+}
+async function glassInit(){
+  hfSel.hidden = false;
+  folderBtn.textContent = '📁 …';
+  try{ showGlass(await GlassUI.api('/api/glass')); }
+  catch(e){ fileLbl.textContent = `Can't reach the Glass service (${e.message}). Chats aren't saved yet.`; }
+  beat(); setInterval(beat, 5000);
+  addEventListener('pagehide', () => GlassUI.api('/api/glass/page', {id:tabId, leaving:true}).catch(() => {}));   // hands-free takes over now
+  addEventListener('focus', () => GlassUI.api('/api/glass').then(showGlass, () => {}));   // changed from the menu bar?
+}
+
+/* go */
+let health = {};                      // the voice service's /api/health ({} while it isn't answering)
+function applyHost(){
+  host = GlassUI.ollamaUrl(); vbase = GlassUI.voiceUrl();
+}
+async function vhealth(){
+  try{ const r = await fetch(vbase + '/api/health'); health = r.ok ? await r.json() : {}; }catch{ health = {}; }
+  return health;
+}
+async function boot(){
+  applyHost();
+  vinit(await vhealth());
+  loadModels();
+}
+fitIn();
+GLASS ? glassInit() : restoreFolder();
+claim();
+boot();
+inp.focus();
+</script>
+</body>
+</html>
