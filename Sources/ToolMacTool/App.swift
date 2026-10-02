@@ -42,6 +42,8 @@ final class AppModel: ObservableObject {
 
     init() {
         updater.start()
+        ModelTools.shared.app = self
+        MacFacts.prepare()
         // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {

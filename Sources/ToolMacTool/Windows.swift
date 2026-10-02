@@ -98,6 +98,8 @@ class GlassPanel: NSPanel {
     /// A press anywhere that moves more than a few points drags the window; a press that doesn't
     /// move is a click, as usual.
     var dragsAnywhere = false
+    /// A double-click on the glass (not on text you edit, a scroll bar or a control).
+    var onDoubleClick: (() -> Void)?
     /// Where a press started (the pointer on screen, the window's origin), and whether it's
     /// become a drag.
     private var press: (mouse: NSPoint, origin: NSPoint)?
@@ -132,6 +134,9 @@ class GlassPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, event.clickCount == 2, let onDoubleClick, canDrag(at: event.locationInWindow) {
+            onDoubleClick()
+        }
         if dragsAnywhere, moveWindow(event) { return }
         // Caught here, before the text field (which would take Esc for word completion).
         if event.type == .keyDown, event.keyCode == 53, onEscape?() == true { return }
@@ -192,6 +197,46 @@ extension GlassPanel {
                                        context: nil, eventNumber: 0, clickCount: 1, pressure: 0) {
             super.sendEvent(up)
         }
+    }
+}
+
+/// A window's controls, kept out of sight while the model talks: a double-click shows them, and
+/// they go again 10 seconds after they were last used (not while the pointer is over them).
+@MainActor
+final class Reveal: ObservableObject {
+    @Published private(set) var shown = false
+    static let delay: TimeInterval = 10
+    private var holding = false
+    private var count = 0
+
+    func toggle() { shown ? hide() : show() }
+
+    func show() {
+        withAnimation(.easeOut(duration: 0.2)) { shown = true }
+        touch()
+    }
+
+    func hide() {
+        count += 1
+        withAnimation(.easeInOut(duration: 0.6)) { shown = false }
+    }
+
+    /// Used just now: another 10 seconds.
+    func touch() {
+        count += 1
+        guard shown, !holding else { return }
+        let mine = count
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.delay * 1_000_000_000))
+            guard let self, self.count == mine else { return }
+            self.hide()
+        }
+    }
+
+    /// The pointer is over the controls (they stay), or has left them (the 10 seconds start).
+    func hold(_ over: Bool) {
+        holding = over
+        touch()
     }
 }
 

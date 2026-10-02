@@ -123,9 +123,12 @@ struct SettingsView: View {
                 }
                 TextField("Location", text: $prefs.settings.location, prompt: Text("e.g. Lagos, Nigeria (blank: from the time zone)"))
                 Toggle("24-hour clock", isOn: $prefs.settings.clock24)
+                Toggle("Tell the model about this Mac (model, chip, memory, how long it's been on)",
+                       isOn: $prefs.settings.shareMacInfo)
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     Text(NowContext.describe(context.date, zone: prefs.settings.zone, location: prefs.settings.location,
-                                             clock24: prefs.settings.clock24))
+                                             clock24: prefs.settings.clock24)
+                         + (prefs.settings.shareMacInfo ? "\n\n" + MacFacts.describe(now: context.date, zone: prefs.settings.zone) : ""))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)

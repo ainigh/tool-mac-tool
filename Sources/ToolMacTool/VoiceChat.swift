@@ -24,6 +24,8 @@ final class VoiceLink: ObservableObject {
     }
     /// The chat's window is on screen.
     private(set) var visible = false
+    /// Closes the chat's window (set when it's made): "close" or "exit", said.
+    var onClose: (() -> Void)?
 
     private var stream = SentenceStream()
     private var watches: [AnyCancellable] = []
@@ -50,7 +52,8 @@ final class VoiceLink: ObservableObject {
     }
 
     var mode: ChatKind { chat.mode }
-    var talks: Bool { mode.speaks && !muted }
+    /// Replies are spoken: a mode that speaks, not muted, and the window is up.
+    var talks: Bool { mode.speaks && !muted && visible }
 
     /// Gets the models a mode needs ready (downloading them the first time) before they're needed.
     private func prepare(_ mode: ChatKind) {
@@ -119,6 +122,12 @@ final class VoiceLink: ObservableObject {
 
     private func heard(_ said: String) {
         guard mode.listens else { return }
+        // "Close", "exit", "bye": straight away, without asking the model.
+        if VoiceCommand.parse(said) == .close {
+            chat.input = ""
+            onClose?()
+            return
+        }
         chat.input = said
         chat.send(spoken: true)
     }
@@ -173,10 +182,12 @@ struct VoiceChatView: View {
     let close: () -> Void
     let pin: (Bool) -> Void
     let resize: (CGSize) -> Void
+    /// The controls, shown by a double-click.
+    @ObservedObject var reveal: Reveal
+    var hovering: Bool { reveal.shown }
 
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
-    @State private var hovering = false
     @Environment(\.controlActiveState) private var active
 
     static let width: CGFloat = 520
@@ -231,6 +242,7 @@ struct VoiceChatView: View {
                 .frame(height: 120)
             ChatControls(chat: chat, link: link, ink: ink, show: hovering, collapsed: nil, voiceStatus: status,
                          close: close, pin: pin)
+                .onHover { reveal.hold($0) }
                 .padding(.leading, 14)
                 .padding(.trailing, 14)
                 .padding(.bottom, 10)
@@ -240,9 +252,6 @@ struct VoiceChatView: View {
                               paused: mood == .idle && active == .inactive))
         .contentShape(Rectangle())
         .onTapGesture { link.interrupt() }
-        .onHover { h in
-            withAnimation(h ? .easeOut(duration: 0.25) : .easeInOut(duration: 1.2)) { hovering = h }
-        }
         .padding(ChatWindow.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)

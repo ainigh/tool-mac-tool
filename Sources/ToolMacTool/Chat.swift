@@ -307,21 +307,38 @@ final class ChatModel: ObservableObject {
         }
         if !mode.note.isEmpty { parts.append(mode.note) }
         if !tools.isEmpty {
-            parts.append("You can run some of the user's Apple Shortcuts on this Mac with your tools. Call one when the "
-                + "request matches its description, then answer using what it returns; don't call tools otherwise, "
+            parts.append("You have tools that act on the user's Mac (and some of their Apple Shortcuts). Call one when "
+                + "the request matches its description, then answer using what it returns; don't call tools otherwise, "
                 + "and never pretend you ran one.")
         }
         if memoryOn {
             parts.append(MemoryStore.prompt(memory: memory.read(), instruction: s.memoryPrompt))
         }
         parts.append(NowContext.describe(now, zone: s.zone, location: s.location, clock24: s.clock24))
+        if s.shareMacInfo { parts.append(MacFacts.describe(now: now, zone: s.zone)) }
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
-    /// The shortcuts this reply may run, by the names the model calls them.
-    var tools: [(name: String, tool: ShortcutTool)] {
+    /// What a tool the model calls does: one of the app's own, or a shortcut.
+    enum ToolAction {
+        case builtin(BuiltinTool)
+        case shortcut(ShortcutTool)
+
+        func spec(name: String) -> OllamaTool {
+            switch self {
+            case .builtin(let t): return t.spec()
+            case .shortcut(let t): return t.spec(name: name)
+            }
+        }
+    }
+
+    /// The tools this reply may call, by the names the model calls them: the app's own (Model
+    /// tools), then the shortcuts (Tools).
+    var tools: [(name: String, action: ToolAction)] {
         guard toolsOn, settings.toolsOn, !toolless.contains(model) else { return [] }
-        return ShortcutTool.callable(settings.shortcuts)
+        let builtins = settings.builtins.filter(\.enabled)
+        let shortcuts = ShortcutTool.callable(settings.shortcuts, reserved: Set(builtins.map(\.name)))
+        return builtins.map { ($0.name, ToolAction.builtin($0)) } + shortcuts.map { ($0.name, ToolAction.shortcut($0.tool)) }
     }
 
     private func reply() {
@@ -347,7 +364,7 @@ final class ChatModel: ObservableObject {
         let model = self.model
         let ollama = self.ollama
         let tools = self.tools
-        let offered = tools.map { $0.tool.spec(name: $0.name) }
+        let offered = tools.map { $0.action.spec(name: $0.name) }
         task = Task {
             var raw = ""
             var note = ""
@@ -423,9 +440,17 @@ final class ChatModel: ObservableObject {
 
     /// Runs the shortcut a call names (asking first if it's set to): what goes back to the model,
     /// and what the chat shows.
-    private func runTool(_ call: ToolCall, among tools: [(name: String, tool: ShortcutTool)]) async -> (String, String) {
-        guard let tool = tools.first(where: { $0.name == call.function.name })?.tool else {
+    private func runTool(_ call: ToolCall, among tools: [(name: String, action: ToolAction)]) async -> (String, String) {
+        guard let action = tools.first(where: { $0.name == call.function.name })?.action else {
             return ("There's no tool called \(call.function.name).", call.function.name + " (not a tool)")
+        }
+        let tool: ShortcutTool
+        switch action {
+        case .builtin(let builtin):
+            record(who: "tool", text: "_\(builtin.kind.title)_")
+            return ModelTools.shared.run(builtin, call: call)
+        case .shortcut(let shortcut):
+            tool = shortcut
         }
         let input = ShortcutTool.input(from: call)
         if tool.confirm && !Self.allowed(tool, input: input) {

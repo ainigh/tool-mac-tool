@@ -32,7 +32,9 @@ enum Tools {
     static let sections: [ToolSection] = [
         ToolSection(title: "Files", tools: [unzip], extra: .recentZips),
         ToolSection(title: "Voice", tools: [readAloud, dictate, transcribe]),
-        ToolSection(title: "Glass", tools: [chat, diagram, memory, prompts, shortcutTools, settings]),
+        ToolSection(title: "Glass", tools: [chat, memory, prompts, settings]),
+        // What the chat's model can do for you (it calls them as tools); each also works by itself.
+        ToolSection(title: "Model tools", tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }
@@ -61,7 +63,7 @@ enum Tools {
         id: "diagram",
         name: "Diagram",
         title: "Draw a diagram (Mermaid)",
-        subtitle: "Say or type what you want drawn, and the model draws it as a Mermaid diagram on a big glass canvas. Ask for changes and it redraws from the current diagram.",
+        subtitle: "Say or type what you want drawn, and the model draws it as a Mermaid diagram on a big glass canvas. Ask for changes and it redraws from the current diagram. The chat's model can open it too (draw_diagram), describing what to draw.",
         symbol: "point.3.connected.trianglepath.dotted",
         open: { model in DiagramWindow.show(model.diagram) })
 
@@ -73,9 +75,33 @@ enum Tools {
         symbol: "text.quote",
         open: { _ in PromptsWindow.show() })
 
+    static let alarm = Tool(
+        id: "alarm",
+        name: "Alarm",
+        title: "Alarm (a model tool)",
+        subtitle: "The chat's model can sound an alarm for a number of seconds (sound_alarm). Here: turn it on or off, say when it should, and try it.",
+        symbol: "alarm",
+        open: { _ in ModelToolsWindow.show(.soundAlarm) })
+
+    static let openLink = Tool(
+        id: "open-link",
+        name: "Open link",
+        title: "Open a link (a model tool)",
+        subtitle: "The chat's model can open a web page in your browser (open_url), and carry on talking.",
+        symbol: "safari",
+        open: { _ in ModelToolsWindow.show(.openURL) })
+
+    static let clipboard = Tool(
+        id: "clipboard",
+        name: "Clipboard",
+        title: "Copy to the clipboard (a model tool)",
+        subtitle: "The chat's model can put text on your clipboard (copy_to_clipboard), ready to paste.",
+        symbol: "doc.on.clipboard",
+        open: { _ in ModelToolsWindow.show(.copyText) })
+
     static let shortcutTools = Tool(
         id: "tools",
-        name: "Tools",
+        name: "Shortcuts",
         title: "Tools: shortcuts the model can run",
         subtitle: "Pick Apple Shortcuts the chat's model may call, and say when it should call each. Each takes text and gives text back (or nothing).",
         symbol: "bolt.horizontal.circle",

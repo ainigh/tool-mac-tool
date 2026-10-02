@@ -23,7 +23,11 @@ enum ChatWindow {
                 link.closed()
                 panel.orderOut(nil)
             }
-            let view = ChatRoot(chat: chat, link: link, close: close,
+            link.onClose = close
+            ModelTools.shared.closeChat = close
+            let reveal = Reveal()
+            panel.onDoubleClick = { reveal.toggle() }
+            let view = ChatRoot(chat: chat, link: link, reveal: reveal, close: close,
                                 pin: { on in panel.level = on ? .floating : .normal },
                                 resize: { card in resize(panel, to: card, animate: true) })
             let host = FirstClickHostingView(rootView: view)
@@ -83,6 +87,7 @@ enum ChatWindow {
 struct ChatRoot: View {
     @ObservedObject var chat: ChatModel
     let link: VoiceLink
+    let reveal: Reveal
     let close: () -> Void
     let pin: (Bool) -> Void
     let resize: (CGSize) -> Void
@@ -90,17 +95,17 @@ struct ChatRoot: View {
     var body: some View {
         if chat.mode == .voice {
             VoiceChatView(chat: chat, link: link, listener: link.listener, speaker: link.speaker,
-                          close: close, pin: pin, resize: resize)
+                          close: close, pin: pin, resize: resize, reveal: reveal)
         } else {
-            ChatView(chat: chat, link: link, close: close, pin: pin, resize: resize)
+            ChatView(chat: chat, link: link, close: close, pin: pin, resize: resize, reveal: reveal)
         }
     }
 }
 
 /// The chat, laid out like Glass's own page: a glass panel split by a glowing line. Above it, the
 /// reply, as large as it fits, in the colors moving behind the glass. Below it, what you're
-/// typing, in the opposite colors, and under that a row of controls that fades in while the
-/// pointer is over the panel. With nothing to show, only the box and the controls are there.
+/// typing, in the opposite colors, and under that a row of controls, hidden until you
+/// double-click the glass. With nothing to show, only the box and the controls are there.
 struct ChatView: View {
     @ObservedObject var chat: ChatModel
     let link: VoiceLink
@@ -108,8 +113,11 @@ struct ChatView: View {
     let pin: (Bool) -> Void
     let resize: (CGSize) -> Void
 
+    /// The controls, shown by a double-click.
+    @ObservedObject var reveal: Reveal
+    var hovering: Bool { reveal.shown }
+
     @State private var collapsed = false
-    @State private var hovering = false
     @State private var clock = GlassClock()
     /// The hue the words take: picked up from the moving glass each time you send (so they don't
     /// change color under you while you read or select them).
@@ -158,6 +166,7 @@ struct ChatView: View {
                 ChatControls(chat: chat, link: link, ink: ink, show: hovering,
                              collapsed: chat.messages.isEmpty ? nil : $collapsed, voiceStatus: nil,
                              close: close, pin: pin)
+                    .onHover { reveal.hold($0) }
                     .padding(.leading, 18)
                     .padding(.trailing, 14)
                     .padding(.bottom, 10)
@@ -172,9 +181,6 @@ struct ChatView: View {
                 .onChange(of: g.size.height) { h in if small { smallHeight = h } }
         })
         .background(GlassCard(clock: clock, mood: mood, swell: swell, paused: still))
-        .onHover { h in
-            withAnimation(h ? .easeOut(duration: 0.25) : .easeInOut(duration: 1.2)) { hovering = h }
-        }
         .padding(ChatWindow.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .opacity(active == .inactive ? 0.94 : 1)
@@ -369,7 +375,8 @@ struct ChatStatus: View {
         .fixedSize()
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
-        .help(chat.model.isEmpty ? "Pick a model (from Ollama)" : "\(chat.model) (from Ollama): click to switch")
+        .help((chat.model.isEmpty ? "Pick a model (from Ollama)" : "\(chat.model) (from Ollama): click to switch")
+              + "\n\nDouble-click the glass to show the controls.")
     }
 }
 
@@ -484,13 +491,13 @@ enum ChatMenus {
         models.submenu = ModelMenu.menu(chat)
         menu.addItem(models)
         menu.addItem(.separator())
-        let count = ShortcutTool.callable(chat.settings.shortcuts).count
-        let tools = ActionMenuItem(title: count == 0 ? "Use shortcuts as tools (none set up)"
-                                                     : "Use shortcuts as tools (\(count))") { chat.toolsOn.toggle() }
+        let count = chat.settings.builtins.filter(\.enabled).count + ShortcutTool.callable(chat.settings.shortcuts).count
+        let tools = ActionMenuItem(title: "Use tools (\(count))") { chat.toolsOn.toggle() }
         tools.state = chat.toolsOn && chat.settings.toolsOn ? .on : .off
         tools.isEnabled = chat.settings.toolsOn && count > 0
         menu.addItem(tools)
-        menu.addItem(ActionMenuItem(title: "Edit tools…") { ToolsWindow.show() })
+        menu.addItem(ActionMenuItem(title: "Model tools…") { ModelToolsWindow.show() })
+        menu.addItem(ActionMenuItem(title: "Shortcuts as tools…") { ToolsWindow.show() })
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "Edit memory (MEMORY.md)…") { MemoryWindow.show() })
         menu.addItem(ActionMenuItem(title: "Edit prompts and personas…") { PromptsWindow.show() })
