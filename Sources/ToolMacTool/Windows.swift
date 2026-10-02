@@ -96,9 +96,10 @@ class GlassPanel: NSPanel {
     /// Esc: return true if it was used (e.g. to stop a reply), else it goes on as usual.
     var onEscape: (() -> Bool)?
 
-    init(size: NSSize) {
-        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .fullSizeContentView],
-                   backing: .buffered, defer: false)
+    init(size: NSSize, resizable: Bool = false) {
+        var style: NSWindow.StyleMask = [.borderless, .fullSizeContentView]
+        if resizable { style.insert(.resizable) }
+        super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: style, backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false                 // the view draws its own glow
