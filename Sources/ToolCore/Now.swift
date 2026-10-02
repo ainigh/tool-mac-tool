@@ -45,9 +45,10 @@ public enum NowContext {
             f.dateFormat = pattern
             return f.string(from: d)
         }
-        let c = cal.dateComponents([.hour, .minute, .weekday, .year, .dayOfYear], from: date)
+        let c = cal.dateComponents([.hour, .minute, .weekday, .year], from: date)
         let hour = c.hour ?? 0, minute = c.minute ?? 0
         let weekday = format("EEEE")
+        let dayOfYear = cal.ordinality(of: .day, in: .year, for: date) ?? 0
         let part = partOfDay(hour: hour, minute: minute)
         let day = format("EEEE d MMMM yyyy")
         let time12 = format("h:mm a"), time24 = format("HH:mm")
@@ -68,7 +69,7 @@ public enum NowContext {
             Current date and time (already worked out; use it as given, there's no need to reason about it): \
             it is \(weekday) \(part), \(day), at \(time), in the \(zoneText) time zone. \
             Today is a \(weekend ? "weekend day" : "weekday"); tomorrow is \(tomorrow). \
-            It's week \(week) of the year and day \(c.dayOfYear ?? 0) of \(c.year ?? 0). \(whereText)
+            It's week \(week) of the year and day \(dayOfYear) of \(c.year ?? 0). \(whereText)
             """.trimmingCharacters(in: .whitespaces)
     }
 }
