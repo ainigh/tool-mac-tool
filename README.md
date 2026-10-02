@@ -50,6 +50,15 @@ and the bottom bar shows an **Update** button (hover over it for the commit's ti
   GitHub's build. When an update fails, the copy button next to the message copies the error
   with the end of the build log.
 
+**Build tools** (the hammer in the bottom bar, **Fix…** next to a failed update, or Settings)
+lists what building an update here needs and whether this Mac has it: Apple's command line tools,
+Swift 6 or newer, Homebrew, gh, and gh signed in to an account that can see the repository.
+**Install** (on each, or **Install what's missing** for all) puts it in: the command line tools
+through Apple's installer; a newer Swift by updating the command line tools from Software Update
+(or reinstalling them when it offers none), which asks for your password; Homebrew and the gh
+sign-in in a Terminal window, since they need you; gh with Homebrew. **Copy report** copies every
+check and its result.
+
 The app talks to GitHub through gh, so it works while the repository is private, as long as gh is
 signed in. The bottom bar shows the version and the commit you're on. Running the install line again works
 too.

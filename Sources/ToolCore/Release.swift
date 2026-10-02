@@ -89,3 +89,20 @@ public struct Commit: Decodable, Equatable {
     /// The first line of the message.
     public var title: String { message.components(separatedBy: "\n").first ?? message }
 }
+
+/// What `softwareupdate --list` offers.
+public enum SoftwareUpdate {
+    /// The newest Command Line Tools on offer ("Command Line Tools for Xcode-16.2"), if any.
+    public static func commandLineTools(in list: String) -> (label: String, version: Version)? {
+        var best: (label: String, version: Version)?
+        for line in list.components(separatedBy: "\n") {
+            guard let r = line.range(of: "Label: ") else { continue }
+            let label = line[r.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard label.hasPrefix("Command Line Tools"),
+                  let v = label.range(of: #"\d+(\.\d+)*$"#, options: .regularExpression),
+                  let version = Version(String(label[v])) else { continue }
+            if best == nil || best!.version < version { best = (label, version) }
+        }
+        return best
+    }
+}

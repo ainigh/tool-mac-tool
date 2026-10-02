@@ -193,6 +193,16 @@ final class Updater: ObservableObject {
     /// packages ("incompatible tools version"). build-app.sh also uses an installed Xcode when the
     /// command line tools are older, so either one being new enough will do.
     nonisolated static func checkSwift() throws {
+        let found = swiftStatus()
+        if found.ok { return }
+        throw Problem("This Mac has \(found.have), and building the app needs Swift \(SwiftToolchain.required.description) or newer "
+            + "(the voices' package, FluidAudio, uses it). Open Build tools (the hammer in the menu) to install it, "
+            + "or wait a few minutes for GitHub to build this version, then check for updates again.")
+    }
+
+    /// Whether a Swift new enough to build is here (the command line tools, or an installed
+    /// Xcode), and what the command line tools have ("Swift 5.10").
+    nonisolated static func swiftStatus() -> (ok: Bool, have: String, xcode: String?) {
         func version(developerDir: String?) -> SwiftToolchain? {
             let env = developerDir.map { ["DEVELOPER_DIR": $0] } ?? [:]
             // Some versions print it on stderr.
@@ -200,19 +210,17 @@ final class Updater: ObservableObject {
             return SwiftToolchain.parse(String(decoding: out, as: UTF8.self))
         }
         let here = version(developerDir: nil)
-        if here?.isNewEnough == true { return }
+        let have = here.map { "Swift \($0.description)" } ?? "no Swift"
+        if here?.isNewEnough == true { return (true, have, nil) }
         let apps = ["/Applications", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
         for folder in apps {
             let names = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
             for name in names where name.hasPrefix("Xcode") && name.hasSuffix(".app") {
-                if version(developerDir: "\(folder)/\(name)/Contents/Developer")?.isNewEnough == true { return }
+                let dir = "\(folder)/\(name)/Contents/Developer"
+                if let v = version(developerDir: dir), v.isNewEnough { return (true, "Swift \(v.description) in \(name)", name) }
             }
         }
-        let have = here.map { "Swift \($0.description)" } ?? "no Swift"
-        throw Problem("This Mac has \(have), and building the app needs Swift \(SwiftToolchain.required.description) or newer "
-            + "(the voices' package, FluidAudio, uses it). Update Apple's command line tools: in Terminal, run "
-            + "sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install (or install Xcode 16 or newer). "
-            + "Or wait a few minutes for GitHub to build this version, then check for updates again.")
+        return (false, have, nil)
     }
 
     /// The error, and when a build failed the end of update.log too, for pasting somewhere.
