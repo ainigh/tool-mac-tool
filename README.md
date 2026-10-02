@@ -81,6 +81,30 @@ replaced. If Downloads or the Desktop can't be read, the list says so and links 
 setting. The zip stays in Downloads. A card also fades in under the menu bar with a **Show in Finder**
 button.
 
+### Read aloud, Dictate, Transcribe (Voice)
+
+These use macOS's own speech: the system voices to speak, and its speech recognition (on this Mac
+when your language supports it) to listen. Nothing else to install. The first time one listens,
+macOS asks to allow **Speech Recognition** and the **Microphone**: click **Allow**. As with the
+folders, macOS may ask again after an update. If something was refused, the tool says so and
+**Open Settings** goes to the right page.
+
+- **Read aloud.** Paste or type text and press **Read** (⌘Return), or **Paste & read** what's on
+  the clipboard. The word being said is lit up; **Pause** and **Stop** do what they say. The pills
+  at the top pick the voice and the speed; every tool that speaks uses them. For better voices,
+  download a Premium or Enhanced one in System Settings → Accessibility → Spoken Content. **Save
+  audio…** writes it to a .wav file instead.
+- **Dictate.** **Record** (⌘R), talk for as long as you like (pauses don't stop it), **Stop**. Then
+  edit it, **Copy** it, or **Keep note** (⌘S), which adds it to that day's
+  `glass-dictation-<date>.md` in the Glass folder (where Glass keeps its own dictations, so its
+  transcript view lists them) and empties the box for the next one. What you're writing is kept if
+  you close the window.
+- **Transcribe.** Drop an audio file on the window (mp3, m4a, wav, aiff, or a video's sound), or
+  **Choose file…**. Its lines come in as they're done, each with its time, and the line under the
+  status fills up as it goes. **Copy** it, or save it as `.txt`, `.srt` or `.vtt` subtitles. Long
+  files go to the recognizer in pieces of under a minute, each cut at the quietest moment near its
+  end. It keeps going if you close the window.
+
 ### Chat (Glass)
 
 A floating glass panel built like Glass's own page, with no window around it. Colors drift
@@ -122,6 +146,27 @@ the warning under it offers **Try again**.
 - **Every chat is saved** as `glass-chat-<time>.md` in the Glass folder, in Glass's format, so it
   shows up in Glass's transcripts too.
 
+### Chat 2, 3 and 4 (Glass)
+
+Three more chats, the same as Chat underneath (Ollama, the model menu, the memory and its
+**Remember?** questions, a saved transcript) but each built for a different way of talking. Each
+keeps its own conversation and window; all four share the model setting and `MEMORY.md`. The model
+is told how its replies reach you, so they suit it.
+
+- **Chat 2: it talks back.** You type; the reply is read aloud as it streams in, a sentence at a
+  time, so it starts talking with its first sentence. Code isn't read out, and neither are
+  Markdown's marks. The speaker button at the top mutes it (the reply is still written). Esc stops
+  the reply and the voice.
+- **Chat 3: it listens.** Press the mic beside the box and talk: what you say fills the box as you
+  say it and is sent when you pause. Replies are written. It doesn't listen while a reply comes in.
+  You can still type. Esc (or the mic) stops listening.
+- **Chat 4: talk and listen.** No box at all. It starts listening when it opens. Pause and what you
+  said is sent; it answers out loud in a few plain sentences and then listens again. It doesn't
+  listen while it's talking, so it never hears itself. **Click the glass or press space** to
+  interrupt it (or, while you're talking, to send without waiting for the pause). Esc stops or
+  starts listening; closing the window stops the microphone. Its transcript marks what you said
+  as `you (voice)`.
+
 ### Memory (Glass)
 
 `MEMORY.md` in an editor on the same glass as the chat (drag its edges to resize it). The status
@@ -150,9 +195,11 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown, updates (testable anywhere)
+Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
+                              spoken text and sentences, captions, dictation files, updates (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
-                              Zips, Chat + ChatView + Glass, MemoryView, HUD, Updater
+                              Zips, Chat + ChatView + Glass, VoiceChat (chats 2–4), Voice (speak, listen,
+                              transcribe) + VoiceTools (their windows), MemoryView, HUD, Updater
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)
 .github/workflows/build.yml   test + build on every push; release on main
 install.sh                    install the latest release (or build main) into ~/Applications

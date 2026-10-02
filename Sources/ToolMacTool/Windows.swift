@@ -95,6 +95,8 @@ class GlassPanel: NSPanel {
     var commands: [String: () -> Void] = [:]
     /// Esc: return true if it was used (e.g. to stop a reply), else it goes on as usual.
     var onEscape: (() -> Bool)?
+    /// Any other key with no modifier held (the characters it types): return true if it was used.
+    var onKey: ((String) -> Bool)?
 
     init(size: NSSize, resizable: Bool = false) {
         var style: NSWindow.StyleMask = [.borderless, .fullSizeContentView]
@@ -123,6 +125,9 @@ class GlassPanel: NSPanel {
     override func sendEvent(_ event: NSEvent) {
         // Caught here, before the text field (which would take Esc for word completion).
         if event.type == .keyDown, event.keyCode == 53, onEscape?() == true { return }
+        if event.type == .keyDown, let onKey, let key = event.characters,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]).isEmpty,
+           onKey(key) { return }
         super.sendEvent(event)
     }
 }
