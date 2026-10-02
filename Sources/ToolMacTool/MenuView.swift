@@ -150,6 +150,9 @@ struct BottomBar: View {
                 updater.check(userInitiated: true)
             }
             Text(why).font(.caption).foregroundStyle(.secondary).lineLimit(1).help(why)
+            IconButton(symbol: "doc.on.doc", help: "Copy the error (with the build log, if it built)") {
+                Clipboard.copy(Updater.report(why))
+            }
         case .upToDate, .idle:
             IconButton(symbol: "arrow.clockwise", help: "Check for updates") { updater.check(userInitiated: true) }
             Text(updater.state == .upToDate ? "Up to date · \(version)" : version)

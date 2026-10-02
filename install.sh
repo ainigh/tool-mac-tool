@@ -48,6 +48,7 @@ fi
 
 if [[ -z "$app" ]]; then
   xcode-select -p >/dev/null 2>&1 || die "Building needs Apple's command line tools: run xcode-select --install, then this again."
+  # build-app.sh finds a Swift 6 toolchain (an installed Xcode will do) or says what to update.
   sha="$(gh api "repos/$REPO/commits/$BRANCH" --jq .sha)" || die "Couldn't find the branch $BRANCH."
   say "Downloading the source ($BRANCH, ${sha:0:7})"
   mkdir -p "$tmp/src"

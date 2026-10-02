@@ -1,8 +1,9 @@
+import Combine
 import Foundation
 import SwiftUI
 import ToolCore
 
-/// Talks to Ollama (http://127.0.0.1:11434 unless Glass's settings say otherwise).
+/// Talks to Ollama (the address in Settings).
 struct Ollama {
     var base: URL
 
@@ -24,19 +25,27 @@ struct Ollama {
     /// The reply, streamed a piece at a time. `contextTokens` is the context window asked for:
     /// without it Ollama uses its own default, which is often smaller than what's sent, and then it
     /// cuts the start of the prompt, the system message with the memory in it.
-    func chat(model: String, messages: [ChatTurn], contextTokens: Int) -> AsyncThrowingStream<OllamaChunk, Error> {
+    func chat(model: String, messages: [ChatTurn], contextTokens: Int, temperature: Double? = nil,
+              thinking: AppSettings.Thinking = .auto) -> AsyncThrowingStream<OllamaChunk, Error> {
         struct Body: Encodable {
-            struct Options: Encodable { let num_ctx: Int }
+            struct Options: Encodable {
+                let num_ctx: Int
+                let temperature: Double?
+            }
             let model: String
             let messages: [ChatTurn]
             let stream = true
             let options: Options
+            /// Left out unless it's set: models that can't think refuse it.
+            let think: Bool?
         }
         var req = URLRequest(url: base.appendingPathComponent("api/chat"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let think: Bool? = thinking == .auto ? nil : thinking == .on
         req.httpBody = try? JSONEncoder().encode(Body(model: model, messages: messages,
-                                                      options: .init(num_ctx: contextTokens)))
+                                                      options: .init(num_ctx: contextTokens, temperature: temperature),
+                                                      think: think))
         req.timeoutInterval = 600
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -58,10 +67,34 @@ struct Ollama {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// The whole reply at once (the diagram tool doesn't show it streaming).
+    func reply(model: String, messages: [ChatTurn], contextTokens: Int, temperature: Double? = nil,
+               thinking: AppSettings.Thinking = .auto) async throws -> String {
+        var text = ""
+        for try await chunk in chat(model: model, messages: messages, contextTokens: contextTokens,
+                                    temperature: temperature, thinking: thinking) {
+            text += chunk.message?.content ?? ""
+        }
+        return text
+    }
+
+    /// What to tell you when a request failed.
+    func explain(_ error: Error) -> String {
+        let code = (error as? URLError)?.code
+        if code == .cannotConnectToHost || code == .cannotFindHost || code == .networkConnectionLost {
+            return notRunning
+        }
+        return error.localizedDescription
+    }
+
+    var notRunning: String {
+        "Ollama isn't running (\(base.absoluteString)): open the Ollama app, or run ollama serve"
+    }
 }
 
-/// The four chats: the same conversation underneath, each tuned for how you talk to it and how
-/// it answers. They keep separate conversations and share the model setting and the memory.
+/// How the chat is used: the same conversation underneath, with a different way of talking to it
+/// and of hearing back. Switched from the chat's controls; Settings picks the one it starts in.
 enum ChatKind: String, CaseIterable {
     /// Type, read.
     case text
@@ -72,10 +105,26 @@ enum ChatKind: String, CaseIterable {
     /// Talk, listen: no box to type in.
     case voice
 
-    var number: Int { Self.allCases.firstIndex(of: self)! + 1 }
-    var windowID: String { self == .text ? "chat" : "chat\(number)" }
     var speaks: Bool { self == .speaks || self == .voice }
     var listens: Bool { self == .listens || self == .voice }
+
+    var title: String {
+        switch self {
+        case .text: return "Type"
+        case .speaks: return "Type, hear the reply"
+        case .listens: return "Talk, read the reply"
+        case .voice: return "Conversation (talk and listen)"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .text: return "keyboard"
+        case .speaks: return "speaker.wave.2.bubble.left"
+        case .listens: return "mic.badge.plus"
+        case .voice: return "waveform.and.mic"
+        }
+    }
 
     /// What the model is told about how its replies reach you, or how your messages reach it.
     var note: String {
@@ -83,22 +132,24 @@ enum ChatKind: String, CaseIterable {
         case .text:
             return ""
         case .speaks:
-            return "\n\nYour replies are also read aloud, so prefer plain sentences to tables, long lists and symbols."
+            return "Your replies are also read aloud, so prefer plain sentences to tables, long lists and symbols."
         case .listens:
-            return "\n\nThe user's messages are transcribed from speech and may contain recognition mistakes: "
+            return "The user's messages are transcribed from speech and may contain recognition mistakes: "
                 + "read them generously, and ask when something is unclear."
         case .voice:
-            return "\n\nThis is a spoken conversation: the user talks (transcribed, so allow for recognition mistakes) "
+            return "This is a spoken conversation: the user talks (transcribed, so allow for recognition mistakes) "
                 + "and your reply is read aloud. Answer like a person talking: usually one to three short sentences, "
                 + "no lists, headings, tables, code or Markdown, nothing that only makes sense on screen."
         }
     }
 }
 
-/// One conversation: what's been said, what's streaming in, the model, and the memory.
+/// The conversation: what's been said, what's streaming in, how you're talking (the mode), the
+/// system prompt it uses, and the memory.
 @MainActor
 final class ChatModel: ObservableObject {
-    /// `proposal`: a fact the model suggested remembering, waiting for a yes or no.
+    /// `proposal`: a memory change the model suggested, waiting for a yes or no (when Settings
+    /// says to ask first). `note`: a memory change that was made.
     enum Role { case user, assistant, note, proposal }
 
     struct Message: Identifiable, Equatable {
@@ -107,6 +158,11 @@ final class ChatModel: ObservableObject {
         var text: String
         /// A reply that didn't finish: "stopped" or "failed".
         var note = ""
+        /// For memory proposals and notes: the fact, and whether it's being forgotten.
+        var fact = ""
+        var forgetting = false
+        /// A memory note whose change was taken back.
+        var undone = false
     }
 
     enum Phase { case idle, thinking, streaming }
@@ -115,16 +171,20 @@ final class ChatModel: ObservableObject {
     @Published var input = ""
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var models: [String] = []
-    @Published var model: String {
-        didSet { UserDefaults.standard.set(model, forKey: "chatModel") }
-    }
     @Published private(set) var problem: String?
     /// Tokens the last reply read (the whole context sent) and wrote.
     @Published private(set) var usage: (prompt: Int, output: Int)?
+    /// How you talk to it and hear back.
+    @Published var mode: ChatKind
+    /// The system prompt this chat uses (one of Settings' prompts).
+    @Published var promptID: String
+    /// Whether MEMORY.md goes with each message and the model may change it.
+    @Published var memoryOn: Bool
+    /// The window stays above others.
+    @Published var pinned = true
 
-    let kind: ChatKind
     let memory: MemoryStore
-    let ollama: Ollama
+    let prefs = Preferences.shared
     /// For a voice: a reply started, grew (the text so far, tags hidden), ended (what's shown,
     /// and "stopped" or "failed" if it didn't finish), or the conversation was cleared.
     var onReplyStart: (() -> Void)?
@@ -135,24 +195,37 @@ final class ChatModel: ObservableObject {
     private var task: Task<Void, Never>?
     /// Counts replies, so one that was stopped by a new chat can't touch the next reply's state.
     private var turn = 0
+    private var watch: AnyCancellable?
 
-    static let system = "You are Glass, an assistant running on the user's own Mac. Keep replies clear and "
-        + "fairly short unless asked for more detail."
-    /// The context window asked of Ollama, and how much of it is kept for the reply. The
-    /// conversation gets what's left after the system message (the oldest turns drop off).
-    static let contextTokens = 8192
-    static let replyTokens = 2048
-
-    init(kind: ChatKind = .text) {
-        self.kind = kind
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let config = MemoryStore.GlassConfig.load(home: home)
+    init() {
+        let s = Preferences.shared.settings
+        mode = ChatKind(rawValue: s.mode) ?? .text
+        promptID = s.promptID
+        memoryOn = s.memoryOn
         memory = MemoryStore.forCurrentUser()
-        ollama = Ollama(base: URL(string: config.ollama ?? "") ?? URL(string: "http://127.0.0.1:11434")!)
-        model = UserDefaults.standard.string(forKey: "chatModel") ?? config.model ?? ""
+        // The model and the prompts live in Settings: when they change, this redraws.
+        watch = prefs.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
+    var settings: AppSettings { prefs.settings }
+    var ollama: Ollama { prefs.ollama }
+
+    var model: String {
+        get { settings.model }
+        set { prefs.settings.model = newValue }
+    }
+
+    /// The system prompt in use.
+    var prompt: SystemPrompt { settings.prompt(promptID) }
+
     var glassFolder: URL { memory.url.deletingLastPathComponent().deletingLastPathComponent() }
+
+    /// ⌘1 to ⌘9: the system prompt in that place.
+    func choosePrompt(number: Int) {
+        let prompts = settings.prompts
+        guard number >= 1, number <= prompts.count else { return }
+        promptID = prompts[number - 1].id
+    }
 
     func loadModels() {
         Task {
@@ -166,13 +239,9 @@ final class ChatModel: ObservableObject {
                     if problem?.hasPrefix("Ollama") == true { problem = nil }
                 }
             } catch {
-                problem = notRunning
+                problem = ollama.notRunning
             }
         }
-    }
-
-    private var notRunning: String {
-        "Ollama isn't running (\(ollama.base.host ?? "")): open the Ollama app, or run ollama serve"
     }
 
     /// Sends what's in the box. `spoken`: it was said, not typed (the transcript says so).
@@ -205,6 +274,24 @@ final class ChatModel: ObservableObject {
         return false
     }
 
+    /// Everything the model is told before the conversation: the system prompt, the persona of
+    /// the voice (when it speaks), how replies reach you, the memory and how to keep it, and the
+    /// date, time and place (last, so the rest stays the same from one message to the next).
+    func systemMessage(now: Date = Date()) -> String {
+        let s = settings
+        var parts = [prompt.text.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let persona = Persona.for(VoiceSettings.voice.id, in: s.personas).prompt
+        if !persona.isEmpty, s.personaScope == .always || (s.personaScope == .spoken && mode.speaks) {
+            parts.append(persona)
+        }
+        if !mode.note.isEmpty { parts.append(mode.note) }
+        if memoryOn {
+            parts.append(MemoryStore.prompt(memory: memory.read(), instruction: s.memoryPrompt))
+        }
+        parts.append(NowContext.describe(now, zone: s.zone, location: s.location, clock24: s.clock24))
+        return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
     private func reply() {
         let history = messages.compactMap { m -> ChatTurn? in
             switch m.role {
@@ -213,10 +300,9 @@ final class ChatModel: ObservableObject {
             case .note, .proposal: return nil
             }
         }
-        let system = ChatTurn(role: "system",
-                              content: Self.system + kind.note + "\n\n" + MemoryStore.prompt(memory: memory.read()))
-        let budget = ChatTurn.budget(contextTokens: Self.contextTokens, system: system.content,
-                                     replyTokens: Self.replyTokens)
+        let s = settings
+        let system = ChatTurn(role: "system", content: systemMessage())
+        let budget = ChatTurn.budget(contextTokens: s.contextTokens, system: system.content, replyTokens: s.replyTokens)
         let turns = [system] + ChatTurn.window(history, budget: budget)
 
         let reply = Message(role: .assistant, text: "")
@@ -226,11 +312,13 @@ final class ChatModel: ObservableObject {
         onReplyStart?()
         let mine = turn
         let model = self.model
+        let ollama = self.ollama
         task = Task {
             var raw = ""
             var note = ""
             do {
-                for try await chunk in ollama.chat(model: model, messages: turns, contextTokens: Self.contextTokens) {
+                for try await chunk in ollama.chat(model: model, messages: turns, contextTokens: s.contextTokens,
+                                                   temperature: s.temperature, thinking: s.thinking) {
                     guard mine == turn else { break }
                     if let piece = chunk.message?.content, !piece.isEmpty {
                         raw += piece
@@ -250,9 +338,7 @@ final class ChatModel: ObservableObject {
                     note = "stopped"
                 } else if mine == turn {
                     note = "failed"
-                    let code = (error as? URLError)?.code
-                    problem = code == .cannotConnectToHost || code == .cannotFindHost
-                        ? notRunning : error.localizedDescription
+                    problem = ollama.explain(error)
                 }
             }
             // A new chat since: this reply is gone, and the next one's state isn't ours to change.
@@ -290,7 +376,7 @@ final class ChatModel: ObservableObject {
         phase = .idle
         task = nil
         guard let i = messages.firstIndex(where: { $0.id == id }) else { return }
-        let (shown, facts) = MemoryStore.extract(raw)
+        let (shown, remember, forget) = MemoryStore.extractAll(raw)
         if shown.isEmpty && note == "stopped" {
             // Kept, empty, so it says it was stopped and offers to try again.
             messages[i].note = note
@@ -300,39 +386,87 @@ final class ChatModel: ObservableObject {
             messages[i].text = shown
             messages[i].note = note
         }
-        // Nothing goes into memory until you say so: a pasted page could otherwise plant
-        // instructions there, and memory goes with every message from then on.
-        let known = MemoryStore.facts(in: memory.read())
-        var offered = Set<String>()
-        for fact in facts {
-            let clean = fact.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            let key = clean.lowercased()
-            if clean.isEmpty || known.contains(key) || !offered.insert(key).inserted { continue }
-            messages.append(Message(role: .proposal, text: clean))
-        }
+        if memoryOn { changeMemory(remember: remember, forget: forget) }
         if !shown.isEmpty {
             record(who: model, text: shown, note: note)
         }
         onReplyEnd?(shown, note.isEmpty && shown.isEmpty ? "failed" : note)
     }
 
-    /// Yes to a suggested fact: it's added to MEMORY.md.
-    func accept(_ id: UUID) {
-        guard let i = messages.firstIndex(where: { $0.id == id }), messages[i].role == .proposal else { return }
-        let fact = messages[i].text
-        do {
-            if try memory.remember(fact) != nil {
-                record(who: "memory", text: "_remembered: \(fact)_")
-            }
-            messages[i] = Message(role: .note, text: "Remembered: \(fact)")
-        } catch {
-            problem = "Couldn't write MEMORY.md: \(error.localizedDescription)"
+    // MARK: - Memory
+
+    /// What the model asked to remember and forget: done straight away (each can be undone), or
+    /// offered for a yes first, as Settings says.
+    private func changeMemory(remember: [String], forget: [String]) {
+        let known = MemoryStore.facts(in: memory.read())
+        var seen = Set<String>()
+        func tidy(_ fact: String) -> String? {
+            let clean = fact.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return clean.isEmpty || !seen.insert(clean.lowercased()).inserted ? nil : clean
+        }
+        let drops = forget.compactMap(tidy)
+        let adds = remember.compactMap(tidy).filter { !known.contains($0.lowercased()) }
+        if settings.autoRemember {
+            for fact in drops { apply(fact, forgetting: true) }
+            for fact in adds { apply(fact, forgetting: false) }
+        } else {
+            for fact in drops { messages.append(Message(role: .proposal, text: fact, fact: fact, forgetting: true)) }
+            for fact in adds { messages.append(Message(role: .proposal, text: fact, fact: fact)) }
         }
     }
 
-    /// No to a suggested fact.
+    /// Makes one change to MEMORY.md and notes it in the conversation. Returns whether it changed.
+    @discardableResult
+    private func apply(_ fact: String, forgetting: Bool, replacing id: UUID? = nil) -> Bool {
+        do {
+            var changed: String?
+            if forgetting {
+                changed = try memory.forget(fact).first
+            } else if try memory.remember(fact) != nil {
+                changed = fact
+            }
+            guard let changed else {
+                if let id { messages.removeAll { $0.id == id } }
+                return false
+            }
+            record(who: "memory", text: forgetting ? "_forgot: \(changed)_" : "_remembered: \(changed)_")
+            let note = Message(role: .note, text: (forgetting ? "Forgot: " : "Remembered: ") + changed,
+                               fact: changed, forgetting: forgetting)
+            if let id, let i = messages.firstIndex(where: { $0.id == id }) {
+                messages[i] = note
+            } else {
+                messages.append(note)
+            }
+            return true
+        } catch {
+            problem = "Couldn't write MEMORY.md: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Yes to a suggested change.
+    func accept(_ id: UUID) {
+        guard let m = messages.first(where: { $0.id == id }), m.role == .proposal else { return }
+        apply(m.fact, forgetting: m.forgetting, replacing: id)
+    }
+
+    /// No to a suggested change.
     func dismiss(_ id: UUID) {
         messages.removeAll { $0.id == id && $0.role == .proposal }
+    }
+
+    /// Takes back a change that was made: forgets what was remembered, or remembers it again.
+    func undo(_ id: UUID) {
+        guard let i = messages.firstIndex(where: { $0.id == id }), messages[i].role == .note, !messages[i].undone else { return }
+        let m = messages[i]
+        do {
+            if m.forgetting { try memory.remember(m.fact) } else { try memory.forget(m.fact) }
+            messages[i].undone = true
+            messages[i].text = (m.forgetting ? "Kept: " : "Not remembered: ") + m.fact
+            record(who: "memory", text: m.forgetting ? "_kept: \(m.fact)_" : "_unremembered: \(m.fact)_")
+        } catch {
+            problem = "Couldn't write MEMORY.md: \(error.localizedDescription)"
+        }
     }
 
     /// Each turn goes into a glass-chat-<time>.md in the Glass folder, like Glass's own chats.

@@ -42,7 +42,13 @@ and the bottom bar shows an **Update** button (hover over it for the commit's ti
 - **Update (build here)**: GitHub hasn't built it, either because the build is still
   running or because Actions is off. The app downloads that commit's source, builds it for this
   Mac, swaps itself and reopens. This takes a minute or two. The build output goes to
-  `~/Library/Logs/ToolMacTool/update.log`.
+  `~/Library/Logs/ToolMacTool/update.log`. Building needs Swift 6 (the voices' package, FluidAudio,
+  requires it; an older Swift fails with "incompatible tools version"). If the command line tools
+  are older but Xcode 16 or newer is installed, the build uses that Xcode. Otherwise it says so
+  before downloading anything: update the command line tools
+  (`sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install`), or wait for
+  GitHub's build. When an update fails, the copy button next to the message copies the error
+  with the end of the build log.
 
 The app talks to GitHub through gh, so it works while the repository is private, as long as gh is
 signed in. The bottom bar shows the version and the commit you're on. Running the install line again works
@@ -119,18 +125,20 @@ was refused, the tool says so and **Open Settings** goes to the right page.
 
 A floating glass panel built like Glass's own page, with no window around it. Colors drift
 behind the glass (livelier while you type, circling while the model thinks, washing red when
-something's wrong), and a glowing line splits it in two. Above the line: a status light and the
-model's name (click it to switch models), then the newest reply, as large as it fits, in the
-colors moving behind the glass. Below the line: what you're typing, in the opposite colors,
-smaller the more you write. When you send, your text lifts away, a ring spreads through the
-glass and the old reply slides off. The panel swells a little when text changes and settles 15
-seconds later.
+something's wrong), and a glowing line splits it in two. Above the line: the newest reply, as
+large as it fits, in the colors moving behind the glass. Below the line: what you're typing, in
+the opposite colors, smaller the more you write. When you send, your text lifts away, a ring
+spreads through the glass and the old reply slides off. The panel swells a little when text
+changes and settles 15 seconds later.
 
-With nothing to show it's just the status and the box; it opens up when you send. The controls
-fade in while the pointer is over the panel: memory, new chat (⌘N), shrink to just the box, keep
-on top, and close (⌘W). Drag it by the empty space in its top row or its bottom row. **Return**
-sends, **⌥Return** starts a new line, **Esc** stops a reply (or, with nothing typed, puts the
-chat away), and cut, copy, paste and undo work in the box.
+The top is kept clear for the reply: **every control sits in a row along the bottom**, and only
+the status light shows until the pointer is over the panel. Then the row fades in: the model
+(click its name to switch), how you talk, the system prompt, memory on or off, the speaker (when
+replies are spoken), a ⋯ menu (model, memory, prompts, settings), and on the right new chat (⌘N),
+shrink to just the box, keep on top, and close (⌘W). **Drag the panel by any part of it** that
+isn't the text box or a button: a press that doesn't move is still a click. **Return** sends,
+**⌥Return** starts a new line, **Esc** stops a reply (or, with nothing typed, puts the chat away),
+and cut, copy, paste and undo work in the box.
 
 Replies show Markdown: headings, bullet, numbered and task lists, quotes and rules, plus bold,
 italics, `code` and links inside a line. Code blocks get their own box with a **Copy** button. A
@@ -138,44 +146,83 @@ reply too long to fit even small scrolls; while it streams it follows the end un
 scrolled up, and then a ↓ button takes you back down. Under the reply sit **Copy** and **Retry**
 (which asks for it again), how it ended if it was stopped or failed, what was just remembered,
 and ‹ › arrows to step back through earlier replies. If a reply fails before it says anything,
-the warning under it offers **Try again**.
+the warning under it offers **Try again**. Every warning has a copy button, so an error can be
+pasted anywhere.
 
+- **How you talk** (the mode button, or Settings for where it starts). One chat, four ways:
+  - **Type**: you type, the reply is written.
+  - **Type, hear the reply**: the reply is also read aloud as it streams in, a sentence at a
+    time. Code and Markdown's marks aren't read out. The speaker button mutes it.
+  - **Talk, read the reply**: press the mic beside the box and talk; what you say fills the box
+    and is sent when you pause. You can still type.
+  - **Conversation**: no box at all. It listens, answers out loud in a few plain sentences, and
+    listens again; it doesn't listen while it's talking, so it never hears itself. **Click the
+    glass or press space** to interrupt it (or, while you're talking, to send without waiting for
+    the pause). Esc stops or starts listening. What you said is saved as `you (voice)`.
+
+  The same menu picks the **voice** (Heart, Bella, Michael or Fenrir), which brings its persona.
+  The model is told how its replies reach you, so they suit the mode.
 - **The model** comes from [Ollama](https://ollama.com) (`http://127.0.0.1:11434`, or the
-  address in Glass's settings). Pick it from the menu at the top left. Ollama has to be running
-  and have a model pulled (`ollama pull llama3.2`).
+  address in Settings). Ollama has to be running and have a model pulled (`ollama pull llama3.2`).
+- **System prompts.** The chip in the controls shows the one in use; click it for the others, or
+  press **⌘1** to **⌘9**. Up to nine, edited in **Prompts**. Six come with the app: Glass (the
+  all-rounder), Brief, Tutor, Coder, Editor and Sounding board.
+- **The date, time and place** go with every message, already worked out: the weekday and month
+  in words, the part of the day (early morning, afternoon, late night…), the time in 12- and
+  24-hour form, the time zone and its UTC offset, tomorrow's date, the week of the year, and where
+  you are (from Settings, or a guess from the time zone). The model never has to reason about it.
 - **Memory** is Glass's own `MEMORY.md` (`~/Documents/Glass/MEMORY/MEMORY.md`, or the folder set
-  in Glass's settings), so Glass and this app remember the same things. Its text goes with every
-  message; only its last 6,000 characters are sent, if it grows past that. When you ask the model
-  to remember something, it writes `[[remember: …]]` in its reply. That's hidden from you, and the
-  chat asks **Remember "…"?** Only when you click **Remember** is it added to the file as a dated
-  line, so text you paste in can't slip lasting instructions into memory. Any other `[[…]]`
-  (Bash's `[[ -f x ]]`, say) and anything inside code is left as it is.
-- **Long chats** send only their newest messages. The app asks Ollama for an 8,192-token context
-  and fills it with the memory, as much of the conversation as fits, and room for the reply, so
-  the start (with the memory) is never cut off.
+  in Glass's settings), so Glass and this app remember the same things. The brain button turns
+  it on or off for the chat. While it's on, the **memory prompt** (edited in Prompts) goes with
+  every message, with the memory in it (its last 6,000 characters), and tells the model to use
+  what's there and keep it up to date: it writes `[[remember: …]]` for a lasting fact and
+  `[[forget: …]]` for one that's wrong or that you asked it to forget. Those tags are hidden;
+  the change is made and shown under the reply ("Remembered: …") with **Undo**. If you'd rather
+  approve each one, Settings has **Ask me first**, and then the chat asks **Remember "…"?** or
+  **Forget "…"?**. Any other `[[…]]` (Bash's `[[ -f x ]]`, say) and anything inside code is left
+  as it is.
+- **Long chats** send only their newest messages. The app asks Ollama for the context window set
+  in Settings (8K tokens to start) and fills it with the system message, as much of the
+  conversation as fits, and room for the reply, so the start (with the memory) is never cut off.
 - **Every chat is saved** as `glass-chat-<time>.md` in the Glass folder, in Glass's format, so it
   shows up in Glass's transcripts too.
 
-### Chat 2, 3 and 4 (Glass)
+### Diagram (Glass)
 
-Three more chats, the same as Chat underneath (Ollama, the model menu, the memory and its
-**Remember?** questions, a saved transcript) but each built for a different way of talking. Each
-keeps its own conversation and window; all four share the model setting and `MEMORY.md`. The model
-is told how its replies reach you, so they suit it.
+A glass canvas covering most of the screen (90% of it). Type, or press the mic and say, what you
+want drawn: the model answers with a [Mermaid](https://mermaid.js.org) diagram and it's drawn
+there. Ask for a change ("add a cache between the app and the database") and it redraws from the
+diagram as it stands: each request sends the current diagram and only the previous exchange, no
+memory and no chat history. If what it wrote won't draw, Mermaid's error goes back to it once to
+fix. **Undo** goes back to the diagram before (and again to come forward), **Mermaid** opens the
+code beside the canvas to read or edit (and **Draw this**), and you can copy the Mermaid or the
+SVG. Pinch to zoom. Mermaid's script is downloaded once, the first time (from cdn.jsdelivr.net),
+into `~/Library/Application Support/ToolMacTool/mermaid`. The model is the chat's unless Settings
+picks another for diagrams. As in the chat, the controls fade in along the bottom and any part of
+the glass drags it.
 
-- **Chat 2: it talks back.** You type; the reply is read aloud as it streams in, a sentence at a
-  time, so it starts talking with its first sentence. Code isn't read out, and neither are
-  Markdown's marks. The speaker button at the top mutes it (the reply is still written). Esc stops
-  the reply and the voice.
-- **Chat 3: it listens.** Press the mic beside the box and talk: what you say fills the box as you
-  say it and is sent when you pause. Replies are written. It doesn't listen while a reply comes in.
-  You can still type. Esc (or the mic) stops listening.
-- **Chat 4: talk and listen.** No box at all. It starts listening when it opens. Pause and what you
-  said is sent; it answers out loud in a few plain sentences and then listens again. It doesn't
-  listen while it's talking, so it never hears itself. **Click the glass or press space** to
-  interrupt it (or, while you're talking, to send without waiting for the pause). Esc stops or
-  starts listening; closing the window stops the microphone. Its transcript marks what you said
-  as `you (voice)`.
+### Prompts (Glass)
+
+Three tabs:
+
+- **System prompts**: up to nine, in the order the chat lists them (⌘1 to ⌘9). Add, duplicate,
+  delete, drag to reorder, and pick the one new chats start with (★). **Restore the default
+  prompts** brings back the six that came with the app.
+- **Memory prompt**: the one prompt that tells the model how to use `MEMORY.md` and keep it up to
+  date. `{{memory}}` is where the memory goes.
+- **Personas**: who the model is when it speaks in each voice (Heart is warm and calm, Bella
+  bright and curious, Michael steady and practical, Fenrir dry and direct). Used when replies are
+  spoken, or always, or never, as Settings says.
+
+### Settings (Glass)
+
+So the other tools have nothing to set up: Ollama's address, the chat model and (optionally) a
+different one for diagrams, the context window, temperature and whether reasoning models think
+first; how the chat starts (mode, system prompt, memory on, save memories or ask first, when
+personas apply); the voice and its speed; and the time zone, your location and 12- or 24-hour
+time, with a preview of exactly what the model is told. Changes are saved as you make them, in
+`~/Library/Application Support/ToolMacTool/settings.json`. The first time, the address and model
+come from Glass's settings.
 
 ### Memory (Glass)
 
@@ -190,7 +237,8 @@ first.
 
 1. Write the logic in `Sources/ToolCore/`, which uses only Foundation. Add tests in
    `Tests/ToolCoreTests/`.
-2. Give it a SwiftUI view. `Zips.swift`, `ChatView.swift` and `MemoryView.swift` are examples.
+2. Give it a SwiftUI view. `Zips.swift`, `ChatView.swift`, `DiagramView.swift` and `MemoryView.swift`
+   are examples. Settings it needs go in `AppSettings` (ToolCore), shown in `SettingsView.swift`.
 3. In `Sources/ToolMacTool/Tools.swift`, add a `Tool`. It needs a short name for the tile, a
    title and description for the tooltip, an SF Symbol, and an `open` that shows its window
    (`Windows.show`). Put it in a section of `Tools.sections`, or add a new section; each section
@@ -206,10 +254,12 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
 Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
+                              settings, prompts and personas, the date and time for the model, diagrams,
                               spoken text and sentences, captions, phrases, voices, dictation files, updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
-                              Zips, Chat + ChatView + Glass, VoiceChat (chats 2–4), Neural (the speech
+                              Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
+                              Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               MemoryView, HUD, Updater
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)

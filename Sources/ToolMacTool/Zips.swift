@@ -219,9 +219,12 @@ struct ZipProblem: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Open Privacy Settings") { NSWorkspace.shared.open(ZipModel.privacySettings) }
-                .buttonStyle(.link)
-                .font(.caption)
+            HStack(spacing: 10) {
+                Button("Open Privacy Settings") { NSWorkspace.shared.open(ZipModel.privacySettings) }
+                Button("Copy the error") { Clipboard.copy(text) }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
         }
     }
 }
@@ -391,7 +394,7 @@ struct ZipOutcome: View {
                 }
             }
         case .failed(let why):
-            Text(why).font(.callout).foregroundStyle(.orange)
+            ErrorLine(text: why)
         default:
             EmptyView()
         }

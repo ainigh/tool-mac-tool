@@ -129,4 +129,34 @@ final class MemoryTests: XCTestCase {
         XCTAssertTrue(text.range(of: #"^### \d\d:\d\d:\d\d · you\n\nhello\n\n### \d\d:\d\d:\d\d · llama3.2 \(stopped\)\n\nhi\n\n$"#,
                                  options: .regularExpression) != nil, text)
     }
+
+    func testForgetTagsAreHiddenAndCollected() {
+        let r = MemoryStore.extractAll("Done. [[forget: Lives in Lagos]][[remember: Lives in Accra]]")
+        XCTAssertEqual(r.shown, "Done.")
+        XCTAssertEqual(r.remember, ["Lives in Accra"])
+        XCTAssertEqual(r.forget, ["Lives in Lagos"])
+        XCTAssertEqual(MemoryStore.hideTags("Ok [[forg"), "Ok ")
+        XCTAssertEqual(MemoryStore.hideTags("Ok [[forget: half"), "Ok ")
+    }
+
+    func testForgetRemovesTheLine() throws {
+        let m = MemoryStore(url: root.appendingPathComponent("MEMORY/MEMORY.md"))
+        try m.remember("Lives in Lagos")
+        try m.remember("Has a cat called Mo")
+        try m.remember("Likes green tea")
+        XCTAssertEqual(try m.forget("lives in  lagos."), ["Lives in Lagos"])
+        XCTAssertEqual(MemoryStore.facts(in: m.read()), ["has a cat called mo", "likes green tea"])
+        // Part of a single line is enough; nothing that matches, nothing goes.
+        XCTAssertEqual(try m.forget("cat called Mo"), ["Has a cat called Mo"])
+        XCTAssertEqual(try m.forget("dogs"), [])
+        XCTAssertTrue(m.read().hasPrefix("# Memory"))
+        XCTAssertEqual(MemoryStore.facts(in: m.read()), ["likes green tea"])
+    }
+
+    func testPromptUsesTheInstruction() {
+        let p = MemoryStore.prompt(memory: "- Likes tea", instruction: "Rules.\n<m>{{memory}}</m>")
+        XCTAssertEqual(p, "Rules.\n<m>- Likes tea</m>")
+        XCTAssertEqual(MemoryStore.prompt(memory: "", instruction: "Rules."), "Rules.\n\nYour memory:\n\n(empty)")
+        XCTAssertTrue(MemoryStore.prompt(memory: "x").contains("[[forget:"))
+    }
 }

@@ -32,7 +32,7 @@ enum Tools {
     static let sections: [ToolSection] = [
         ToolSection(title: "Files", tools: [unzip], extra: .recentZips),
         ToolSection(title: "Voice", tools: [readAloud, dictate, transcribe]),
-        ToolSection(title: "Glass", tools: [chat, chat2, chat3, chat4, memory]),
+        ToolSection(title: "Glass", tools: [chat, diagram, memory, prompts, settings]),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }
@@ -53,42 +53,33 @@ enum Tools {
         id: "chat",
         name: "Chat",
         title: "Chat with Glass",
-        subtitle: "A floating glass panel to chat with a local model (through Ollama), by typing. It remembers what you ask it to, in MEMORY.md, which all four chats share.",
+        subtitle: "A floating glass panel to chat with a local model (through Ollama). Type, talk, or both: pick how from its controls. It remembers what matters in MEMORY.md, uses the system prompt you pick (⌘1–⌘9), and knows the date, time and place.",
         symbol: "bubble.left.and.text.bubble.right",
-        open: { model in ChatWindow.show(model.chat) })
+        open: { model in ChatWindow.show(model.chat, link: model.chatLink) })
 
-    static let chat2 = Tool(
-        id: "chat2",
-        name: "Chat 2",
-        title: "Chat 2: it talks back",
-        subtitle: "Type, and the reply is read aloud as it comes in, a sentence at a time. Mute it from the speaker button.",
-        symbol: "speaker.wave.2.bubble.left",
-        open: { model in openChat(.speaks, model) })
+    static let diagram = Tool(
+        id: "diagram",
+        name: "Diagram",
+        title: "Draw a diagram (Mermaid)",
+        subtitle: "Say or type what you want drawn, and the model draws it as a Mermaid diagram on a big glass canvas. Ask for changes and it redraws from the current diagram.",
+        symbol: "point.3.connected.trianglepath.dotted",
+        open: { model in DiagramWindow.show(model.diagram) })
 
-    static let chat3 = Tool(
-        id: "chat3",
-        name: "Chat 3",
-        title: "Chat 3: it listens",
-        subtitle: "Press the mic and talk instead of typing: your words fill the box and are sent when you pause. Replies are written.",
-        symbol: "mic.badge.plus",
-        open: { model in openChat(.listens, model) })
+    static let prompts = Tool(
+        id: "prompts",
+        name: "Prompts",
+        title: "System prompts, memory prompt and personas",
+        subtitle: "Up to nine system prompts to pick from in the chat, the prompt that tells the model how to use and keep its memory, and a persona for each voice.",
+        symbol: "text.quote",
+        open: { _ in PromptsWindow.show() })
 
-    static let chat4 = Tool(
-        id: "chat4",
-        name: "Chat 4",
-        title: "Chat 4: talk and listen",
-        subtitle: "A spoken conversation with nothing to type in: it listens, answers out loud in a few sentences, and listens again. Click or press space to interrupt.",
-        symbol: "waveform.and.mic",
-        open: { model in
-            let (chat, link) = model.conversation(.voice)
-            if let link { VoiceChatWindow.show(chat, link: link) }
-        })
-
-    @MainActor
-    static func openChat(_ kind: ChatKind, _ model: AppModel) {
-        let (chat, link) = model.conversation(kind)
-        ChatWindow.show(chat, link: link)
-    }
+    static let settings = Tool(
+        id: "settings",
+        name: "Settings",
+        title: "Settings",
+        subtitle: "The model and where Ollama is, how the chat starts (mode, prompt, memory), the voice, and the time zone and place the model is told about.",
+        symbol: "gearshape",
+        open: { _ in SettingsWindow.show() })
 
     static let readAloud = Tool(
         id: "read-aloud",
@@ -118,7 +109,7 @@ enum Tools {
         id: "memory",
         name: "Memory",
         title: "Glass's memory",
-        subtitle: "View and edit MEMORY.md: what Glass knows about you, sent with every message.",
+        subtitle: "View and edit MEMORY.md: what Glass knows about you, sent with every message while memory is on, and kept up to date by the model.",
         symbol: "brain",
         open: { _ in MemoryWindow.show() })
 }

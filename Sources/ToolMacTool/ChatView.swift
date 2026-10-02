@@ -4,47 +4,53 @@ import ToolCore
 
 /// The chat's own window: borderless and clear, sized to the glass panel plus a margin for its
 /// glow, so nothing invisible sits over other windows. It's just the box you type in when there's
-/// nothing to show, and opens into the full panel when there's a conversation.
+/// nothing to show, and opens into the full panel when there's a conversation. In a conversation
+/// (talk and listen) it holds the voice view instead. Drag it by any part that isn't a control.
 @MainActor
 enum ChatWindow {
     /// Room around the panel for its glow (and for it to swell into).
     static let margin: CGFloat = 30
+    static let id = "chat"
 
-    /// `link`: Chat 2's voice or Chat 3's microphone.
-    static func show(_ chat: ChatModel, link: VoiceLink? = nil) {
-        let id = chat.kind.windowID
+    static func show(_ chat: ChatModel, link: VoiceLink) {
         Windows.show(id) {
-            let card = ChatView.cardSize(small: chat.messages.isEmpty, smallHeight: nil)
+            let card = chat.mode == .voice ? VoiceChatView.size
+                : ChatView.cardSize(small: chat.messages.isEmpty, smallHeight: nil)
             let panel = GlassPanel(size: frame(for: card))
-            panel.level = .floating
+            panel.dragsAnywhere = true
+            panel.level = chat.pinned ? .floating : .normal
             let close = {
-                link?.closed()
+                link.closed()
                 panel.orderOut(nil)
             }
-            let view = ChatView(chat: chat, link: link,
-                                close: close,
+            let view = ChatRoot(chat: chat, link: link, close: close,
                                 pin: { on in panel.level = on ? .floating : .normal },
                                 resize: { card in resize(panel, to: card, animate: true) })
             let host = FirstClickHostingView(rootView: view)
             host.sizingOptions = []          // the window sets the size; the view fills it
             panel.contentView = host
-            panel.commands = ["w": close, "n": { chat.newChat() }]
-            // Esc stops a reply, then the voice, then the microphone; with nothing going on and
-            // nothing typed, it puts the chat away.
-            panel.onEscape = {
-                if chat.phase != .idle {
-                    chat.stop()
-                    link?.speaker?.stop()
-                } else if link?.speaker?.speaking == true {
-                    link?.speaker?.stop()
-                } else if link?.listener?.on == true {
-                    link?.listener?.stop()
-                } else if chat.input.isEmpty {
-                    close()
-                } else {
-                    return false
-                }
+            var commands: [String: () -> Void] = ["w": close, "n": { chat.newChat() }]
+            for n in 1...SystemPrompt.limit { commands["\(n)"] = { chat.choosePrompt(number: n) } }
+            panel.commands = commands
+            // In a conversation the space bar interrupts (or sends what you said so far).
+            panel.onKey = { key in
+                guard key == " ", chat.mode == .voice else { return false }
+                link.interrupt()
                 return true
+            }
+            // Esc stops a reply, then the voice, then the microphone; with nothing going on and
+            // nothing typed, it puts the chat away. In a conversation it stops or starts listening.
+            panel.onEscape = {
+                if chat.mode == .voice {
+                    if chat.phase != .idle || link.speaker.speaking { link.interrupt() } else { link.toggleMic() }
+                    return true
+                }
+                if link.stopSomething() { return true }
+                if chat.input.isEmpty {
+                    close()
+                    return true
+                }
+                return false
             }
             if !panel.setFrameUsingName("ToolMacTool.\(id)"), let screen = NSScreen.main {
                 let v = screen.visibleFrame
@@ -54,6 +60,7 @@ enum ChatWindow {
             panel.setFrameAutosaveName("ToolMacTool.\(id)")
             return panel
         }
+        link.opened()
         chat.loadModels()
     }
 
@@ -72,20 +79,36 @@ enum ChatWindow {
     }
 }
 
+/// The chat in its mode: the typing chat, or the voice view of a conversation.
+struct ChatRoot: View {
+    @ObservedObject var chat: ChatModel
+    let link: VoiceLink
+    let close: () -> Void
+    let pin: (Bool) -> Void
+    let resize: (CGSize) -> Void
+
+    var body: some View {
+        if chat.mode == .voice {
+            VoiceChatView(chat: chat, link: link, listener: link.listener, speaker: link.speaker,
+                          close: close, pin: pin, resize: resize)
+        } else {
+            ChatView(chat: chat, link: link, close: close, pin: pin, resize: resize)
+        }
+    }
+}
+
 /// The chat, laid out like Glass's own page: a glass panel split by a glowing line. Above it, the
-/// status (a colored light and the model) and the reply, as large as it fits, in the colors moving
-/// behind the glass. Below it, what you're typing, in the opposite colors. The controls fade in
-/// when the pointer is over the panel. With nothing to show, only the status and the box below
-/// the line are there.
+/// reply, as large as it fits, in the colors moving behind the glass. Below it, what you're
+/// typing, in the opposite colors, and under that a row of controls that fades in while the
+/// pointer is over the panel. With nothing to show, only the box and the controls are there.
 struct ChatView: View {
     @ObservedObject var chat: ChatModel
-    let link: VoiceLink?
+    let link: VoiceLink
     let close: () -> Void
     let pin: (Bool) -> Void
     let resize: (CGSize) -> Void
 
     @State private var collapsed = false
-    @State private var pinned = true
     @State private var hovering = false
     @State private var clock = GlassClock()
     /// The hue the words take: picked up from the moving glass each time you send (so they don't
@@ -101,11 +124,11 @@ struct ChatView: View {
 
     static let width: CGFloat = 520
     static let height: CGFloat = 600
-    /// The part below the line, when the panel is open.
-    static let promptHeight: CGFloat = 196
+    /// The part below the line, when the panel is open (the box and the controls).
+    static let promptHeight: CGFloat = 200
 
     static func cardSize(small: Bool, smallHeight: CGFloat?) -> CGSize {
-        small ? CGSize(width: width, height: smallHeight ?? 128) : CGSize(width: width, height: height)
+        small ? CGSize(width: width, height: smallHeight ?? 112) : CGSize(width: width, height: height)
     }
 
     var small: Bool { collapsed || chat.messages.isEmpty }
@@ -122,13 +145,24 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             top
-            GlowLine(clock: clock, mood: mood, paused: still)
-                .padding(.horizontal, 26)
-            PromptWell(chat: chat, link: link, ink: ink, small: small, sent: sent)
-                .padding(.horizontal, 26)
-                .padding(.top, small ? 12 : 16)
-                .padding(.bottom, small ? 14 : 10)
-                .frame(height: small ? nil : Self.promptHeight)
+            if !small {
+                GlowLine(clock: clock, mood: mood, paused: still)
+                    .padding(.horizontal, 26)
+            }
+            VStack(spacing: 0) {
+                PromptWell(chat: chat, link: link, ink: ink, small: small, sent: sent)
+                    .padding(.horizontal, 26)
+                    .padding(.top, small ? 14 : 16)
+                    .padding(.bottom, 8)
+                    .frame(maxHeight: small ? nil : .infinity)
+                ChatControls(chat: chat, link: link, ink: ink, show: hovering,
+                             collapsed: chat.messages.isEmpty ? nil : $collapsed, voiceStatus: nil,
+                             close: close, pin: pin)
+                    .padding(.leading, 18)
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 10)
+            }
+            .frame(height: small ? nil : Self.promptHeight)
         }
         .frame(width: Self.width, height: small ? nil : Self.height)
         .fixedSize(horizontal: false, vertical: small)
@@ -139,7 +173,7 @@ struct ChatView: View {
         })
         .background(GlassCard(clock: clock, mood: mood, swell: swell, paused: still))
         .onHover { h in
-            withAnimation(h ? .easeOut(duration: 0.3) : .easeInOut(duration: 1.6)) { hovering = h }
+            withAnimation(h ? .easeOut(duration: 0.25) : .easeInOut(duration: 1.2)) { hovering = h }
         }
         .padding(ChatWindow.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -147,6 +181,7 @@ struct ChatView: View {
         .animation(.easeInOut(duration: 0.25), value: active)
         .animation(.easeOut(duration: 0.2), value: chat.problem)
         .environment(\.colorScheme, .dark)
+        .onAppear { resize(cardSize) }
         .onChange(of: cardSize) { resize($0) }
         .onChange(of: chat.phase) { phase in
             // Sending from the shrunken panel opens it up again, so the reply can be seen.
@@ -165,31 +200,19 @@ struct ChatView: View {
 
     var top: some View {
         VStack(spacing: 0) {
-            ChatBar(chat: chat, link: link, ink: ink, collapsed: $collapsed, pinned: $pinned,
-                    showControls: hovering, close: close, pin: pin)
-                .padding(.leading, 18)
-                .padding(.trailing, 14)
-                .padding(.top, 12)
-                .padding(.bottom, small ? 10 : 6)
-            if let listener = link?.listener {
-                ListenerProblem(listener: listener)
-                    .padding(.horizontal, 22)
-            }
+            ListenerProblem(listener: link.listener, mode: chat.mode)
             if !small {
                 ReplyWell(chat: chat, ink: ink)
                     .padding(.horizontal, 26)
+                    .padding(.top, 20)
                     .padding(.bottom, 14)
                     .frame(maxHeight: .infinity)
             } else if chat.problem != nil {
-                problemRow
+                ChatProblem(chat: chat)
                     .padding(.horizontal, 22)
-                    .padding(.bottom, 12)
+                    .padding(.top, 14)
             }
         }
-    }
-
-    var problemRow: some View {
-        ChatProblem(chat: chat)
     }
 
     /// You sent something: a ring spreads from the box and the glass livens up.
@@ -223,63 +246,87 @@ struct ChatView: View {
     }
 }
 
-// MARK: - The status line
+// MARK: - The controls, along the bottom
 
-/// The status on the left (click it for the models), the empty middle to drag the window by, and
-/// the controls on the right, which show while the pointer is over the panel.
-struct ChatBar: View {
+/// The row along the bottom of the glass. The status light is always there; the rest fades in
+/// while the pointer is over the panel: the model, how you talk (the mode), the system prompt,
+/// memory on or off, the voice, more (memory, prompts, settings), and on the right new chat,
+/// shrink, keep on top and close. The empty space in it moves the window, like the rest of the glass.
+struct ChatControls: View {
     @ObservedObject var chat: ChatModel
-    let link: VoiceLink?
+    @ObservedObject var link: VoiceLink
     let ink: Double
-    @Binding var collapsed: Bool
-    @Binding var pinned: Bool
-    let showControls: Bool
+    let show: Bool
+    /// Shrink to just the box (the typing chat, with a conversation).
+    let collapsed: Binding<Bool>?
+    /// A conversation's status ("Listening…"), shown instead of the model's name.
+    let voiceStatus: (StatusDot.Kind, String)?
     let close: () -> Void
     let pin: (Bool) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            ChatStatus(chat: chat, ink: ink)
-            WindowDragArea()
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
-                .help("Drag to move")
-            controls
-                .opacity(showControls ? 1 : 0)
-                .offset(y: showControls ? 0 : -6)
-                .allowsHitTesting(showControls)
-        }
-    }
-
-    var controls: some View {
-        HStack(spacing: 6) {
-            if let link, let speaker = link.speaker {
-                SpeakToggle(link: link, speaker: speaker)
-            }
-            GlassIcon(symbol: "brain", help: "Memory (MEMORY.md)") { MemoryWindow.show() }
-            GlassIcon(symbol: "sparkles", help: "New chat (⌘N)") { chat.newChat() }
-                .disabled(chat.messages.isEmpty && chat.phase == .idle)
-            if !chat.messages.isEmpty {
-                GlassIcon(symbol: collapsed ? "chevron.down" : "chevron.up",
-                          help: collapsed ? "Show the conversation" : "Shrink to just the box") {
-                    collapsed.toggle()
+        HStack(spacing: 5) {
+            if let voiceStatus {
+                HStack(spacing: 9) {
+                    StatusDot(kind: voiceStatus.0, hue: ink)
+                    Text(voiceStatus.1).lineLimit(1)
                 }
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.66))
+                .padding(.leading, 8)
+                .padding(.trailing, 4)
+                .fixedSize()
+            } else {
+                ChatStatus(chat: chat, ink: ink, showName: show)
             }
-            GlassIcon(symbol: pinned ? "pin.fill" : "pin",
-                      help: pinned ? "Stays on top (click to let go)" : "Keep on top") {
-                pinned.toggle()
-                pin(pinned)
+            Group {
+                GlassIcon(symbol: chat.mode.symbol, help: "How you talk: \(chat.mode.title) (click to change)") {
+                    ChatMenus.mode(chat)
+                }
+                PromptChip(chat: chat)
+                MemoryToggle(chat: chat)
+                if chat.mode.speaks {
+                    SpeakToggle(link: link, speaker: link.speaker)
+                }
+                if chat.mode == .voice {
+                    GlassIcon(symbol: link.listener.on ? "mic.fill" : "mic.slash",
+                              help: link.listener.on ? "Stop listening (Esc)" : "Listen (Esc)") { link.toggleMic() }
+                }
+                GlassIcon(symbol: "ellipsis", help: "Model, memory, prompts and settings") { ChatMenus.more(chat) }
             }
-            GlassIcon(symbol: "xmark", help: "Close (⌘W, or Esc when the box is empty)", action: close)
+            .opacity(show ? 1 : 0)
+            .allowsHitTesting(show)
+            Spacer(minLength: 4)
+            Group {
+                GlassIcon(symbol: "sparkles", help: "New chat (⌘N)") { chat.newChat() }
+                    .disabled(chat.messages.isEmpty && chat.phase == .idle)
+                if let collapsed {
+                    GlassIcon(symbol: collapsed.wrappedValue ? "chevron.down" : "chevron.up",
+                              help: collapsed.wrappedValue ? "Show the conversation" : "Shrink to just the box") {
+                        collapsed.wrappedValue.toggle()
+                    }
+                }
+                GlassIcon(symbol: chat.pinned ? "pin.fill" : "pin",
+                          help: chat.pinned ? "Stays on top (click to let go)" : "Keep on top") {
+                    chat.pinned.toggle()
+                    pin(chat.pinned)
+                }
+                GlassIcon(symbol: "xmark", help: "Close (⌘W, or Esc when the box is empty)", action: close)
+            }
+            .opacity(show ? 1 : 0)
+            .offset(y: show ? 0 : 4)
+            .allowsHitTesting(show)
         }
+        .frame(height: 30)
     }
 }
 
-/// The colored light and what's going on (the model's name when it's ready). Clicking it lists
-/// the models Ollama has.
+/// The colored light and what's going on (the model's name when it's ready, shown on hover).
+/// Clicking it lists the models Ollama has.
 struct ChatStatus: View {
     @ObservedObject var chat: ChatModel
     let ink: Double
+    let showName: Bool
     @State private var hover = false
 
     var kind: StatusDot.Kind {
@@ -302,22 +349,20 @@ struct ChatStatus: View {
 
     var body: some View {
         Button { ModelMenu.show(chat) } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
                 StatusDot(kind: kind, hue: ink)
                 Text(label)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: 220, alignment: .leading)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .opacity(hover ? 0.7 : 0)
+                    .frame(maxWidth: 104, alignment: .leading)
+                    .opacity(showName ? 1 : 0)
             }
-            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .font(.system(size: 12.5, weight: .medium, design: .rounded))
             .foregroundStyle(.white.opacity(0.72))
             .padding(.leading, 8)
-            .padding(.trailing, 9)
+            .padding(.trailing, 8)
             .frame(height: 26)
-            .background(Capsule().fill(.white.opacity(hover ? 0.1 : 0)))
+            .background(Capsule().fill(.white.opacity(hover && showName ? 0.1 : 0)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -325,6 +370,129 @@ struct ChatStatus: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
         .help(chat.model.isEmpty ? "Pick a model (from Ollama)" : "\(chat.model) (from Ollama): click to switch")
+    }
+}
+
+/// The system prompt in use, by name: click for the others (⌘1 to ⌘9 pick them too).
+struct PromptChip: View {
+    @ObservedObject var chat: ChatModel
+    @State private var hover = false
+
+    var body: some View {
+        let number = (chat.settings.prompts.firstIndex { $0.id == chat.prompt.id } ?? 0) + 1
+        Button { ChatMenus.prompts(chat) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "text.quote")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(chat.prompt.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 76, alignment: .leading)
+            }
+            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(hover ? 0.95 : 0.72))
+            .padding(.horizontal, 9)
+            .frame(height: 28)
+            .background(Capsule().fill(.white.opacity(hover ? 0.14 : 0.06)))
+            .overlay(Capsule().stroke(.white.opacity(hover ? 0.28 : 0.12), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
+        .help("System prompt: \(chat.prompt.name) (⌘\(number)). Click to switch or edit them.")
+    }
+}
+
+/// Memory on (MEMORY.md goes with each message, and the model keeps it up to date) or off.
+struct MemoryToggle: View {
+    @ObservedObject var chat: ChatModel
+
+    var body: some View {
+        GlassIcon(symbol: "brain",
+                  help: chat.memoryOn ? "Memory is on: MEMORY.md goes with every message, and the model keeps it up to date. Click to turn it off for this chat."
+                                      : "Memory is off for this chat: nothing is read or saved. Click to turn it on.") {
+            chat.memoryOn.toggle()
+        }
+        .overlay {
+            if !chat.memoryOn {
+                Capsule().fill(Color.white.opacity(0.7))
+                    .frame(width: 1.5, height: 17)
+                    .rotationEffect(.degrees(-45))
+                    .allowsHitTesting(false)
+            }
+        }
+        .opacity(chat.memoryOn ? 1 : 0.6)
+    }
+}
+
+/// The chat's menus, as plain AppKit menus at the pointer: they work the same in any window,
+/// borderless or not.
+@MainActor
+enum ChatMenus {
+    static func pop(_ menu: NSMenu) {
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    /// How you talk, and which voice answers.
+    static func mode(_ chat: ChatModel) {
+        let menu = NSMenu()
+        menu.addItem(header("How you talk"))
+        for kind in ChatKind.allCases {
+            let item = ActionMenuItem(title: kind.title) { chat.mode = kind }
+            item.image = NSImage(systemSymbolName: kind.symbol, accessibilityDescription: nil)
+            item.state = kind == chat.mode ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(header("Voice (and its persona)"))
+        for voice in NeuralVoice.all {
+            let item = ActionMenuItem(title: VoiceSettings.label(voice)) {
+                VoiceSettings.voice = voice
+                chat.objectWillChange.send()
+                Speaker.preview()
+            }
+            item.state = voice == VoiceSettings.voice ? .on : .off
+            menu.addItem(item)
+        }
+        pop(menu)
+    }
+
+    /// The system prompts (⌘1 to ⌘9), and a way to edit them.
+    static func prompts(_ chat: ChatModel) {
+        let menu = NSMenu()
+        menu.addItem(header("System prompt"))
+        for (i, p) in chat.settings.prompts.enumerated() {
+            let item = ActionMenuItem(title: p.name) { chat.promptID = p.id }
+            item.keyEquivalent = "\(i + 1)"
+            item.keyEquivalentModifierMask = .command
+            item.state = p.id == chat.prompt.id ? .on : .off
+            item.toolTip = p.text
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem(title: "Edit prompts and personas…") { PromptsWindow.show() })
+        pop(menu)
+    }
+
+    /// The model, the memory file, the prompts, the settings.
+    static func more(_ chat: ChatModel) {
+        let menu = NSMenu()
+        let models = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        models.submenu = ModelMenu.menu(chat)
+        menu.addItem(models)
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem(title: "Edit memory (MEMORY.md)…") { MemoryWindow.show() })
+        menu.addItem(ActionMenuItem(title: "Edit prompts and personas…") { PromptsWindow.show() })
+        menu.addItem(ActionMenuItem(title: "Settings…") { SettingsWindow.show() })
+        pop(menu)
+    }
+
+    static func header(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
     }
 }
 
@@ -336,8 +504,7 @@ enum ModelMenu {
         model.hasSuffix(":latest") ? String(model.dropLast(":latest".count)) : model
     }
 
-    /// A plain AppKit menu at the pointer: it works the same in any window, borderless or not.
-    static func show(_ chat: ChatModel) {
+    static func menu(_ chat: ChatModel) -> NSMenu {
         let menu = NSMenu()
         if chat.models.isEmpty {
             let none = NSMenuItem(title: "No models yet (is Ollama running?)", action: nil, keyEquivalent: "")
@@ -351,7 +518,12 @@ enum ModelMenu {
         }
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem(title: "Look again") { chat.loadModels() })
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        return menu
+    }
+
+    /// A plain AppKit menu at the pointer: it works the same in any window, borderless or not.
+    static func show(_ chat: ChatModel) {
+        ChatMenus.pop(menu(chat))
     }
 }
 
@@ -377,7 +549,8 @@ struct Exchange: Identifiable {
     let id: UUID
     let ask: String
     var reply: ChatModel.Message?
-    var notes: [String] = []
+    /// What was remembered or forgotten after it.
+    var notes: [ChatModel.Message] = []
 
     static func group(_ messages: [ChatModel.Message]) -> [Exchange] {
         var out: [Exchange] = []
@@ -388,7 +561,7 @@ struct Exchange: Identifiable {
             case .assistant:
                 if let last = out.indices.last, out[last].reply == nil { out[last].reply = m }
             case .note:
-                if let last = out.indices.last { out[last].notes.append(m.text) }
+                if let last = out.indices.last { out[last].notes.append(m) }
             case .proposal:
                 break
             }
@@ -730,11 +903,8 @@ struct ReplyActions: View {
                           systemImage: note == "stopped" ? "stop.circle" : "exclamationmark.circle")
                         .foregroundStyle(.white.opacity(0.42))
                 }
-                if let remembered = exchange.notes.last {
-                    Label(remembered, systemImage: "checkmark.circle.fill")
-                        .lineLimit(1)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .help(exchange.notes.joined(separator: "\n"))
+                if let last = exchange.notes.last {
+                    MemoryNote(chat: chat, note: last, all: exchange.notes)
                 }
             }
             Spacer(minLength: 4)
@@ -815,7 +985,33 @@ struct CopyButton: View {
     }
 }
 
-/// A fact the model wants to remember: nothing is written to MEMORY.md until you say yes.
+/// What was just remembered or forgotten, with a way to take it back.
+struct MemoryNote: View {
+    @ObservedObject var chat: ChatModel
+    let note: ChatModel.Message
+    let all: [ChatModel.Message]
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Label(note.text, systemImage: note.undone ? "arrow.uturn.backward.circle"
+                    : note.forgetting ? "minus.circle.fill" : "checkmark.circle.fill")
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(.white.opacity(0.5))
+                .help(all.map(\.text).joined(separator: "\n"))
+            if !note.undone {
+                Button("Undo") { chat.undo(note.id) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .underline()
+                    .help(note.forgetting ? "Put it back in MEMORY.md" : "Take it out of MEMORY.md")
+            }
+        }
+    }
+}
+
+/// A change the model wants to make to memory (when Settings says to ask first): nothing is
+/// written to MEMORY.md until you say yes.
 struct ProposalRow: View {
     @ObservedObject var chat: ChatModel
     let message: ChatModel.Message
@@ -828,7 +1024,7 @@ struct ProposalRow: View {
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(.white.opacity(0.09)))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Remember this?")
+                Text(message.forgetting ? "Forget this?" : "Remember this?")
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.5))
                 Text(message.text)
@@ -838,13 +1034,13 @@ struct ProposalRow: View {
             }
             Spacer(minLength: 6)
             PillButton(title: "Not now") { chat.dismiss(message.id) }
-            PillButton(title: "Remember", prominent: true) { chat.accept(message.id) }
+            PillButton(title: message.forgetting ? "Forget" : "Remember", prominent: true) { chat.accept(message.id) }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.08)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.14), lineWidth: 0.5))
-        .help("Adds it to MEMORY.md, which goes with every message (Glass reads it too)")
+        .help(message.forgetting ? "Takes it out of MEMORY.md" : "Adds it to MEMORY.md, which goes with every message (Glass reads it too)")
     }
 }
 
@@ -862,10 +1058,12 @@ struct ChatProblem: View {
                 .foregroundStyle(Self.pink)
             Text(chat.problem ?? "")
                 .foregroundStyle(Color(red: 1, green: 0.8, blue: 0.84))
-                .lineLimit(2)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+                .help(chat.problem ?? "")
             Spacer(minLength: 4)
+            CopyErrorButton(text: chat.problem ?? "")
             PillButton(title: retry ? "Try again" : "Check again") {
                 chat.clearProblem()
                 chat.loadModels()
@@ -898,7 +1096,7 @@ struct ChatProblem: View {
 /// last reply used.
 struct PromptWell: View {
     @ObservedObject var chat: ChatModel
-    let link: VoiceLink?
+    let link: VoiceLink
     let ink: Double
     let small: Bool
     let sent: () -> Void
@@ -936,14 +1134,11 @@ struct PromptWell: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: small ? nil : .infinity, alignment: .topLeading)
-                if let link, let listener = link.listener {
-                    MicButton(link: link, listener: listener, ink: ink)
+                if chat.mode == .listens {
+                    MicButton(link: link, listener: link.listener, ink: ink)
                         .padding(.bottom, 2)
                 }
                 sendButton
-            }
-            if !small {
-                footer
             }
         }
         .onAppear { focused = true }
@@ -966,7 +1161,7 @@ struct PromptWell: View {
     }
 
     var placeholder: String {
-        if link?.listener != nil { return chat.messages.isEmpty ? "Talk (press the mic) or type…" : "Talk or type…" }
+        if chat.mode == .listens { return chat.messages.isEmpty ? "Talk (press the mic) or type…" : "Talk or type…" }
         return chat.messages.isEmpty ? "Ask anything…" : "Type here…"
     }
 
@@ -975,38 +1170,16 @@ struct PromptWell: View {
             if busy {
                 RoundButton(symbol: "stop.fill", help: "Stop (Esc)", enabled: true) {
                     chat.stop()
-                    link?.speaker?.stop()
+                    link.speaker.stop()
                 }
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             } else {
-                RoundButton(symbol: "arrow.up", help: "Send (Return)", enabled: canSend, action: send)
+                RoundButton(symbol: "arrow.up", help: "Send (Return; ⌥Return for a new line)", enabled: canSend, action: send)
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: 0.15), value: busy)
         .padding(.bottom, 2)
-    }
-
-    var footer: some View {
-        HStack(spacing: 10) {
-            if busy {
-                KeyHint(key: "esc", does: "stop")
-            } else {
-                KeyHint(key: "⏎", does: "send")
-                KeyHint(key: "⌥⏎", does: "new line")
-                KeyHint(key: "esc", does: "put away")
-            }
-            WindowDragArea()
-                .frame(maxWidth: .infinity)
-                .frame(height: 18)
-            if let u = chat.usage {
-                Text("\((u.prompt + u.output).formatted()) tokens")
-                    .monospacedDigit()
-                    .help("The last reply read \(u.prompt.formatted()) tokens (memory and conversation) and wrote \(u.output.formatted())")
-            }
-        }
-        .font(.system(size: 11, weight: .medium, design: .rounded))
-        .foregroundStyle(.white.opacity(0.42))
     }
 
     func send() {
@@ -1056,11 +1229,37 @@ struct RoundButton: View {
 /// Why the microphone isn't listening (a permission, no microphone), with a way to try again.
 struct ListenerProblem: View {
     @ObservedObject var listener: Listener
+    let mode: ChatKind
 
     var body: some View {
-        if let problem = listener.problem {
+        if mode.listens, let problem = listener.problem {
             VoiceProblem(text: problem, action: "Try again") { listener.start() }
-                .padding(.bottom, 10)
+                .padding(.horizontal, 22)
+                .padding(.top, 14)
         }
+    }
+}
+
+/// Copies an error message, so it can be pasted into a search or a bug report.
+struct CopyErrorButton: View {
+    let text: String
+    @State private var copied = false
+    @State private var hover = false
+
+    var body: some View {
+        Button {
+            Clipboard.copy(text)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(hover ? 0.95 : 0.6))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(copied ? "Copied" : "Copy the error")
     }
 }
