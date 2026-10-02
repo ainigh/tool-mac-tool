@@ -93,6 +93,48 @@ public struct MemoryStore {
         return line
     }
 
+    /// Takes a fact out: the "- fact" line that says it (case and spacing don't matter, nor the
+    /// date). When no line says exactly that, a single line that contains it goes instead. Returns
+    /// the facts removed (as written), none if nothing matched or it was ambiguous.
+    @discardableResult
+    public func forget(_ fact: String) throws -> [String] {
+        let key = Self.normalized(fact)
+        if key.isEmpty { return [] }
+        let lines = read().components(separatedBy: "\n")
+        var exact: [Int] = [], partial: [Int] = []
+        for (i, line) in lines.enumerated() where line.hasPrefix("- ") {
+            let have = Self.fact(of: line)
+            let known = Self.normalized(have)
+            if known == key {
+                exact.append(i)
+            } else if known.contains(key) || (known.count > 8 && key.contains(known)) {
+                partial.append(i)
+            }
+        }
+        let drop = !exact.isEmpty ? exact : partial.count == 1 ? partial : []
+        if drop.isEmpty { return [] }
+        let removed = drop.map { Self.fact(of: lines[$0]) }
+        let kept = lines.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
+        try write(kept.joined(separator: "\n"))
+        return removed
+    }
+
+    /// "- Likes tea _(2026-09-30)_" → "Likes tea".
+    static func fact(of line: String) -> String {
+        var fact = String(line.dropFirst(2))
+        if let r = fact.range(of: #"\s*_\(\d{4}-\d{2}-\d{2}\)_\s*$"#, options: .regularExpression) {
+            fact.removeSubrange(r)
+        }
+        return fact.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Lowercased, spaces squeezed, a final full stop dropped.
+    static func normalized(_ text: String) -> String {
+        var s = text.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+        while s.hasSuffix(".") { s.removeLast() }
+        return s
+    }
+
     static let day: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -118,38 +160,73 @@ public struct MemoryStore {
 
     // MARK: - What the model is told
 
-    /// The part of the system message about memory. Only the last 6000 characters go, so a huge
-    /// file can't crowd out the conversation.
-    public static func prompt(memory: String) -> String {
+    /// The memory prompt everyone starts with: how the model uses the memory and keeps it up to
+    /// date. `{{memory}}` is where MEMORY.md goes.
+    public static let defaultInstruction = """
+        You have a long-term memory: a Markdown file the user can read and edit, kept across all your \
+        conversations. Here it is:
+
+        <memory>
+        {{memory}}
+        </memory>
+
+        Use it. Treat what's in it as things you already know about the user, and let it shape your answers \
+        (their name, where they are, what they're working on, how they like replies) without announcing that \
+        you remembered. Never invent memories.
+
+        Keep it up to date, with tags anywhere in your reply (they're hidden from the user):
+        - [[remember: one short, self-contained sentence]] when the user asks you to remember something, or \
+        tells you a lasting fact worth keeping: who they are, people and pets in their life, where they live \
+        and work, ongoing projects, preferences, how they like you to answer.
+        - [[forget: the fact as it's written in memory]] when something in memory is wrong, outdated or the \
+        user asks you to forget it. To correct a fact, forget the old one and remember the new one.
+        Don't save small talk, one-off details, secrets (passwords, keys, card numbers) or anything already \
+        in memory. Don't mention the tags.
+        """
+
+    /// The part of the system message about memory: `instruction` with the memory in place of
+    /// `{{memory}}` (or after it, if it has no placeholder). Only the last 6000 characters of the
+    /// memory go, so a huge file can't crowd out the conversation.
+    public static func prompt(memory: String, instruction: String = defaultInstruction) -> String {
         let body = memory.trimmingCharacters(in: .whitespacesAndNewlines)
-        return """
-            You have a long-term memory, kept in a file the user can read and edit. Here it is:
-
-            \(body.isEmpty ? "(empty)" : String(body.suffix(maxPromptCharacters)))
-
-            When the user asks you to remember something, or tells you a lasting fact about themselves \
-            that is worth keeping, suggest adding it by putting [[remember: the fact]] anywhere in your reply \
-            (one short sentence; the user is asked before it's kept). Don't repeat facts already in memory.
-            """
+        let shown = body.isEmpty ? "(empty)" : String(body.suffix(maxPromptCharacters))
+        if instruction.contains(placeholder) {
+            return instruction.replacingOccurrences(of: placeholder, with: shown)
+        }
+        return instruction.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\nYour memory:\n\n" + shown
     }
+
+    public static let placeholder = "{{memory}}"
 
     /// How much of the memory goes with each message.
     public static let maxPromptCharacters = 6000
 
-    static let tag = try! NSRegularExpression(pattern: #"\[\[\s*remember\s*:\s*(.+?)\s*\]\]"#,
+    static let tag = try! NSRegularExpression(pattern: #"\[\[\s*(remember|forget)\s*:\s*(.+?)\s*\]\]"#,
                                               options: [.caseInsensitive, .dotMatchesLineSeparators])
 
-    /// The finished reply without its [[remember: …]] tags, and the facts it suggested. Tags inside
-    /// code (``` blocks or `spans`) are left alone, and so is any other [[…]], like Bash's [[ -f x ]].
+    /// The finished reply without its [[remember: …]] tags, and the facts it suggested.
     public static func extract(_ reply: String) -> (shown: String, facts: [String]) {
-        var facts: [String] = []
+        let all = extractAll(reply)
+        return (all.shown, all.remember)
+    }
+
+    /// The finished reply without its [[remember: …]] and [[forget: …]] tags, the facts to add and
+    /// the facts to drop. Tags inside code (``` blocks or `spans`) are left alone, and so is any
+    /// other [[…]], like Bash's [[ -f x ]].
+    public static func extractAll(_ reply: String) -> (shown: String, remember: [String], forget: [String]) {
+        var remember: [String] = [], forget: [String] = []
         for part in parts(reply) where !part.code {
             let ns = part.text as NSString
             for m in tag.matches(in: part.text, range: NSRange(location: 0, length: ns.length)) {
-                facts.append(ns.substring(with: m.range(at: 1)))
+                let fact = ns.substring(with: m.range(at: 2))
+                if ns.substring(with: m.range(at: 1)).lowercased() == "forget" {
+                    forget.append(fact)
+                } else {
+                    remember.append(fact)
+                }
             }
         }
-        return (hideTags(reply, streaming: false).trimmingCharacters(in: .whitespacesAndNewlines), facts)
+        return (hideTags(reply, streaming: false).trimmingCharacters(in: .whitespacesAndNewlines), remember, forget)
     }
 
     /// The reply without its [[remember: …]] tags. While it streams in, a tag that has started but
@@ -168,12 +245,14 @@ public struct MemoryStore {
         return out
     }
 
-    /// Cuts a trailing "[", "[[", "[[ rem…" or "[[remember: half a fact" (no "]]" yet).
+    /// Cuts a trailing "[", "[[", "[[ rem…" or "[[remember: half a fact" (no "]]" yet), and the
+    /// same for "[[forget: …".
     static func holdBackUnfinishedTag(_ s: String) -> String {
         if let open = s.range(of: "[[", options: .backwards), s[open.upperBound...].range(of: "]]") == nil {
             let rest = s[open.upperBound...].drop(while: \.isWhitespace).lowercased()
-            let key = "remember"
-            if key.hasPrefix(rest) || rest.hasPrefix(key) { return String(s[..<open.lowerBound]) }
+            for key in ["remember", "forget"] where key.hasPrefix(rest) || rest.hasPrefix(key) {
+                return String(s[..<open.lowerBound])
+            }
         }
         if s.hasSuffix("[") && !s.hasSuffix("[[") { return String(s.dropLast()) }
         return s

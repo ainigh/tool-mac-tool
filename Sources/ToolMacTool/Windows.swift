@@ -88,11 +88,20 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 }
 
 /// A borderless, see-through window that can still take the keyboard (plain borderless windows
-/// can't), for UI that draws its own shape. It's moved only by a `WindowDragArea`: with "move by
-/// the background" on, a click on a SwiftUI button can turn into a drag and never reach it.
+/// can't), for UI that draws its own shape. It's moved by a `WindowDragArea`, or, with
+/// `dragsAnywhere`, by dragging any part of it that isn't text to edit or a scroll bar. (AppKit's
+/// own "move by the background" isn't used: a click on a SwiftUI button can turn into a drag and
+/// never reach it.)
 class GlassPanel: NSPanel {
-    /// ⌘ shortcuts, by letter (the edit keys are built in).
+    /// ⌘ shortcuts, by letter or digit (the edit keys are built in).
     var commands: [String: () -> Void] = [:]
+    /// A press anywhere that moves more than a few points drags the window; a press that doesn't
+    /// move is a click, as usual.
+    var dragsAnywhere = false
+    /// Where a press started (the pointer on screen, the window's origin), and whether it's
+    /// become a drag.
+    private var press: (mouse: NSPoint, origin: NSPoint)?
+    private var dragging = false
     /// Esc: return true if it was used (e.g. to stop a reply), else it goes on as usual.
     var onEscape: (() -> Bool)?
     /// Any other key with no modifier held (the characters it types): return true if it was used.
@@ -123,12 +132,66 @@ class GlassPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if dragsAnywhere, moveWindow(event) { return }
         // Caught here, before the text field (which would take Esc for word completion).
         if event.type == .keyDown, event.keyCode == 53, onEscape?() == true { return }
         if event.type == .keyDown, let onKey, let key = event.characters,
            event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function]).isEmpty,
            onKey(key) { return }
         super.sendEvent(event)
+    }
+}
+
+extension GlassPanel {
+    /// Drag-anywhere: true when the event was used to move the window (and shouldn't go on).
+    fileprivate func moveWindow(_ event: NSEvent) -> Bool {
+        switch event.type {
+        case .leftMouseDown:
+            dragging = false
+            press = canDrag(at: event.locationInWindow) ? (NSEvent.mouseLocation, frame.origin) : nil
+            return false
+        case .leftMouseDragged:
+            guard let press else { return false }
+            let now = NSEvent.mouseLocation
+            let dx = now.x - press.mouse.x, dy = now.y - press.mouse.y
+            if !dragging {
+                guard hypot(dx, dy) > 4 else { return false }
+                dragging = true
+                cancelClick(event)
+            }
+            setFrameOrigin(NSPoint(x: press.origin.x + dx, y: press.origin.y + dy))
+            return true
+        case .leftMouseUp:
+            let was = dragging
+            press = nil
+            dragging = false
+            return was
+        default:
+            return false
+        }
+    }
+
+    /// Not on text you edit or select in AppKit (a text field, an editor), a scroll bar, a web
+    /// page or a control: those keep their own drags.
+    private func canDrag(at point: NSPoint) -> Bool {
+        guard let content = contentView, let superview = content.superview else { return false }
+        var view = content.hitTest(superview.convert(point, from: nil))
+        while let v = view, v !== content {
+            if v is NSText || v is NSTextField || v is NSScroller || v is NSControl || v is WindowDragArea.DragView
+                || NSStringFromClass(type(of: v)).contains("WKWebView") { return false }
+            view = v.superview
+        }
+        return true
+    }
+
+    /// The press became a drag: whatever it started on (a button) gets a release far outside it,
+    /// so it lets go without acting.
+    private func cancelClick(_ event: NSEvent) {
+        if let up = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: -10_000, y: -10_000),
+                                       modifierFlags: [], timestamp: event.timestamp, windowNumber: windowNumber,
+                                       context: nil, eventNumber: 0, clickCount: 1, pressure: 0) {
+            super.sendEvent(up)
+        }
     }
 }
 

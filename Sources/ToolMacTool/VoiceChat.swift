@@ -3,66 +3,83 @@ import Combine
 import SwiftUI
 import ToolCore
 
-/// Ties a chat to a voice, the way its kind needs:
-/// - Chat 2 speaks each sentence of a reply as soon as it's complete, while the rest streams in.
-/// - Chat 3 writes what you say into the box as you say it, and sends it when you pause.
-/// - Chat 4 does both, hands-free: it stops listening while it thinks and talks (so it doesn't
-///   hear itself), and listens again when it's done.
+/// Ties the chat to a voice, the way its mode needs:
+/// - "Type, hear the reply" speaks each sentence of a reply as soon as it's complete, while the
+///   rest streams in.
+/// - "Talk, read the reply" writes what you say into the box as you say it, and sends it when you
+///   pause.
+/// - "Conversation" does both, hands-free: it stops listening while it thinks and talks (so it
+///   doesn't hear itself), and listens again when it's done.
 @MainActor
 final class VoiceLink: ObservableObject {
     let chat: ChatModel
-    let speaker: Speaker?
-    let listener: Listener?
-    /// Chat 2: replies are only written.
+    let speaker = Speaker()
+    let listener = Listener()
+    /// Replies are only written, even in a mode that speaks.
     @Published var muted: Bool {
         didSet {
-            UserDefaults.standard.set(muted, forKey: "chat\(chat.kind.number)Muted")
-            if muted { speaker?.stop() }
+            UserDefaults.standard.set(muted, forKey: "chatMuted")
+            if muted { speaker.stop() }
         }
     }
+    /// The chat's window is on screen.
+    private(set) var visible = false
 
     private var stream = SentenceStream()
-    private var watch: AnyCancellable?
+    private var watches: [AnyCancellable] = []
 
     init(chat: ChatModel) {
         self.chat = chat
-        speaker = chat.kind.speaks ? Speaker() : nil
-        listener = chat.kind.listens ? Listener() : nil
-        muted = UserDefaults.standard.bool(forKey: "chat\(chat.kind.number)Muted")
-        // Get the models ready (downloading them the first time) before they're needed.
-        if speaker != nil { _ = Neural.shared.voiceModel() }
-        if listener != nil { _ = Neural.shared.earModel() }
-        listener?.pauseToEnd = chat.kind == .voice ? 1.1 : 1.6
-        listener?.onUtterance = { [weak self] said in self?.heard(said) }
-        speaker?.onDone = { [weak self] in self?.listenAgain() }
+        muted = UserDefaults.standard.bool(forKey: "chatMuted")
+        listener.onUtterance = { [weak self] said in self?.heard(said) }
+        speaker.onDone = { [weak self] in self?.listenAgain() }
         chat.onReplyStart = { [weak self] in self?.replyStarted() }
         chat.onReplyText = { [weak self] text in self?.replyGrew(text) }
         chat.onReplyEnd = { [weak self] text, note in self?.replyEnded(text, note: note) }
         chat.onClear = { [weak self] in self?.cleared() }
-        // Chat 3: what you're saying shows in the box as you say it.
-        if chat.kind == .listens, let listener {
-            watch = listener.$text.sink { [weak self] said in
-                guard let self, listener.on, !listener.held else { return }
-                self.chat.input = said
-            }
-        }
+        // Talking into the box: what you're saying shows in it as you say it.
+        watches.append(listener.$text.sink { [weak self] said in
+            guard let self, self.chat.mode == .listens, self.listener.on, !self.listener.held else { return }
+            self.chat.input = said
+        })
+        // @Published hands over the new mode before it's set.
+        watches.append(chat.$mode.dropFirst().removeDuplicates().sink { [weak self] mode in
+            self?.switched(to: mode)
+        })
+        prepare(chat.mode)
     }
 
-    var talks: Bool { speaker != nil && !muted }
+    var mode: ChatKind { chat.mode }
+    var talks: Bool { mode.speaks && !muted }
 
-    /// The window came up: Chat 4 starts listening.
+    /// Gets the models a mode needs ready (downloading them the first time) before they're needed.
+    private func prepare(_ mode: ChatKind) {
+        if mode.speaks { _ = Neural.shared.voiceModel() }
+        if mode.listens { _ = Neural.shared.earModel() }
+        listener.pauseToEnd = mode == .voice ? 1.1 : 1.6
+    }
+
+    private func switched(to mode: ChatKind) {
+        prepare(mode)
+        if !mode.speaks { speaker.stop() }
+        if !mode.listens || mode == .listens { listener.stop() }
+        if mode == .voice && visible && chat.phase == .idle { listener.start() }
+    }
+
+    /// The window came up: a conversation starts listening.
     func opened() {
-        if chat.kind == .voice { listener?.start() }
+        visible = true
+        if mode == .voice { listener.start() }
     }
 
     /// The window went away: no more talking or listening.
     func closed() {
-        speaker?.stop()
-        listener?.stop()
+        visible = false
+        speaker.stop()
+        listener.stop()
     }
 
     func toggleMic() {
-        guard let listener else { return }
         if listener.on {
             listener.stop()
         } else {
@@ -70,38 +87,55 @@ final class VoiceLink: ObservableObject {
         }
     }
 
-    /// Chat 4's click or space bar: stop the reply (thinking or talking) and listen. While it's
-    /// listening, it sends what's been said so far without waiting for the pause.
-    func interrupt() {
-        if chat.phase != .idle || speaker?.speaking == true {
+    /// Stops whatever's going on: the reply, the voice, then the microphone. False when there
+    /// was nothing to stop.
+    func stopSomething() -> Bool {
+        if chat.phase != .idle {
             chat.stop()
-            speaker?.stop()
+            speaker.stop()
+        } else if speaker.speaking {
+            speaker.stop()
+        } else if listener.on {
+            listener.stop()
+        } else {
+            return false
+        }
+        return true
+    }
+
+    /// A conversation's click or space bar: stop the reply (thinking or talking) and listen. While
+    /// it's listening, it sends what's been said so far without waiting for the pause.
+    func interrupt() {
+        if chat.phase != .idle || speaker.speaking {
+            chat.stop()
+            speaker.stop()
             listenAgain()
-        } else if let listener, listener.on, !listener.text.isEmpty {
+        } else if listener.on, !listener.text.isEmpty {
             listener.endUtterance()
-        } else if let listener, !listener.on {
+        } else if !listener.on {
             listener.start()
         }
     }
 
     private func heard(_ said: String) {
+        guard mode.listens else { return }
         chat.input = said
         chat.send(spoken: true)
     }
 
     private func replyStarted() {
         stream = SentenceStream()
-        speaker?.stop()
-        listener?.hold()
+        speaker.stop()
+        listener.hold()
     }
 
     private func replyGrew(_ text: String) {
-        guard talks, let speaker else { return }
+        guard talks else { return }
         for sentence in stream.update(text) { speaker.say(sentence) }
     }
 
     private func replyEnded(_ text: String, note: String) {
-        guard let speaker, talks else {
+        guard talks else {
             listenAgain()
             return
         }
@@ -109,75 +143,36 @@ final class VoiceLink: ObservableObject {
             speaker.stop()
         } else {
             for sentence in stream.finish(text) { speaker.say(sentence) }
-            if text.isEmpty && chat.kind == .voice { speaker.say("Sorry, I couldn't get a reply.") }
+            if text.isEmpty && mode == .voice { speaker.say("Sorry, I couldn't get a reply.") }
         }
         if !speaker.speaking { listenAgain() }
     }
 
     private func cleared() {
         stream = SentenceStream()
-        speaker?.stop()
+        speaker.stop()
         listenAgain()
     }
 
     private func listenAgain() {
-        guard chat.phase == .idle, speaker?.speaking != true else { return }
-        listener?.release()
+        guard chat.phase == .idle, !speaker.speaking else { return }
+        listener.release()
     }
 }
 
-// MARK: - Chat 4: talk and listen, nothing to type in
-
-@MainActor
-enum VoiceChatWindow {
-    static func show(_ chat: ChatModel, link: VoiceLink) {
-        Windows.show(chat.kind.windowID) {
-            let size = CGSize(width: VoiceChatView.width, height: VoiceChatView.height)
-            let panel = GlassPanel(size: ChatWindow.frame(for: size))
-            panel.level = .floating
-            let close = {
-                link.closed()
-                panel.orderOut(nil)
-            }
-            let host = FirstClickHostingView(rootView: VoiceChatView(chat: chat, link: link, listener: link.listener!,
-                                                                     speaker: link.speaker!, close: close))
-            host.sizingOptions = []
-            panel.contentView = host
-            panel.commands = ["w": close, "n": { chat.newChat() }]
-            panel.onKey = { key in
-                guard key == " " else { return false }
-                link.interrupt()
-                return true
-            }
-            // Esc: stop the reply; when there's none, stop or start listening.
-            panel.onEscape = {
-                if chat.phase != .idle || link.speaker?.speaking == true {
-                    link.interrupt()
-                } else {
-                    link.toggleMic()
-                }
-                return true
-            }
-            if !panel.setFrameUsingName("ToolMacTool.\(chat.kind.windowID)"), let screen = NSScreen.main {
-                let v = screen.visibleFrame
-                panel.setFrameOrigin(NSPoint(x: v.maxX - panel.frame.width - 8, y: v.maxY - panel.frame.height))
-            }
-            panel.setFrameAutosaveName("ToolMacTool.\(chat.kind.windowID)")
-            return panel
-        }
-        link.opened()
-        chat.loadModels()
-    }
-}
+// MARK: - Conversation: talk and listen, nothing to type in
 
 /// The glass with no box: what it's saying above the line, what you're saying below it, and
-/// a light that says whose turn it is. Clicking the glass (or the space bar) interrupts it.
+/// along the bottom a light that says whose turn it is (the controls fade in beside it while the
+/// pointer is over the glass). Clicking the glass (or the space bar) interrupts it.
 struct VoiceChatView: View {
     @ObservedObject var chat: ChatModel
     @ObservedObject var link: VoiceLink
     @ObservedObject var listener: Listener
     @ObservedObject var speaker: Speaker
     let close: () -> Void
+    let pin: (Bool) -> Void
+    let resize: (CGSize) -> Void
 
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
@@ -186,6 +181,7 @@ struct VoiceChatView: View {
 
     static let width: CGFloat = 520
     static let height: CGFloat = 460
+    static let size = CGSize(width: width, height: height)
 
     enum Turn { case off, listening, hearing, thinking, speaking, trouble }
 
@@ -210,8 +206,8 @@ struct VoiceChatView: View {
     var status: (StatusDot.Kind, String) {
         switch turn {
         case .off: return (.trouble, "Not listening: click to start")
-        case .listening: return (.ready, "Listening…")
-        case .hearing: return (.streaming, "Hearing you…")
+        case .listening: return (.ready, "Listening… (pauses send)")
+        case .hearing: return (.streaming, "Hearing you… (space sends now)")
         case .thinking: return (.thinking, "Thinking…")
         case .speaking: return (.streaming, "Speaking: click to interrupt")
         case .trouble: return (.trouble, "Something's wrong")
@@ -220,13 +216,9 @@ struct VoiceChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            bar
-                .padding(.leading, 18)
-                .padding(.trailing, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 6)
             said
                 .padding(.horizontal, 26)
+                .padding(.top, 20)
                 .padding(.bottom, 14)
                 .frame(maxHeight: .infinity)
             GlowLine(clock: clock, mood: mood, paused: false)
@@ -235,8 +227,13 @@ struct VoiceChatView: View {
             hearing
                 .padding(.horizontal, 26)
                 .padding(.top, 14)
-                .padding(.bottom, 12)
-                .frame(height: 150)
+                .padding(.bottom, 6)
+                .frame(height: 120)
+            ChatControls(chat: chat, link: link, ink: ink, show: hovering, collapsed: nil, voiceStatus: status,
+                         close: close, pin: pin)
+                .padding(.leading, 14)
+                .padding(.trailing, 14)
+                .padding(.bottom, 10)
         }
         .frame(width: Self.width, height: Self.height)
         .background(GlassCard(clock: clock, mood: mood, swell: turn == .hearing || turn == .speaking,
@@ -244,11 +241,12 @@ struct VoiceChatView: View {
         .contentShape(Rectangle())
         .onTapGesture { link.interrupt() }
         .onHover { h in
-            withAnimation(h ? .easeOut(duration: 0.3) : .easeInOut(duration: 1.6)) { hovering = h }
+            withAnimation(h ? .easeOut(duration: 0.25) : .easeInOut(duration: 1.2)) { hovering = h }
         }
         .padding(ChatWindow.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
+        .onAppear { resize(Self.size) }
         .onChange(of: listener.level) { level in
             if level > 0.45 && !listener.held { clock.nudge(0.05) }
         }
@@ -257,32 +255,6 @@ struct VoiceChatView: View {
                 ink = clock.frame.hue
                 clock.ripple(x: 0.5, y: 0.8, hue: ink + 180, power: 1.2)
             }
-        }
-    }
-
-    var bar: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 9) {
-                StatusDot(kind: status.0, hue: ink)
-                Text(status.1).lineLimit(1)
-            }
-            .font(.system(size: 13, weight: .medium, design: .rounded))
-            .foregroundStyle(.white.opacity(0.72))
-            .padding(.leading, 8)
-            WindowDragArea()
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
-                .help("Drag to move")
-            HStack(spacing: 6) {
-                GlassIcon(symbol: "brain", help: "Memory (MEMORY.md)") { MemoryWindow.show() }
-                GlassIcon(symbol: "sparkles", help: "New conversation (⌘N)") { chat.newChat() }
-                    .disabled(chat.messages.isEmpty)
-                GlassIcon(symbol: listener.on ? "mic.fill" : "mic.slash",
-                          help: listener.on ? "Stop listening (Esc)" : "Listen (Esc)") { link.toggleMic() }
-                GlassIcon(symbol: "xmark", help: "Close (⌘W): stops listening", action: close)
-            }
-            .opacity(hovering ? 1 : 0)
-            .allowsHitTesting(hovering)
         }
     }
 
@@ -306,6 +278,10 @@ struct VoiceChatView: View {
             ForEach(chat.messages.filter { $0.role == .proposal }) { m in
                 ProposalRow(chat: chat, message: m)
             }
+            if let note = chat.messages.last, note.role == .note {
+                MemoryNote(chat: chat, note: note, all: [note])
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+            }
             if let problem = listener.problem {
                 VoiceProblem(text: problem, action: "Try again") { listener.start() }
             } else if chat.problem != nil {
@@ -319,23 +295,13 @@ struct VoiceChatView: View {
         let lastAsk = chat.messages.last(where: { $0.role == .user })?.text ?? ""
         let live = listener.on && !listener.held
         let text = live && !listener.text.isEmpty ? listener.text : lastAsk
-        return VStack(alignment: .leading, spacing: 8) {
-            Text(text.isEmpty ? (live ? "…" : "") : text)
-                .font(.system(size: text.count < 80 ? 26 : 19, weight: .semibold, design: .rounded))
-                .foregroundStyle(Ink.prompt(ink))
-                .opacity(live && !listener.text.isEmpty ? 1 : 0.5)
-                .lineLimit(4)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            HStack(spacing: 10) {
-                KeyHint(key: "space", does: "interrupt / send now")
-                KeyHint(key: "esc", does: listener.on ? "stop listening" : "listen")
-                Spacer()
-                Text("Pauses send what you said")
-            }
-            .font(.system(size: 11, weight: .medium, design: .rounded))
-            .foregroundStyle(.white.opacity(0.42))
-        }
+        return Text(text.isEmpty ? (live ? "…" : "") : text)
+            .font(.system(size: text.count < 80 ? 26 : 19, weight: .semibold, design: .rounded))
+            .foregroundStyle(Ink.prompt(ink))
+            .opacity(live && !listener.text.isEmpty ? 1 : 0.5)
+            .lineLimit(4)
+            .truncationMode(.head)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -355,6 +321,7 @@ struct VoiceProblem: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             Spacer(minLength: 4)
+            CopyErrorButton(text: text)
             if text.contains("System Settings") {
                 PillButton(title: "Open Settings") { VoiceProblem.openPrivacy(text) }
             }
@@ -375,9 +342,9 @@ struct VoiceProblem: View {
     }
 }
 
-// MARK: - Chat 2 and 3: the voice controls on the typing chat
+// MARK: - The voice controls on the typing chat
 
-/// Chat 2's speaker button: speaking (click to mute), or muted.
+/// The speaker button (in the modes that speak): speaking (click to mute), or muted.
 struct SpeakToggle: View {
     @ObservedObject var link: VoiceLink
     @ObservedObject var speaker: Speaker
@@ -391,7 +358,8 @@ struct SpeakToggle: View {
     }
 }
 
-/// Chat 3's microphone: off, or on with a ring that moves with your voice. Pausing sends.
+/// The microphone beside the box (talking instead of typing): off, or on with a ring that moves
+/// with your voice. Pausing sends.
 struct MicButton: View {
     @ObservedObject var link: VoiceLink
     @ObservedObject var listener: Listener

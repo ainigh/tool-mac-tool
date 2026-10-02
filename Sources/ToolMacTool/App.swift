@@ -33,21 +33,12 @@ final class AppModel: ObservableObject {
     let updater = Updater()
     let zips = ZipModel()
     let chat = ChatModel()
-    // The voice tools and the other three chats, made when first opened.
+    // The chat's voice, the diagram tool and the voice tools, made when first opened.
+    lazy var chatLink = VoiceLink(chat: chat)
+    lazy var diagram = DiagramModel()
     lazy var speaker = Speaker()
     lazy var listener = Listener()
     lazy var transcriber = TranscribeModel()
-    private var chats: [ChatKind: (ChatModel, VoiceLink?)] = [:]
-
-    /// A chat and its voice: one of each kind, kept for as long as the app runs.
-    func conversation(_ kind: ChatKind) -> (ChatModel, VoiceLink?) {
-        if kind == .text { return (chat, nil) }
-        if let made = chats[kind] { return made }
-        let model = ChatModel(kind: kind)
-        let made = (model, Optional(VoiceLink(chat: model)))
-        chats[kind] = made
-        return made
-    }
 
     init() {
         updater.start()
