@@ -18,10 +18,15 @@ APP="build/$NAME.app"
 
 if [[ "${UNIVERSAL:-1}" == 1 ]]; then ARCHS=(--arch arm64 --arch x86_64); else ARCHS=(); fi
 swift build -c release ${ARCHS[@]+"${ARCHS[@]}"}
-BIN="$(swift build -c release ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)/$NAME"
+BINDIR="$(swift build -c release ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)"
+BIN="$BINDIR/$NAME"
 
 rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$NAME"
+# The packages' resource bundles (FluidAudio's), where their code looks for them.
+for bundle in "$BINDIR"/*.bundle; do
+  if [[ -e "$bundle" ]]; then cp -R "$bundle" "$APP/Contents/Resources/"; fi
+done
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -36,13 +41,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>ToolMacToolCommit</key><string>$COMMIT</string>
   <key>ToolMacToolBranch</key><string>$BRANCH</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSDesktopFolderUsageDescription</key><string>To move a download's contents into its folder on the Desktop.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>To find your latest download.</string>
   <key>NSMicrophoneUsageDescription</key><string>To hear you in Dictate and in the chats that listen.</string>
-  <key>NSSpeechRecognitionUsageDescription</key><string>To write down what you say, and to transcribe audio files.</string>
 </dict>
 </plist>
 PLIST

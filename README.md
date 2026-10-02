@@ -20,8 +20,9 @@ gh api -H "Accept: application/vnd.github.raw" repos/ainigh/tool-mac-tool/conten
 ```
 
 It downloads the latest release into `~/Applications` and opens it. If there's no release yet, it
-builds from the source instead. That needs Apple's command line tools, which Homebrew installs; if
-they're missing, run `xcode-select --install`. `TMT_BRANCH=name` installs another branch, built
+builds from the source instead. That needs Apple's command line tools with Swift 6 (Xcode 16's or
+newer), which Homebrew installs; if they're missing, run `xcode-select --install`. The app needs
+macOS 14 (Sonoma) or newer. `TMT_BRANCH=name` installs another branch, built
 here; that copy then follows that branch when it updates.
 
 The app adds itself to your login items the first time it runs. To turn that off, click the sunrise
@@ -83,34 +84,36 @@ button.
 
 ### Read aloud, Dictate, Transcribe (Voice)
 
-These use macOS's own speech: the system voices to speak, and its speech recognition (on this Mac
-when your language supports it) to listen. Nothing else to install. The first time one listens,
-macOS asks to allow **Speech Recognition** and the **Microphone**: click **Allow**. As with the
-folders, macOS may ask again after an update. If something was refused, the tool says so and
-**Open Settings** goes to the right page.
+These speak and listen with open-source models that run on this Mac, through
+[FluidAudio](https://github.com/FluidInference/FluidAudio) on Apple's Neural Engine: the
+**Kokoro-82M** voices (Apache 2.0, the voices Glass used) and **Parakeet TDT v3** to write down
+what's said. Each is downloaded once, the first time a tool needs it (a few hundred MB each, into
+`~/.cache/fluidaudio`); the tool says "Getting … ready" meanwhile, and after that everything works
+offline. They run best on Apple silicon. The first time one listens, macOS asks to allow the
+**Microphone**: click **Allow**. As with the folders, macOS may ask again after an update. If it
+was refused, the tool says so and **Open Settings** goes to the right page.
 
 - **Read aloud.** Paste or type text and press **Read** (⌘Return), or **Paste & read** what's on
   the clipboard. The word being said is lit up; **Pause** and **Stop** do what they say. The pills
   at the top pick the voice and the speed; every tool that speaks uses them. There are four voices,
-  two women's and two men's: the best this Mac has for its language (Premium first, then Enhanced,
-  then the most natural-sounding: Ava and Zoe, Evan and Jamie when they're there). Choosing one says
-  hello in it. While any of the four isn't Premium, the menu's last line opens System Settings →
-  Accessibility → Spoken Content, where **Manage Voices** downloads better ones; they show up in the
-  menu once downloaded. **Save audio…** writes it to a .wav file instead.
-- **Dictate.** **Record** (⌘R), talk for as long as you like (pauses don't stop it), **Stop**. After
-  Stop it takes a second to write down the last words. Nothing you say should go missing: when the
-  recognizer starts over after a pause, what it had is kept; it's handed over to a fresh recognizer
-  at a pause before its one-minute limit; and switching microphones (AirPods connecting) carries
-  on where it was. Then
-  edit it, **Copy** it, or **Keep note** (⌘S), which adds it to that day's
-  `glass-dictation-<date>.md` in the Glass folder (where Glass keeps its own dictations, so its
-  transcript view lists them) and empties the box for the next one. What you're writing is kept if
-  you close the window.
+  Kokoro's best: **Heart** and **Bella** (women), **Michael** and **Fenrir** (men). Choosing one says
+  hello in it. Each sentence is made while the one before it plays, so there are no gaps. While
+  Kokoro is still downloading the first time, the Mac's own voice reads instead. **Save audio…**
+  writes it to a .wav file instead.
+- **Dictate.** **Record** (⌘R), talk for as long as you like (pauses don't stop it), **Stop**. The
+  recording is cut into phrases at your pauses and each phrase is written down whole, in order;
+  the one you're still saying shows as you say it. Nothing you say is thrown away: if speech
+  recognition is still downloading, it keeps recording and writes it all down once it's there;
+  after Stop it writes down the last phrase ("Writing down the last words…"); and switching
+  microphones (AirPods connecting) carries on where it was. Then edit it, **Copy** it, or **Keep
+  note** (⌘S), which adds it to that day's `glass-dictation-<date>.md` in the Glass folder (where
+  Glass keeps its own dictations, so its transcript view lists them) and empties the box for the
+  next one. What you're writing is kept if you close the window.
 - **Transcribe.** Drop an audio file on the window (mp3, m4a, wav, aiff, or a video's sound), or
   **Choose file…**. Its lines come in as they're done, each with its time, and the line under the
   status fills up as it goes. **Copy** it, or save it as `.txt`, `.srt` or `.vtt` subtitles. Long
-  files go to the recognizer in pieces of under a minute, each cut at the quietest moment near its
-  end. It keeps going if you close the window.
+  files go to Parakeet in pieces of under a minute, each cut at the quietest moment near its end.
+  It keeps going if you close the window.
 
 ### Chat (Glass)
 
@@ -203,10 +206,12 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
 Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
-                              spoken text and sentences, captions, dictation files, updates (testable anywhere)
+                              spoken text and sentences, captions, phrases, voices, dictation files, updates
+                              (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
-                              Zips, Chat + ChatView + Glass, VoiceChat (chats 2–4), Voice (speak, listen,
-                              transcribe) + VoiceTools (their windows), MemoryView, HUD, Updater
+                              Zips, Chat + ChatView + Glass, VoiceChat (chats 2–4), Neural (the speech
+                              models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
+                              MemoryView, HUD, Updater
 scripts/build-app.sh          builds ToolMacTool.app / .zip (ad-hoc signed; universal on CI, this Mac's chip locally)
 .github/workflows/build.yml   test + build on every push; release on main
 install.sh                    install the latest release (or build main) into ~/Applications

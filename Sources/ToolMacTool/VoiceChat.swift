@@ -29,6 +29,9 @@ final class VoiceLink: ObservableObject {
         speaker = chat.kind.speaks ? Speaker() : nil
         listener = chat.kind.listens ? Listener() : nil
         muted = UserDefaults.standard.bool(forKey: "chat\(chat.kind.number)Muted")
+        // Get the models ready (downloading them the first time) before they're needed.
+        if speaker != nil { _ = Neural.shared.voiceModel() }
+        if listener != nil { _ = Neural.shared.earModel() }
         listener?.pauseToEnd = chat.kind == .voice ? 1.1 : 1.6
         listener?.onUtterance = { [weak self] said in self?.heard(said) }
         speaker?.onDone = { [weak self] in self?.listenAgain() }
@@ -364,10 +367,9 @@ struct VoiceProblem: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(ChatProblem.pink.opacity(0.35), lineWidth: 0.5))
     }
 
-    /// The privacy page the problem names.
+    /// The microphone's privacy page (the only permission the voice tools need).
     static func openPrivacy(_ problem: String) {
-        let pane = problem.contains("Microphone") ? "Privacy_Microphone" : "Privacy_SpeechRecognition"
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
         }
     }
