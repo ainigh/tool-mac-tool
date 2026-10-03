@@ -1,7 +1,7 @@
 #!/bin/bash
 # Installs (or reinstalls) Tool Mac Tool into ~/Applications, then opens it. After this, updates
 # come from the menu.
-#
+# 
 #   gh api -H "Accept: application/vnd.github.raw" repos/ainigh/tool-mac-tool/contents/install.sh | bash
 #
 # The repository may be private, so everything comes through gh, signed in to GitHub (this sets
