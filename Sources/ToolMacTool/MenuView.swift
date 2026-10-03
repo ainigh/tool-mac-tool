@@ -45,10 +45,10 @@ struct SectionGrid: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: section.title)
+            SectionHeader(title: section.title, color: section.color)
             LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                 ForEach(section.tools) { tool in
-                    ToolTile(tool: tool) { model.open(tool) }
+                    ToolTile(tool: tool, color: section.color) { model.open(tool) }
                 }
             }
             if section.extra == .recentZips {
@@ -60,20 +60,26 @@ struct SectionGrid: View {
 
 struct SectionHeader: View {
     let title: String
+    let color: Color
 
     var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.6)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 2)
-            .padding(.bottom, 6)
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(color)
+        }
+        .padding(.leading, 2)
+        .padding(.bottom, 6)
     }
 }
 
 /// A square tile: the tool's icon and its name under it. Hover for the full name and what it does.
 struct ToolTile: View {
     let tool: Tool
+    /// Its section's color.
+    let color: Color
     let action: () -> Void
     @State private var hover = false
 
@@ -81,7 +87,7 @@ struct ToolTile: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.gradient)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(color.gradient)
                     Image(systemName: tool.symbol).font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
                 }
                 .frame(width: 40, height: 40)
@@ -96,7 +102,7 @@ struct ToolTile: View {
             .frame(width: MenuView.tile, height: 84)
             .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(hover ? Color.primary.opacity(0.08) : .clear))
+                .fill(hover ? color.opacity(0.14) : .clear))
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }

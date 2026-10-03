@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// One tile in the panel. Clicking it opens the tool's window. To add a tool: write its logic in
 /// ToolCore (so it can be tested), give it a view, then add a `Tool` below and put it in a section
@@ -21,6 +22,8 @@ struct ToolSection: Identifiable {
     enum Extra { case recentZips }
 
     let title: String
+    /// The section's color: its tiles and its title wear it, so a tile's group shows at a glance.
+    let color: Color
     let tools: [Tool]
     /// Something shown under the tiles, for quick use without opening a window.
     var extra: Extra? = nil
@@ -30,12 +33,16 @@ struct ToolSection: Identifiable {
 enum Tools {
     /// The panel, top to bottom: each section is a titled grid of tiles.
     static let sections: [ToolSection] = [
-        ToolSection(title: "Files", tools: [unzip], extra: .recentZips),
-        ToolSection(title: "Voice", tools: [readAloud, dictate, transcribe]),
-        ToolSection(title: "Record", tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
-        ToolSection(title: "Glass", tools: [chat, memory, prompts, settings]),
+        ToolSection(title: "Files", color: Color(red: 0.16, green: 0.48, blue: 0.96), tools: [unzip], extra: .recentZips),
+        ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
+        ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
+                    tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
+        ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings]),
         // What the chat's model can do for you (it calls them as tools); each also works by itself.
-        ToolSection(title: "Model tools", tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
+        ToolSection(title: "Model tools", color: Color(red: 0.96, green: 0.56, blue: 0.10),
+                    tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
+        // Things done for you at the times you set: the model, the tools, reminders.
+        ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler]),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }
@@ -171,6 +178,14 @@ enum Tools {
         subtitle: "Every screen and audio recording in the Glass folder, in a grid on a big glass panel. Play one beside its transcript, or transcribe it: the text is saved beside it with the same name and .txt at the end.",
         symbol: "play.rectangle.on.rectangle",
         open: { model in RecordingsWindow.show(model) })
+
+    static let scheduler = Tool(
+        id: "scheduler",
+        name: "Scheduler",
+        title: "Scheduler: things done at the times you set",
+        subtitle: "Once, every so often, or at a time of day: ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, or run a model tool or a shortcut with your text. Runs while the app is open.",
+        symbol: "calendar.badge.clock",
+        open: { model in SchedulerWindow.show(model.scheduler) })
 
     static let memory = Tool(
         id: "memory",
