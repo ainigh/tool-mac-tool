@@ -130,6 +130,32 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   files go to Parakeet in pieces of under a minute, each cut at the quietest moment near its end.
   It keeps going if you close the window.
 
+### Record screen, Screen only, Record audio, Recordings (Record)
+
+- **Record screen.** Click the tile and the screens dim: **drag a box** around what to record
+  (its size shows beside it), or **click** to take the whole screen; Esc cancels. What's inside
+  the box is recorded with your microphone, the box gets a red frame, and a small bar beside it
+  shows the time with **Pause** (▶ to resume), **Stop** (saves) and the bin (stops and throws it
+  away). The frame, the bar and the app's other windows are left out of the video. It's saved as
+  `glass-recording-<time>.mp4` in the Glass folder, where Glass keeps its dictations and chats,
+  and a card offers **Show in Finder**. The first time, macOS asks to allow **Screen & System Audio
+  Recording** (and the **Microphone**); if it was refused, the tile opens the right settings page.
+  macOS may want the app reopened after you allow it.
+- **Screen only.** The same, with no sound: `glass-screen-<time>.mp4`.
+- **Record audio.** Just the microphone: **Record** (⌘R), **Pause**/**Resume**, **Stop** (saves) or
+  **Discard**. Saved as `glass-audio-<time>.m4a`. (Dictate writes down what you say but doesn't keep
+  the sound; this keeps the sound.) Closing the window stops and saves.
+- **Recordings.** A glass panel as big as the diagram's (90% of the screen) with every video and
+  audio file in the Glass folder in a grid, newest first: a picture from each video, its length,
+  when it was made and its size, and badges for **No sound** and **Transcript**. **All**, **Videos**
+  and **Audio** filter it. Click a recording to play it, with its transcript beside it (Esc goes
+  back). **Transcribe** writes down what's said in it (with Parakeet, on this Mac, as Transcribe
+  does) and saves it beside the recording with the same name and `.txt` at the end
+  (`glass-recording-<time>.mp4` → `glass-recording-<time>.txt`). Several can be queued; each shows
+  how far it's got and can be stopped. Right-click a recording to transcribe it again, open its
+  transcript, show it in Finder or move it (with its transcript) to the Trash. The buttons along
+  the bottom start a new recording.
+
 ### Chat (Glass)
 
 A floating glass panel built like Glass's own page, with no window around it. Colors drift
@@ -325,7 +351,8 @@ Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app)
 Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
                               shortcuts as tools and tool calls,
-                              spoken text and sentences, captions, phrases, voices, dictation files, updates
+                              spoken text and sentences, captions, phrases, voices, dictation files,
+                              recordings (names, transcripts, the box on screen), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
@@ -333,6 +360,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               tools, the alarm, this Mac), BuildTools,
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
+                              ScreenRecorder (the box, the bar, recording the screen), RecordingsView
+                              (Record audio, the Recordings gallery),
                               MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,

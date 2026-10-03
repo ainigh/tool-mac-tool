@@ -32,6 +32,7 @@ enum Tools {
     static let sections: [ToolSection] = [
         ToolSection(title: "Files", tools: [unzip], extra: .recentZips),
         ToolSection(title: "Voice", tools: [readAloud, dictate, transcribe]),
+        ToolSection(title: "Record", tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
         ToolSection(title: "Glass", tools: [chat, memory, prompts, settings]),
         // What the chat's model can do for you (it calls them as tools); each also works by itself.
         ToolSection(title: "Model tools", tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
@@ -138,6 +139,38 @@ enum Tools {
         subtitle: "Drop an audio file (mp3, m4a, wav…) to get its transcript, timed. Copy it, or save it as text or subtitles (.srt, .vtt).",
         symbol: "waveform",
         open: { model in TranscribeWindow.show(model.transcriber) })
+
+    static let recordScreen = Tool(
+        id: "record-screen",
+        name: "Record screen",
+        title: "Record a box of the screen, with sound",
+        subtitle: "Drag a box on the screen (or click for the whole screen) and what's in it is recorded with your microphone. Pause, resume and stop from the bar beside it. Saved as glass-recording-<time>.mp4 in the Glass folder.",
+        symbol: "rectangle.dashed.badge.record",
+        open: { model in model.screenRecorder.begin(audio: true) })
+
+    static let recordScreenOnly = Tool(
+        id: "record-screen-only",
+        name: "Screen only",
+        title: "Record a box of the screen, no sound",
+        subtitle: "Like Record screen, without the microphone: drag a box, then pause, resume and stop from the bar beside it. Saved as glass-screen-<time>.mp4 in the Glass folder.",
+        symbol: "rectangle.dashed",
+        open: { model in model.screenRecorder.begin(audio: false) })
+
+    static let recordAudio = Tool(
+        id: "record-audio",
+        name: "Record audio",
+        title: "Record audio (the microphone)",
+        subtitle: "Record, pause, resume and stop: your microphone, saved as glass-audio-<time>.m4a in the Glass folder. Dictate writes down what you say; this keeps the sound.",
+        symbol: "record.circle",
+        open: { model in AudioRecorderWindow.show(model.audioRecorder) { RecordingsWindow.show(model) } })
+
+    static let recordings = Tool(
+        id: "recordings",
+        name: "Recordings",
+        title: "Recordings: play and transcribe",
+        subtitle: "Every screen and audio recording in the Glass folder, in a grid on a big glass panel. Play one beside its transcript, or transcribe it: the text is saved beside it with the same name and .txt at the end.",
+        symbol: "play.rectangle.on.rectangle",
+        open: { model in RecordingsWindow.show(model) })
 
     static let memory = Tool(
         id: "memory",
