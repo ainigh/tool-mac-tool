@@ -1,9 +1,9 @@
 # Tool Mac Tool
 
 A wrench icon in the macOS menu bar. Clicking it opens a panel of tool tiles, grouped into sections
-with a divider between them. A strip under the tiles shows how the last run went. The bar at the
-bottom holds updates (with the version you're on), **Open at login** and **Quit**. Hover over a
-tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
+with a divider between them; each section has its own color, worn by its tiles and its title. A
+strip under the tiles shows how the last run went. The bar at the bottom holds updates (with the
+version you're on), **Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
 
 It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
 builds it on every push and publishes a release when something lands on `main`. When GitHub hasn't
@@ -155,6 +155,40 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   how far it's got and can be stopped. Right-click a recording to transcribe it again, open its
   transcript, show it in Finder or move it (with its transcript) to the Trash. The buttons along
   the bottom start a new recording.
+
+### Scheduler (Automate)
+
+Things done for you at the times you set, while the app is open (it starts at login). The tile
+opens a glass panel as big as the diagram's: your schedules down the left (each with what it
+does, when, a countdown to its next run, how the last one went, and a switch), and the one you
+pick on the right. **New schedule** (⌘N) adds one. Each schedule has:
+
+- **What it does**, with its **text**:
+  - **Ask the model**: the text is a prompt. The model (the chat's, or another you pick) answers
+    it and, if you let it, can call the model tools and your shortcuts while it does, up to four
+    rounds. It's told it's a scheduled job with nobody at the keyboard, plus the date, time and
+    place. A shortcut set to ask first isn't run, since nobody is there to say yes.
+  - **Remind me**: the text comes up on a card that stays until you close it.
+  - **Say it**: the text is read out in the voice from Read aloud.
+  - **Model tool**: the alarm (the text is the seconds), open a link, copy to the clipboard or
+    draw a diagram, given the text.
+  - **Shortcut**: one of your Apple Shortcuts, with the text as its input.
+
+  The text can hold `{{date}}`, `{{time}}`, `{{last}}` (what it gave back the last time) and
+  `{{clipboard}}`, filled in when it runs.
+- **When**: **Once** (a date and time; it turns itself off after), **Every** so many minutes,
+  hours or days (from when you set it), or **At a time of day**, every day or on the weekdays you
+  pick.
+- **With the result** (the model's answer, a shortcut's output): show it on a card, say it out
+  loud, or both. Cards come up at the top right with **Copy**, **Say it** and **Scheduler**; a
+  failure always gets a card.
+- **Run now**, **Duplicate**, **Delete**, and a **history** of every run: when, whether it worked,
+  the tools it used and what it gave back.
+
+A job missed by more than an hour (the Mac was asleep, or the app closed) waits for its next time
+instead of running late; one missed by less runs straight away. Schedules and the last 300 runs
+are kept in `~/Library/Application Support/ToolMacTool/schedules.json`. Two examples come with it,
+turned off: a reminder to stretch every hour and a spoken morning briefing on weekdays.
 
 ### Chat (Glass)
 
@@ -336,8 +370,8 @@ first.
    are examples. Settings it needs go in `AppSettings` (ToolCore), shown in `SettingsView.swift`.
 3. In `Sources/ToolMacTool/Tools.swift`, add a `Tool`. It needs a short name for the tile, a
    title and description for the tooltip, an SF Symbol, and an `open` that shows its window
-   (`Windows.show`). Put it in a section of `Tools.sections`, or add a new section; each section
-   gets its own titled grid.
+   (`Windows.show`). Put it in a section of `Tools.sections`, or add a new section (with its own
+   color); each section gets its own titled grid.
 4. Push. CI tests and builds it. Merging to `main` publishes the release, and the panel offers
    the update.
 
@@ -352,7 +386,8 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               settings, prompts and personas, the date and time for the model, diagrams,
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
-                              recordings (names, transcripts, the box on screen), updates
+                              recordings (names, transcripts, the box on screen), schedules (when jobs run,
+                              their text, history), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
@@ -361,7 +396,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
-                              (Record audio, the Recordings gallery),
+                              (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
+                              times, the result card, the Scheduler's window),
                               MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,

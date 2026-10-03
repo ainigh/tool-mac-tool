@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
     let updater = Updater()
     let zips = ZipModel()
     let chat = ChatModel()
+    /// Runs the scheduled jobs from launch on, whether or not its window is open.
+    let scheduler = Scheduler()
     // The chat's voice, the diagram tool and the voice tools, made when first opened.
     lazy var chatLink = VoiceLink(chat: chat)
     lazy var diagram = DiagramModel()
@@ -56,6 +58,7 @@ final class AppModel: ObservableObject {
         updater.start()
         ModelTools.shared.app = self
         MacFacts.prepare()
+        scheduler.start()
         // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {
