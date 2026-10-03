@@ -39,6 +39,18 @@ final class AppModel: ObservableObject {
     lazy var speaker = Speaker()
     lazy var listener = Listener()
     lazy var transcriber = TranscribeModel()
+    // Recording the screen or the microphone, and the recordings' gallery.
+    lazy var recordings = RecordingsModel()
+    lazy var screenRecorder: ScreenRecorder = {
+        let r = ScreenRecorder()
+        r.onSaved = { [weak self] _ in self?.recordings.reload() }
+        return r
+    }()
+    lazy var audioRecorder: AudioRecorder = {
+        let r = AudioRecorder()
+        r.onSaved = { [weak self] _ in self?.recordings.reload() }
+        return r
+    }()
 
     init() {
         updater.start()
