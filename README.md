@@ -1,7 +1,8 @@
 # Tool Mac Tool
 
 A wrench icon in the macOS menu bar. Clicking it opens a panel of tool tiles, grouped into sections
-in two columns (so it stays short), with a divider between them; each section has its own color,
+in two columns (so it stays short), plus a narrow third column of bigger tiles for the boards,
+with dividers between them; each section has its own color,
 worn by its tiles and its title. The bar at the bottom holds updates (with the
 version you're on), **Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
 
@@ -428,6 +429,16 @@ Its **Thresholds & signals** side sets:
   `type` is `threshold`, `battery`, `alarm`, `snooze` or `test`; `id` repeats when a send is
   retried, so a worker can drop one it has already seen.
 
+### Goals, Strategies, Entities, Notes (Boards)
+
+Four boards, each a big window of boxes to type into. They have the panel's third column to
+themselves, their tiles a size bigger and stacked. The arrows at the top show more or fewer boxes
+(1 to 36); a hidden box keeps its text for when it's shown again. The boxes fill the window, the
+gutter between them narrowing as there are more. Double-click a box to step it through light
+colors. In each box's top right corner, the copy icon copies its text and the open icon opens it
+to fill the window (click again to go back to the grid). Everything is saved as you go, in
+`~/Library/Application Support/ToolMacTool/boards/<board>.json`.
+
 ## Adding a tool
 
 1. Write the logic in `Sources/ToolCore/`, which uses only Foundation. Add tests in
@@ -453,7 +464,7 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text, history), timers (what's due when, reminders, snoozes, their sounds), the timer log (counts, thresholds, signals, the battery), updates
+                              their text, history), timers (what's due when, reminders, snoozes, their sounds), the timer log (counts, thresholds, signals, the battery), boards (boxes, their colors, the grid), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
@@ -466,6 +477,7 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               times, the result card, the Scheduler's window),
                               Timers (the timer tiles, their sounds and cards), BigCards (the quarter-screen cards),
                               ActivityStore (the log, thresholds, sending signals), TimerLogView (the report),
+                              BoardView (the boards: Goals, Strategies, Entities, Notes),
                               MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,

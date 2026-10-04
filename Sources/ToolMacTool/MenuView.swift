@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The panel that drops down from the menu bar icon: two columns of titled tile grids, and a bar
+/// The panel that drops down from the menu bar icon: columns of titled tile grids, and a bar
 /// at the bottom for updates, open at login and quit.
 struct MenuView: View {
     @ObservedObject var model: AppModel
@@ -13,8 +13,16 @@ struct MenuView: View {
     static let columns = Array(repeating: GridItem(.fixed(tile), spacing: gap), count: perRow)
     /// One column of sections: four tiles across.
     static let columnWidth: CGFloat = tile * CGFloat(perRow) + gap * CGFloat(perRow - 1)
-    /// Two columns side by side, a hairline between them, so the panel stays short.
-    static let width: CGFloat = 14 + columnWidth + 29 + columnWidth + 14
+    /// A bigger tile, for a section stacked in a column of its own (the boards).
+    static let bigTile: CGFloat = 96
+    /// Two columns side by side and the boards' narrow one, a hairline between them, so the panel
+    /// stays short.
+    static let width: CGFloat = 14 + columnWidth + 29 + columnWidth + 29 + bigTile + 14
+
+    /// A column of stacked sections is one big tile wide; the others four tiles.
+    static func width(of column: [ToolSection]) -> CGFloat {
+        column.allSatisfy { $0.style == .stack } ? bigTile : columnWidth
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,7 +36,7 @@ struct MenuView: View {
     }
 }
 
-/// The sections in two columns: in each, its title, its tiles, and a divider before the next one.
+/// The sections in columns: in each, its title, its tiles, and a divider before the next one.
 struct ToolGrid: View {
     @ObservedObject var model: AppModel
 
@@ -44,7 +52,7 @@ struct ToolGrid: View {
                         SectionGrid(section: section, model: model)
                     }
                 }
-                .frame(width: MenuView.columnWidth, alignment: .leading)
+                .frame(width: MenuView.width(of: column), alignment: .leading)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -60,6 +68,12 @@ struct SectionGrid: View {
             SectionHeader(title: section.title, color: section.color)
             if section.extra == .timers {
                 TimerGrid(board: model.timers, model: model, color: section.color)
+            } else if section.style == .stack {
+                VStack(spacing: MenuView.gap) {
+                    ForEach(section.tools) { tool in
+                        BigToolTile(tool: tool, color: section.color) { model.open(tool) }
+                    }
+                }
             } else {
                 LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in
@@ -119,6 +133,39 @@ struct ToolTile: View {
             .frame(width: MenuView.tile, height: 84)
             .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(hover ? color.opacity(0.14) : .clear))
+        }
+        .buttonStyle(PressStyle())
+        .onHover { hover = $0 }
+        .help("\(tool.title)\n\n\(tool.subtitle)")
+    }
+}
+
+/// A bigger tile, for the stacked sections: the same as `ToolTile`, a size up.
+struct BigToolTile: View {
+    let tool: Tool
+    let color: Color
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous).fill(color.gradient)
+                    Image(systemName: tool.symbol).font(.system(size: 24, weight: .medium)).foregroundStyle(.white)
+                }
+                .frame(width: 54, height: 54)
+                .scaleEffect(hover ? 1.06 : 1)
+                .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hover)
+                Text(tool.name)
+                    .font(.system(size: 12, weight: hover ? .semibold : .medium))
+                    .foregroundStyle(hover ? AnyShapeStyle(color) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
+            }
+            .frame(width: MenuView.bigTile, height: 100)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(hover ? color.opacity(0.14) : .clear))
         }
         .buttonStyle(PressStyle())

@@ -20,6 +20,8 @@ struct Tool: Identifiable {
 
 struct ToolSection: Identifiable {
     enum Extra { case recentZips, timers }
+    /// How its tiles are laid out: four across, or bigger ones stacked in a column of their own.
+    enum Style { case grid, stack }
 
     let title: String
     /// The section's color: its tiles and its title wear it, so a tile's group shows at a glance.
@@ -27,12 +29,14 @@ struct ToolSection: Identifiable {
     let tools: [Tool]
     /// Something shown under the tiles, for quick use without opening a window.
     var extra: Extra? = nil
+    var style = Style.grid
     var id: String { title }
 }
 
 enum Tools {
-    /// The panel's two columns, each top to bottom: a titled grid of tiles per section.
-    static let columns: [[ToolSection]] = [Array(sections[0..<4]), Array(sections[4...])]
+    /// The panel's columns, each top to bottom: a titled grid of tiles per section. The boards
+    /// get a narrow column of their own, their bigger tiles stacked.
+    static let columns: [[ToolSection]] = [Array(sections[0..<4]), Array(sections[4..<7]), Array(sections[7...])]
 
     /// Every section, left column first.
     static let sections: [ToolSection] = [
@@ -49,6 +53,9 @@ enum Tools {
         // Countdowns, hourly chimes and the battery: a click steps each through its choices (the
         // tiles are the timers'), and the log that charts them.
         ToolSection(title: "Timers", color: Color(red: 0.90, green: 0.30, blue: 0.62), tools: [], extra: .timers),
+        // Big panels of boxes to type into, one per board.
+        ToolSection(title: "Boards", color: Color(red: 0.36, green: 0.40, blue: 0.92),
+                    tools: [goals, strategies, entities, notes], style: .stack),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }
@@ -208,4 +215,18 @@ enum Tools {
         subtitle: "View and edit MEMORY.md: what Glass knows about you, sent with every message while memory is on, and kept up to date by the model.",
         symbol: "brain",
         open: { _ in MemoryWindow.show() })
+
+    static let goals = board("goals", "Goals", symbol: "target")
+    static let strategies = board("strategies", "Strategies", symbol: "map")
+    static let entities = board("entities", "Entities", symbol: "circle.hexagongrid")
+    static let notes = board("notes", "Notes", symbol: "note.text")
+
+    private static func board(_ id: String, _ name: String, symbol: String) -> Tool {
+        Tool(id: "board-\(id)",
+             name: name,
+             title: "\(name): a board of boxes",
+             subtitle: "A big panel of boxes to type into. The arrows at the top show more or fewer (hidden ones keep their text). Double-click a box to change its color; its corner icons copy its text or open it to fill the panel.",
+             symbol: symbol,
+             open: { _ in BoardWindow.show(id, title: name) })
+    }
 }
