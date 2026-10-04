@@ -254,26 +254,46 @@ private struct Timeline: View {
     let to: Date
 
     var body: some View {
-        let marks = entries.compactMap { e in LogInk.timelineName(e.kind).map { Mark(entry: e, what: $0) } }
+        let marks = Self.marks(entries)
         if marks.isEmpty {
             Empty(text: "Nothing happened in this span")
         } else {
-            Chart {
-                ForEach(marks) { m in
-                    PointMark(x: .value("When", m.entry.at), y: .value("Timer", m.entry.name))
-                        .foregroundStyle(by: .value("What", m.what))
-                        .symbol(by: .value("What", m.what))
-                        .symbolSize(70)
-                }
-            }
-            .chartForegroundStyleScale(domain: LogInk.kinds.map { $0.name }, range: LogInk.kinds.map { $0.color })
-            .chartSymbolScale(domain: LogInk.kinds.map { $0.name },
-                              range: [BasisChartSymbolShape.circle, .diamond, .triangle, .square, .cross])
+            chart(marks)
+        }
+    }
+
+    private static func marks(_ entries: [LogEntry]) -> [Mark] {
+        var out: [Mark] = []
+        for e in entries {
+            if let what = LogInk.timelineName(e.kind) { out.append(Mark(entry: e, what: what)) }
+        }
+        return out
+    }
+
+    /// Kept in small steps: as one expression it's too much for the type checker.
+    private func chart(_ marks: [Mark]) -> some View {
+        let names: [String] = LogInk.kinds.map { $0.name }
+        let colors: [Color] = LogInk.kinds.map { $0.color }
+        let rows = Set(marks.map { $0.entry.name }).count
+        let height = CGFloat(max(3, rows)) * 34 + 50
+        let plot = Chart(marks) { m in
+            PointMark(x: .value("When", m.entry.at), y: .value("Timer", m.entry.name))
+                .foregroundStyle(by: .value("What", m.what))
+                .symbol(by: .value("What", m.what))
+                .symbolSize(70)
+        }
+        return plot
+            .chartForegroundStyleScale(domain: names, range: colors)
             .chartXScale(domain: from...to)
             .chartLegend(position: .top, alignment: .leading)
             .chartXAxis { faintAxis }
-            .chartYAxis { AxisMarks { _ in AxisValueLabel().foregroundStyle(.white.opacity(0.75)) } }
-            .frame(height: CGFloat(max(3, Set(marks.map { $0.entry.name }).count)) * 34 + 50)
+            .chartYAxis { rowLabels }
+            .frame(height: height)
+    }
+
+    private var rowLabels: some AxisContent {
+        AxisMarks { _ in
+            AxisValueLabel().foregroundStyle(.white.opacity(0.75))
         }
     }
 
