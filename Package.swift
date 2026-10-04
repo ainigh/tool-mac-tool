@@ -2,7 +2,7 @@
 import PackageDescription
 
 // The tools' logic: Foundation only, so it's tested on any machine (swift test).
-var targets: [Target] = [
+var targets: [Target] = [ 
     .target(name: "ToolCore"),
     .testTarget(name: "ToolCoreTests", dependencies: ["ToolCore"]),
 ]
