@@ -155,7 +155,7 @@ extension GlassPanel {
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else { return }
         let v = screen.visibleFrame
         let f = panel.frame
-        if v.contains(f) || (f.width <= v.width && f.height <= v.height && NSScreen.screens.contains { $0.visibleFrame.contains(f) }) {
+        if v.contains(f) || (f.width <= v.width && f.height <= v.height && NSScreen.screens.contains(where: { $0.visibleFrame.contains(f) })) {
             return
         }
         let size = NSSize(width: (v.width * 0.9).rounded(), height: (v.height * 0.9).rounded())
