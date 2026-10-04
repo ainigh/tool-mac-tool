@@ -114,7 +114,8 @@ public struct BuiltinTool: Codable, Equatable, Identifiable {
     /// Seconds for the alarm: what was asked, kept between 1 and 600 (10 when it can't be read).
     public static func seconds(_ text: String) -> Int {
         let digits = text.trimmingCharacters(in: .whitespaces)
-        let value = Int(digits) ?? Double(digits).map { Int($0.rounded()) } ?? 10
+        // Clamped before it becomes an Int: "inf" or "1e300" would trap.
+        let value = Int(digits) ?? Double(digits).flatMap { $0.isFinite ? Int(min(1e6, max(-1e6, $0)).rounded()) : nil } ?? 10
         return min(600, max(1, value))
     }
 

@@ -21,6 +21,10 @@ final class ModelToolsTests: XCTestCase {
         XCTAssertEqual(BuiltinTool.seconds("30"), 30)
         XCTAssertEqual(BuiltinTool.seconds("12.6"), 13)
         XCTAssertEqual(BuiltinTool.seconds("5000"), 600)
+        // Not a crash: numbers too big for an Int, or not finite.
+        XCTAssertEqual(BuiltinTool.seconds("1e300"), 600)
+        XCTAssertEqual(BuiltinTool.seconds("inf"), 10)
+        XCTAssertEqual(BuiltinTool.seconds("-5"), 1)
         XCTAssertEqual(BuiltinTool.seconds("soon"), 10)
         XCTAssertEqual(BuiltinTool.webURL("example.com/a?b=1")?.absoluteString, "https://example.com/a?b=1")
         XCTAssertEqual(BuiltinTool.webURL(" <https://apple.com> ")?.absoluteString, "https://apple.com")
