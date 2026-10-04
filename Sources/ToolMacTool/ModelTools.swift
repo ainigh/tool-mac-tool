@@ -59,7 +59,6 @@ final class Alarm: ObservableObject {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var stopTask: Task<Void, Never>?
-    private var panel: GlassPanel?
     private static let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
 
     init() {
@@ -94,7 +93,7 @@ final class Alarm: ObservableObject {
         if engine.isRunning { engine.pause() }
         sounding = false
         endsAt = nil
-        panel?.orderOut(nil)
+        BigCards.shared.hide("model-alarm")
     }
 
     /// One second: two short beeps (880 and 1175 Hz), then quiet.
@@ -117,54 +116,29 @@ final class Alarm: ObservableObject {
         return buffer
     }
 
+    /// A big card covering the top middle quarter of the screen, with the seconds left and Stop.
     private func showCard() {
-        let panel = self.panel ?? {
-            let p = GlassPanel(size: NSSize(width: 300, height: 120))
-            p.dragsAnywhere = true
-            p.level = .floating
-            p.contentView = FirstClickHostingView(rootView: AlarmCard(alarm: self))
-            p.onEscape = { [weak self] in
-                self?.stop()
-                return true
-            }
-            return p
-        }()
-        self.panel = panel
-        if let screen = NSScreen.main {
-            let v = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: v.midX - panel.frame.width / 2, y: v.maxY - panel.frame.height - 20))
+        BigCards.shared.show("model-alarm", at: .topCenter, onEscape: { [weak self] in self?.stop() }) { size in
+            AlarmCard(alarm: self, size: size)
         }
-        panel.orderFrontRegardless()
     }
 }
 
 struct AlarmCard: View {
     @ObservedObject var alarm: Alarm
-    @State private var clock = GlassClock()
+    let size: NSSize
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "alarm.fill")
-                .font(.system(size: 26, weight: .semibold))
-                .foregroundStyle(Color(red: 1, green: 0.55, blue: 0.5))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Alarm").font(.system(size: 17, weight: .bold, design: .rounded))
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(alarm.endsAt.map { "\(max(0, Int($0.timeIntervalSince(context.date).rounded()))) s left" } ?? "")
-                        .monospacedDigit()
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.6))
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let left = alarm.endsAt.map { max(0, Int($0.timeIntervalSince(context.date).rounded())) } ?? 0
+            BigCard(size: size, symbol: "alarm.fill", accent: Color(red: 1, green: 0.55, blue: 0.5), name: "Alarm",
+                    headline: "ALARM", line: "\(left) s left", mood: .error, close: { alarm.stop() }) {
+                HStack {
+                    Spacer()
+                    BigButton(title: "Stop", symbol: "stop.fill", prominent: true, height: max(36, size.height * 0.1)) { alarm.stop() }
                 }
             }
-            Spacer()
-            PillButton(title: "Stop", prominent: true) { alarm.stop() }
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .frame(width: 260, height: 80)
-        .background(GlassCard(clock: clock, mood: .error, radius: 22))
-        .padding(20)
-        .environment(\.colorScheme, .dark)
     }
 }
 

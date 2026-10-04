@@ -59,7 +59,7 @@ struct SectionGrid: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: section.title, color: section.color)
             if section.extra == .timers {
-                TimerGrid(board: model.timers, color: section.color)
+                TimerGrid(board: model.timers, model: model, color: section.color)
             } else {
                 LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in

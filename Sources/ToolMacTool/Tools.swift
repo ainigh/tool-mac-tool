@@ -46,7 +46,8 @@ enum Tools {
                     tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
         // Things done for you at the times you set: the model, the tools, reminders.
         ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler]),
-        // Countdowns and hourly chimes: a click steps each through its choices (the tiles are the timers').
+        // Countdowns, hourly chimes and the battery: a click steps each through its choices (the
+        // tiles are the timers'), and the log that charts them.
         ToolSection(title: "Timers", color: Color(red: 0.90, green: 0.30, blue: 0.62), tools: [], extra: .timers),
     ]
 
@@ -191,6 +192,14 @@ enum Tools {
         subtitle: "Once, every so often, or at a time of day: ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, or run a model tool or a shortcut with your text. Runs while the app is open.",
         symbol: "calendar.badge.clock",
         open: { model in SchedulerWindow.show(model.scheduler) })
+
+    static let timerLog = Tool(
+        id: "timer-log",
+        name: "Timer log",
+        title: "Timer log: when alarms went off, snoozes, the battery",
+        subtitle: "A big report of the timers: when each was set, went off or was snoozed, counts per day (and the days nothing was set), the battery's level over time, and the thresholds that send a signal to your web address.",
+        symbol: "chart.bar.xaxis",
+        open: { model in TimerLogWindow.show(model) })
 
     static let memory = Tool(
         id: "memory",

@@ -364,29 +364,69 @@ first.
 
 ### Timers
 
-Six tiles, each set by **clicking it to step through its choices** (past the last one it's off);
-right-click one to pick a choice straight away, restart it or stop it, and the small ✕ on a running
-tile stops it. A ring round the icon shows what's left, and the line under the name the time. Each
-has its own sound, and its card comes up in its own part of the screen, so two at once never cover
-each other.
+Six timer tiles and a battery, each set by **clicking it to step through its choices** (past the
+last one it's off); right-click one to pick a choice straight away, restart, snooze or stop it, and
+the small ✕ on a running tile stops it. A ring round the icon shows what's left, and the line under
+the name the time. Each timer has its own sound, and its card covers **a quarter of the screen**
+(half as wide, half as tall) in its own spot, the words zoomed to fill it.
 
 - **Timer 1** (1, 3, 5, 10, 15 min; top left) and **Timer 2** (20, 30, 45 min, 1 h, 1 h 30, 2 h;
   bottom left) count down once. At zero they ring, loud (three quick beeps; a siren), until you
-  click **OK** on the card (the sound stops by itself after two minutes, the card stays).
-  **Again** starts the same countdown over.
+  click **OK** (the sound stops by itself after two minutes, the card stays). **Snooze 3 min**
+  quiets it and rings again three minutes later, once per countdown. **Again** starts it over.
 - **Repeat 1** (15, 20, 25, 30 min; top right) and **Repeat 2** (45, 50, 60, 90 min; bottom
   right) count down, ring softly (two falling notes; three rising ones), stay at 0:00 for five
-  minutes, then start again, round after round, until you stop them from the panel (or the card's
-  **Stop timer**).
+  minutes, then start again, round after round, until you stop them. One snooze a round.
+- **Reminders** (the four above): on the way down, a card the same size comes up in the middle of
+  the screen and fades away within about three seconds, saying how long is left. They come at half
+  of what's left each time, in whole minutes, down to a minute: for an hour, at 30, 15, 7, 3 and
+  1 minute left. Clicks pass through them.
 - **Day chime** (on or off; top middle): every hour from 6 AM to 10 PM, a bright ding and a card
   with the time ("Monday 2 PM"), how many hours have passed since 6 AM and how many are left to
   10 PM, with a bar for the day so far.
 - **Night watch** (on or off; bottom middle): every hour from 11 PM to 5 AM, a low ding-dong and a
-  red warning card with the time ("Tuesday 1 AM") and how many hours are left before 6 AM.
+  red, pulsing warning card with the time ("Tuesday 1 AM") and how many hours are left before 6 AM.
+- **Battery**: click to set it to 100, 80, 60, 40, 20 or 0% (one step a click). It drains 20% an
+  hour, like a countdown, and stops at 0. Nothing pops up: it shows on its tile, in the Timer log's
+  battery chart, and in the signals.
 
 The chimes keep the time zone set in Settings. Timers keep going while the app is closed and pick
 up when it opens again: a countdown that ended over an hour ago switches off quietly, and a chime
-missed by more than five minutes is skipped.
+or reminder that's long past is skipped.
+
+### Timer log (Timers)
+
+A big glass report of everything the timers did, kept in
+`~/Library/Application Support/ToolMacTool/timer-log.json`. Pick today, 7 days or 30 days:
+
+- **Totals**: alarms, snoozes (and per day), times set, the days anything was set, chimes,
+  batteries emptied, thresholds crossed.
+- **A timeline**: when each alarm went off, each snooze, each time a timer was set or stopped, one
+  row per timer.
+- **Alarms and snoozes per day** (hover a day for its numbers), and a dot per day: filled when a
+  timer or the battery was set, hollow when nothing was.
+- **The battery's level** over time, with where it ran out.
+- **Every entry**, newest first.
+
+Its **Thresholds & signals** side sets:
+
+- **Thresholds**: "Snoozes in a day over 4" (the default), or alarms, times set, stops or
+  batteries emptied over any number. The moment a day's count goes over, a card comes up in the
+  middle of the screen until you click **OK**. Add as many as you like, or turn them off.
+- **Signals**: an address (a Cloudflare worker, say) that each signal is POSTed to as JSON, with an
+  optional secret sent as `Authorization: Bearer …`. Pick what goes: thresholds crossed, the
+  battery (set, every 10% on the way down, empty) and every alarm and snooze. Signals that don't get
+  through are kept (up to 500) and retried every minute; a 4xx answer drops one. **Send a test**
+  tries the address, and the pane shows what a signal looks like:
+
+  ```json
+  {"app":"ToolMacTool","at":"2026-10-04T15:02:11Z","day":"2026-10-04","detail":"Snoozes in a day over 4: 5 snoozes today",
+   "device":"Sam's MacBook","id":"…","kind":"threshold","name":"Thresholds","source":"thresholds",
+   "threshold":{"count":5,"limit":4,"metric":"snoozes","rule":"Snoozes in a day over 4"},"type":"threshold","value":5}
+  ```
+
+  `type` is `threshold`, `battery`, `alarm`, `snooze` or `test`; `id` repeats when a send is
+  retried, so a worker can drop one it has already seen.
 
 ## Adding a tool
 
@@ -413,7 +453,7 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text, history), timers (what's due when, their sounds), updates
+                              their text, history), timers (what's due when, reminders, snoozes, their sounds), the timer log (counts, thresholds, signals, the battery), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
@@ -424,7 +464,9 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
                               times, the result card, the Scheduler's window),
-                              Timers (the timer tiles, their sounds and cards), MemoryView, HUD, Updater
+                              Timers (the timer tiles, their sounds and cards), BigCards (the quarter-screen cards),
+                              ActivityStore (the log, thresholds, sending signals), TimerLogView (the report),
+                              MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
                               icon-match); shipped as the app's resources

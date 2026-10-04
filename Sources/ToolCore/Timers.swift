@@ -37,6 +37,11 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
     public static let lateness: TimeInterval = 60 * 60
     public static let chimeGrace: TimeInterval = 5 * 60
 
+    /// A snooze rings again this much later (once per countdown, or per round).
+    public static let snooze: TimeInterval = 3 * 60
+    /// A reminder is shown only when it's this fresh (not when the Mac wakes long after it).
+    public static let reminderGrace: TimeInterval = 15
+
     public static let dayHours = Array(6...22)
     public static let nightHours = [23, 0, 1, 2, 3, 4, 5]
 
@@ -76,6 +81,40 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         isChime ? TimerState(choice: 0, start: now, lastChime: now) : TimerState(choice: choice, start: now)
     }
 
+    /// The reminders of a countdown, as the time left at each: halving what's left, rounded down
+    /// to whole minutes, none under a minute. 60 min: 30, 15, 7, 3 and 1 min left.
+    public static func reminders(for duration: TimeInterval) -> [TimeInterval] {
+        var out: [TimeInterval] = []
+        var left = duration / 2
+        while left >= 60 {
+            let minutes = (left / 60).rounded(.down) * 60
+            if out.last != minutes { out.append(minutes) }
+            left /= 2
+        }
+        return out
+    }
+
+    /// Whether its snooze can still be used now: a finished one-off countdown, or a repeating one at
+    /// zero, that hasn't been snoozed yet (this round).
+    public func canSnooze(_ s: TimerState, now: Date) -> Bool {
+        guard s.snoozeAt == nil else { return false }
+        switch phase(s, now: now) {
+        case .finished: return s.snoozedRound == nil
+        // Only while there's time for it before the next round starts.
+        case .holding(let left, let round): return s.snoozedRound != round && left > Self.snooze
+        default: return false
+        }
+    }
+
+    /// Snoozed: it rings again in three minutes.
+    public func snoozed(_ s: TimerState, now: Date) -> TimerState {
+        guard canSnooze(s, now: now) else { return s }
+        var after = s
+        after.snoozeAt = now.addingTimeInterval(Self.snooze)
+        if case .holding(_, let round) = phase(s, now: now) { after.snoozedRound = round } else { after.snoozedRound = 0 }
+        return after
+    }
+
     /// The countdown's length, if it's counting.
     public func duration(_ s: TimerState) -> TimeInterval? {
         guard !isChime, let c = s.choice, presets.indices.contains(c) else { return nil }
@@ -88,7 +127,9 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         guard let d = duration(s) else { return .off }
         let elapsed = max(0, now.timeIntervalSince(start))
         if kind == .once {
-            return elapsed < d ? .counting(remaining: d - elapsed, of: d, round: 0) : .finished
+            if elapsed < d { return .counting(remaining: d - elapsed, of: d, round: 0) }
+            if let at = s.snoozeAt, at > now { return .snoozed(remaining: at.timeIntervalSince(now)) }
+            return .finished
         }
         let period = d + Self.hold
         let round = Int(elapsed / period)
@@ -103,8 +144,11 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         guard s.choice != nil, let start = s.start else { return nil }
         switch kind {
         case .once:
-            guard let d = duration(s), s.rung == 0, now.timeIntervalSince(start) >= d else { return nil }
+            guard let d = duration(s) else { return nil }
+            if let snoozed = snoozeDue(s, now: now) { return snoozed }
             let end = start.addingTimeInterval(d)
+            if now < end { return reminderDue(s, remaining: end.timeIntervalSince(now), duration: d, round: 0) }
+            guard s.rung == 0 else { return nil }
             if now.timeIntervalSince(end) > Self.lateness { return (nil, TimerState()) }
             var after = s
             after.rung = 1
@@ -117,11 +161,16 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
             let holding = elapsed - Double(round) * period >= d
             // Rounds whose countdown has reached zero so far.
             let done = round + (holding ? 1 : 0)
-            guard done > s.rung else { return nil }
-            var after = s
-            after.rung = done
-            // Rounds missed while asleep pass quietly: only the one sitting at zero now rings.
-            return (holding ? .roundDone(round: done) : nil, after)
+            if done > s.rung {
+                var after = s
+                after.rung = done
+                // Rounds missed while asleep pass quietly: only the one sitting at zero now rings.
+                return (holding ? .roundDone(round: done) : nil, after)
+            }
+            if let snoozed = snoozeDue(s, now: now) { return snoozed }
+            if holding { return nil }
+            let into = elapsed - Double(round) * period
+            return reminderDue(s, remaining: d - into, duration: d, round: round)
         case .dayChime, .nightChime:
             guard let hour = calendar.dateInterval(of: .hour, for: now)?.start,
                   hours.contains(calendar.component(.hour, from: hour)),
@@ -130,6 +179,27 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
             after.lastChime = hour
             return (now.timeIntervalSince(hour) <= Self.chimeGrace ? .chime(at: hour) : nil, after)
         }
+    }
+
+    /// A snooze that's up: it rings again (unless it's long past, when it passes quietly).
+    private func snoozeDue(_ s: TimerState, now: Date) -> (event: TimerEvent?, state: TimerState)? {
+        guard let at = s.snoozeAt, now >= at else { return nil }
+        var after = s
+        after.snoozeAt = nil
+        return (now.timeIntervalSince(at) <= Self.lateness ? .snoozeOver(round: s.snoozedRound ?? 0) : nil, after)
+    }
+
+    /// The reminder for the time left now, if one has been reached and not shown yet (this round).
+    private func reminderDue(_ s: TimerState, remaining: TimeInterval, duration: TimeInterval,
+                             round: Int) -> (event: TimerEvent?, state: TimerState)? {
+        // The smallest mark reached so far.
+        guard let mark = Self.reminders(for: duration).last(where: { remaining <= $0 }) else { return nil }
+        let shown = s.remindedRound == round ? s.reminded : nil
+        if let shown, shown <= mark { return nil }
+        var after = s
+        after.reminded = mark
+        after.remindedRound = round
+        return (mark - remaining <= Self.reminderGrace ? .reminder(left: remaining) : nil, after)
     }
 
     /// The next time a chime sounds, after `now`.
@@ -154,6 +224,12 @@ public struct TimerState: Codable, Equatable, Sendable {
     public var rung = 0
     /// The hour a chime last sounded for.
     public var lastChime: Date?
+    /// A snooze: when it rings again, and which round it was used in (0 for a one-off countdown).
+    public var snoozeAt: Date?
+    public var snoozedRound: Int?
+    /// The last reminder shown (as the time left at its mark), and in which round.
+    public var reminded: TimeInterval?
+    public var remindedRound: Int?
 
     public init(choice: Int? = nil, start: Date? = nil, rung: Int = 0, lastChime: Date? = nil) {
         self.choice = choice
@@ -171,6 +247,8 @@ public enum TimerPhase: Equatable, Sendable {
     case counting(remaining: TimeInterval, of: TimeInterval, round: Int)
     /// A one-off countdown at zero, waiting for OK.
     case finished
+    /// A finished one-off countdown, snoozed: it rings again in `remaining`.
+    case snoozed(remaining: TimeInterval)
     /// A repeating countdown at zero; it starts again in `remaining`.
     case holding(remaining: TimeInterval, round: Int)
     /// A chime that's on.
@@ -184,6 +262,10 @@ public enum TimerEvent: Equatable, Sendable {
     case roundDone(round: Int)
     /// The chime for that hour.
     case chime(at: Date)
+    /// A reminder on the way down: this much is left.
+    case reminder(left: TimeInterval)
+    /// A snooze is up: it rings again.
+    case snoozeOver(round: Int)
 }
 
 /// The words on the tiles and the cards.
@@ -202,6 +284,15 @@ public enum TimerText {
         let h = s / 3600, m = (s % 3600) / 60
         if h == 0 { return "\(m) min" }
         return m == 0 ? "\(h) h" : "\(h) h \(m) min"
+    }
+
+    /// "30 min", "1 min 30 s", "45 s": time left, for a reminder.
+    public static func left(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds).rounded())
+        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
+        if h > 0 { return m == 0 ? "\(h) h" : "\(h) h \(m) min" }
+        if m == 0 { return "\(sec) s" }
+        return sec == 0 || m >= 5 ? "\(m) min" : "\(m) min \(sec) s"
     }
 
     /// "1 hour", "5 hours".
