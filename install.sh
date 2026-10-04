@@ -10,7 +10,7 @@
 # builds it here with Apple's command line tools. The app then follows that branch for updates.
 set -euo pipefail
 
-REPO="ainigh/tool-mac-tool"
+REPO="ainigh/tool-mac-tool" 
 BRANCH="${TMT_BRANCH:-main}"
 APPS="$HOME/Applications"
 NAME="ToolMacTool"
