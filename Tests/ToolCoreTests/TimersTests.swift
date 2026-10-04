@@ -69,7 +69,7 @@ final class TimersTests: XCTestCase {
     func testRepeatingRingsHoldsFiveMinutesThenStartsAgain() {
         let t = spec("repeat-1")   // 15 minutes first
         var s = t.chose(0, now: at(9))
-        XCTAssertNil(t.due(s, now: at(9, 14), calendar: calendar))
+        XCTAssertEqual(t.due(s, now: at(9, 14), calendar: calendar)?.event, .reminder(left: 60))
         let (event, after) = t.due(s, now: at(9, 15), calendar: calendar)!
         XCTAssertEqual(event, .roundDone(round: 1))
         s = after
@@ -179,5 +179,94 @@ final class TimersTests: XCTestCase {
         let s = TimerState(choice: 2, start: at(9), rung: 3, lastChime: at(8))
         let back = try JSONDecoder().decode(TimerState.self, from: JSONEncoder().encode(s))
         XCTAssertEqual(back, s)
+    }
+}
+
+final class RemindersAndSnoozeTests: XCTestCase {
+    private var calendar: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "Europe/London")!
+        return c
+    }
+
+    private func at(_ hour: Int, _ minute: Int = 0, _ second: Int = 0) -> Date {
+        var c = DateComponents()
+        (c.year, c.month, c.day, c.hour, c.minute, c.second) = (2026, 10, 5, hour, minute, second)
+        return calendar.date(from: c)!
+    }
+
+    private func spec(_ id: String) -> TimerSpec { TimerSpec.all.first { $0.id == id }! }
+
+    func testRemindersHalveWhatsLeftDownToAMinute() {
+        XCTAssertEqual(TimerSpec.reminders(for: 3600), [30, 15, 7, 3, 1].map { $0 * 60.0 })
+        XCTAssertEqual(TimerSpec.reminders(for: 600), [5, 2, 1].map { $0 * 60.0 })
+        XCTAssertEqual(TimerSpec.reminders(for: 60), [])
+        XCTAssertEqual(TimerSpec.reminders(for: 180), [60])
+    }
+
+    func testOnceShowsEachReminderOnce() {
+        let t = spec("timer-2")   // 20 min: reminders at 10, 5, 2, 1 left
+        var s = t.chose(0, now: at(9))
+        XCTAssertNil(t.due(s, now: at(9, 5), calendar: calendar))
+        var due = t.due(s, now: at(9, 10), calendar: calendar)!
+        XCTAssertEqual(due.event, .reminder(left: 600))
+        s = due.state
+        XCTAssertNil(t.due(s, now: at(9, 10, 1), calendar: calendar))
+        due = t.due(s, now: at(9, 15, 2), calendar: calendar)!
+        XCTAssertEqual(due.event, .reminder(left: 298))
+        s = due.state
+        // Asleep past the 2-minute mark: it passes quietly, the 1-minute one still shows.
+        due = t.due(s, now: at(9, 18, 40), calendar: calendar)!
+        XCTAssertNil(due.event)
+        s = due.state
+        XCTAssertEqual(t.due(s, now: at(9, 19), calendar: calendar)?.event, .reminder(left: 60))
+    }
+
+    func testRepeatingRemindsEveryRound() {
+        let t = spec("repeat-1")   // 15 min: reminders at 7, 3, 1 left
+        var s = t.chose(0, now: at(9))
+        var due = t.due(s, now: at(9, 8), calendar: calendar)!
+        XCTAssertEqual(due.event, .reminder(left: 420))
+        s = due.state
+        s = t.due(s, now: at(9, 15), calendar: calendar)!.state   // round done (rung 1)
+        // Round 2 starts at 9:20; its 7-minute reminder is at 9:28.
+        due = t.due(s, now: at(9, 28), calendar: calendar)!
+        XCTAssertEqual(due.event, .reminder(left: 420))
+    }
+
+    func testOneSnoozeRingsAgainInThreeMinutes() {
+        let t = spec("timer-1")
+        var s = t.chose(0, now: at(9))   // 1 min
+        s = t.due(s, now: at(9, 1), calendar: calendar)!.state
+        XCTAssertTrue(t.canSnooze(s, now: at(9, 1, 5)))
+        s = t.snoozed(s, now: at(9, 1, 5))
+        XCTAssertEqual(t.phase(s, now: at(9, 2, 5)), .snoozed(remaining: 120))
+        XCTAssertFalse(t.canSnooze(s, now: at(9, 2)))
+        XCTAssertNil(t.due(s, now: at(9, 4), calendar: calendar))
+        let due = t.due(s, now: at(9, 4, 5), calendar: calendar)!
+        XCTAssertEqual(due.event, .snoozeOver(round: 0))
+        s = due.state
+        XCTAssertEqual(t.phase(s, now: at(9, 4, 6)), .finished)
+        // Only once.
+        XCTAssertFalse(t.canSnooze(s, now: at(9, 4, 6)))
+        XCTAssertNil(t.due(s, now: at(9, 5), calendar: calendar))
+    }
+
+    func testRepeatingSnoozeOncePerRoundWhileThereIsTime() {
+        let t = spec("repeat-1")
+        var s = t.chose(0, now: at(9))
+        s = t.due(s, now: at(9, 15), calendar: calendar)!.state
+        XCTAssertTrue(t.canSnooze(s, now: at(9, 15, 10)))
+        // With under three minutes of the hold left, no snooze.
+        XCTAssertFalse(t.canSnooze(s, now: at(9, 18)))
+        s = t.snoozed(s, now: at(9, 15, 10))
+        XCTAssertEqual(t.due(s, now: at(9, 18, 10), calendar: calendar)?.event, .snoozeOver(round: 0))
+    }
+
+    func testLeftWords() {
+        XCTAssertEqual(TimerText.left(1800), "30 min")
+        XCTAssertEqual(TimerText.left(90), "1 min 30 s")
+        XCTAssertEqual(TimerText.left(45), "45 s")
+        XCTAssertEqual(TimerText.left(3900), "1 h 5 min")
     }
 }

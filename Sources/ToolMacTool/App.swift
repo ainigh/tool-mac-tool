@@ -35,8 +35,10 @@ final class AppModel: ObservableObject {
     let chat = ChatModel()
     /// Runs the scheduled jobs from launch on, whether or not its window is open.
     let scheduler = Scheduler()
-    /// The six timers, ticking from launch on.
-    let timers = TimerBoard()
+    /// The timers' log: thresholds and the signals sent from it.
+    let activity = ActivityStore()
+    /// The six timers and the battery, ticking from launch on.
+    lazy var timers = TimerBoard(activity: activity)
     // The chat's voice, the diagram tool and the voice tools, made when first opened.
     lazy var chatLink = VoiceLink(chat: chat)
     lazy var diagram = DiagramModel()
