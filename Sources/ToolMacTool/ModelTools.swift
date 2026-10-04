@@ -56,27 +56,14 @@ final class Alarm: ObservableObject {
     @Published private(set) var sounding = false
     @Published private(set) var endsAt: Date?
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    /// Shared with nothing else; it takes care of the audio hardware coming and going (see TonePlayer).
+    private let sounds = TonePlayer()
     private var stopTask: Task<Void, Never>?
-    private static let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
-
-    init() {
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: Self.format)
-    }
 
     func sound(for seconds: Int) {
         stop()
-        do {
-            if !engine.isRunning { try engine.start() }
-        } catch {
-            NSSound.beep()
-            return
-        }
-        player.scheduleBuffer(Self.pattern(), at: nil, options: .loops)
-        player.volume = 0.9
-        player.play()
+        let seconds = max(1, seconds)
+        sounds.play(Self.pattern(), loops: true, volume: 0.9, for: "alarm", maxSeconds: TimeInterval(seconds))
         sounding = true
         endsAt = Date().addingTimeInterval(TimeInterval(seconds))
         showCard()
@@ -89,8 +76,7 @@ final class Alarm: ObservableObject {
     func stop() {
         stopTask?.cancel()
         stopTask = nil
-        player.stop()
-        if engine.isRunning { engine.pause() }
+        sounds.stop("alarm")
         sounding = false
         endsAt = nil
         BigCards.shared.hide("model-alarm")
@@ -98,6 +84,7 @@ final class Alarm: ObservableObject {
 
     /// One second: two short beeps (880 and 1175 Hz), then quiet.
     static func pattern() -> AVAudioPCMBuffer {
+        let format = TonePlayer.format
         let rate = format.sampleRate
         let frames = AVAudioFrameCount(rate)
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!

@@ -198,6 +198,16 @@ final class TimerBoard: ObservableObject {
 
     private func fire(_ spec: TimerSpec, _ event: TimerEvent) {
         let look = TimerLook.of(spec)
+        // No screen (the lid is closed, or a Power Nap woke the Mac in the dark): nothing to show
+        // or hear it on. It still goes into the log, and a countdown at zero stays at zero.
+        guard !NSScreen.screens.isEmpty else {
+            switch event {
+            case .finished, .snoozeOver, .roundDone: log(spec, .alarm, detail: "While the screen was off")
+            case .chime(let at): log(spec, .chime, detail: TimerText.label(at, calendar: calendar) + " (screen off)")
+            case .reminder: break
+            }
+            return
+        }
         let ok: () -> Void = { [weak self] in self?.dismiss(spec) }
         switch event {
         case .reminder(let left):
@@ -250,58 +260,152 @@ final class TimerBoard: ObservableObject {
 // MARK: - Sounds
 
 /// Plays each timer's sound on its own player, so one stopping never cuts another off.
+///
+/// Careful with the audio hardware, because AVAudioEngine throws Objective-C exceptions (which crash
+/// the app) when it's used against an output that isn't there: in the moments after the Mac wakes,
+/// while the lid closes or the output device changes. So the engine is made fresh whenever a sound
+/// starts from quiet (and dropped when everything's quiet, or the hardware changes under it); it's
+/// only touched when there's an output with channels; and for a few seconds after waking, sounds
+/// wait.
 @MainActor
 final class TonePlayer {
-    private let engine = AVAudioEngine()
+    private var engine: AVAudioEngine?
     private var players: [String: AVAudioPlayerNode] = [:]
     private var stops: [String: Task<Void, Never>] = [:]
     private var buffers: [Tone: AVAudioPCMBuffer] = [:]
-    private static let format = AVAudioFormat(standardFormatWithSampleRate: Tone.rate, channels: 1)!
+    private var observers: [NSObjectProtocol] = []
+    /// Watches the current engine for the hardware changing under it.
+    private var configObserver: NSObjectProtocol?
+    /// Sounds asked for before this wait (just after waking).
+    private var quietUntil = Date.distantPast
+    /// Bumped by every play and stop, so a sound that waited doesn't start after it was stopped.
+    private var turns: [String: Int] = [:]
+    static let format = AVAudioFormat(standardFormatWithSampleRate: Tone.rate, channels: 1)!
+    /// How long sounds wait after the Mac wakes.
+    static let wakeQuiet: TimeInterval = 4
+
+    init() {
+        let center = NSWorkspace.shared.notificationCenter
+        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.stopAll() }
+        })
+        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.quietUntil = Date().addingTimeInterval(Self.wakeQuiet) }
+        })
+    }
 
     func play(_ tone: Tone, for id: String, maxSeconds: TimeInterval?) {
+        play(buffer(tone), loops: tone.loops, volume: tone.volume, for: id, maxSeconds: maxSeconds)
+    }
+
+    func play(_ buffer: AVAudioPCMBuffer, loops: Bool, volume: Float, for id: String, maxSeconds: TimeInterval?) {
         stop(id)
+        let turn = (turns[id] ?? 0) + 1
+        turns[id] = turn
+        let wait = quietUntil.timeIntervalSinceNow
+        if wait > 0 {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                guard let self, self.turns[id] == turn else { return }
+                self.start(buffer, loops: loops, volume: volume, for: id, maxSeconds: maxSeconds)
+            }
+            return
+        }
+        start(buffer, loops: loops, volume: volume, for: id, maxSeconds: maxSeconds)
+    }
+
+    private func start(_ buffer: AVAudioPCMBuffer, loops: Bool, volume: Float, for id: String, maxSeconds: TimeInterval?) {
+        guard let engine = readyEngine() else {
+            // No output to play on: a system beep is the best there is.
+            NSSound.beep()
+            return
+        }
         let player = players[id] ?? {
             let p = AVAudioPlayerNode()
-            self.engine.attach(p)
-            self.engine.connect(p, to: self.engine.mainMixerNode, format: Self.format)
+            engine.attach(p)
+            engine.connect(p, to: engine.mainMixerNode, format: Self.format)
             self.players[id] = p
             return p
         }()
         do {
             if !engine.isRunning { try engine.start() }
         } catch {
+            drop()
             NSSound.beep()
             return
         }
-        let b = buffer(tone)
-        player.scheduleBuffer(b, at: nil, options: tone.loops ? .loops : [])
-        player.volume = tone.volume
+        guard engine.isRunning else { return }
+        player.scheduleBuffer(buffer, at: nil, options: loops ? .loops : [])
+        player.volume = volume
         player.play()
-        // Stopped when it's done (a loop, after `maxSeconds`), so the engine can rest.
-        let seconds = tone.loops ? (maxSeconds ?? 120) : Double(b.frameLength) / Tone.rate + 0.3
+        // Stopped when it's done (a loop, after `maxSeconds`), so the engine can go.
+        let seconds = loops ? (maxSeconds ?? 120) : Double(buffer.frameLength) / Tone.rate + 0.3
         stops[id] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             if !Task.isCancelled { self?.stop(id) }
         }
     }
 
+    /// The engine, made fresh if there isn't one; nil when there's no output to play on.
+    private func readyEngine() -> AVAudioEngine? {
+        if let engine { return engine }
+        let e = AVAudioEngine()
+        // Read before anything is connected: with no output device it has no channels or rate.
+        let out = e.outputNode.outputFormat(forBus: 0)
+        guard out.channelCount > 0, out.sampleRate > 0 else { return nil }
+        engine = e
+        // The hardware changed under it (a device came or went): it's stopped; start over next time.
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: e,
+                                                                queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.engine === e else { return }
+                self.drop()
+            }
+        }
+        return e
+    }
+
     func stop(_ id: String) {
+        turns[id] = (turns[id] ?? 0) + 1
         stops[id]?.cancel()
         stops[id] = nil
-        players[id]?.stop()
-        // Nothing playing: pause the engine (a running one keeps the audio hardware, and the Mac, awake).
-        if stops.isEmpty, engine.isRunning { engine.pause() }
+        if let engine, engine.isRunning { players[id]?.stop() }
+        // Nothing playing: let the engine go (a running one keeps the audio hardware, and the Mac, awake).
+        if stops.isEmpty { drop() }
+    }
+
+    func stopAll() {
+        for id in Array(stops.keys) { stop(id) }
+        drop()
+    }
+
+    /// Lets go of the engine and its players; the next sound makes new ones.
+    private func drop() {
+        for task in stops.values { task.cancel() }
+        stops = [:]
+        if let engine, engine.isRunning { engine.stop() }
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
+        engine = nil
+        players = [:]
     }
 
     private func buffer(_ tone: Tone) -> AVAudioPCMBuffer {
         if let b = buffers[tone] { return b }
-        let samples = tone.samples()
-        let b = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: AVAudioFrameCount(samples.count))!
-        b.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { src in
-            b.floatChannelData![0].update(from: src.baseAddress!, count: samples.count)
-        }
+        let b = Self.buffer(tone.samples())
         buffers[tone] = b
+        return b
+    }
+
+    /// Mono samples at `Tone.rate`, as a buffer.
+    static func buffer(_ samples: [Float]) -> AVAudioPCMBuffer {
+        let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(1, samples.count)))!
+        b.frameLength = AVAudioFrameCount(samples.count)
+        if let dest = b.floatChannelData?[0] {
+            samples.withUnsafeBufferPointer { src in
+                if let base = src.baseAddress { dest.update(from: base, count: samples.count) }
+            }
+        }
         return b
     }
 }
