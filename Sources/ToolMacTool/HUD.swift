@@ -10,9 +10,14 @@ final class HUD {
 
     private var panel: NSPanel?
     private var hideTask: Task<Void, Never>?
+    /// Bumped on every show, so a fade-out that was under way doesn't put away the newer card.
+    private var shown = 0
 
-    func show(title: String, message: String, ok: Bool, reveal: URL?) {
+    enum Place { case topRight, center }
+
+    func show(title: String, message: String, ok: Bool, reveal: URL?, at place: Place = .topRight) {
         hideTask?.cancel()
+        shown += 1
         let panel = self.panel ?? makePanel()
         self.panel = panel
         let view = HUDView(title: title, message: message, ok: ok, reveal: reveal,
@@ -24,10 +29,14 @@ final class HUD {
         let host = NSHostingView(rootView: view)
         panel.contentView = host
         let size = host.fittingSize
-        if let screen = NSScreen.main {
+        // The screen with the pointer: where you're looking.
+        let mouse = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main {
             let v = screen.visibleFrame
-            panel.setFrame(NSRect(x: v.maxX - size.width - 12, y: v.maxY - size.height - 8,
-                                  width: size.width, height: size.height), display: true)
+            let origin = place == .center
+                ? NSPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2)
+                : NSPoint(x: v.maxX - size.width - 12, y: v.maxY - size.height - 8)
+            panel.setFrame(NSRect(origin: origin, size: size), display: true)
         }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -44,11 +53,15 @@ final class HUD {
     func hide() {
         hideTask?.cancel()
         guard let panel else { return }
+        let mine = shown
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.3
             panel.animator().alphaValue = 0
         }, completionHandler: {
-            Task { @MainActor in panel.orderOut(nil) }
+            Task { @MainActor [weak self] in
+                // Shown again while it faded: leave the new one up.
+                if self?.shown == mine { panel.orderOut(nil) }
+            }
         })
     }
 

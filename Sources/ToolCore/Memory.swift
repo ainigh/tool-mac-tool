@@ -86,7 +86,8 @@ public struct MemoryStore {
         if fact.isEmpty { return nil }
         try ensure()
         let text = read()
-        if Self.facts(in: text).contains(fact.lowercased()) { return nil }
+        // The same fact with a different final full stop or spacing is already there.
+        if Self.facts(in: text).contains(where: { Self.normalized($0) == Self.normalized(fact) }) { return nil }
         let day = Self.day.string(from: today)
         let line = "- \(fact) _(\(day))_\n"
         try write(text + (text.isEmpty || text.hasSuffix("\n") ? "" : "\n") + line)

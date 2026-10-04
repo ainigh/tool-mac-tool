@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The panel that drops down from the menu bar icon: a titled grid of tiles per section, the last
-/// result, and a bar at the bottom for updates, open at login and quit.
+/// The panel that drops down from the menu bar icon: two columns of titled tile grids, and a bar
+/// at the bottom for updates, open at login and quit.
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: Updater
@@ -11,11 +11,16 @@ struct MenuView: View {
     static let gap: CGFloat = 6
     static let perRow = 4
     static let columns = Array(repeating: GridItem(.fixed(tile), spacing: gap), count: perRow)
-    static let width: CGFloat = 12 + tile * CGFloat(perRow) + gap * CGFloat(perRow - 1) + 12
+    /// One column of sections: four tiles across.
+    static let columnWidth: CGFloat = tile * CGFloat(perRow) + gap * CGFloat(perRow - 1)
+    /// Two columns side by side, a hairline between them, so the panel stays short.
+    static let width: CGFloat = 14 + columnWidth + 29 + columnWidth + 14
 
     var body: some View {
         VStack(spacing: 0) {
-            ToolGrid(model: model).padding(12)
+            ToolGrid(model: model)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
             Divider()
             BottomBar(model: model, updater: updater)
         }
@@ -23,19 +28,26 @@ struct MenuView: View {
     }
 }
 
-/// Every section: its title, its tiles, and a divider before the next one.
+/// The sections in two columns: in each, its title, its tiles, and a divider before the next one.
 struct ToolGrid: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Tools.sections) { section in
-                if section.id != Tools.sections.first?.id {
-                    Divider().padding(.vertical, 8)
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(Array(Tools.columns.enumerated()), id: \.offset) { i, column in
+                if i > 0 { Divider() }
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(column) { section in
+                        if section.id != column.first?.id {
+                            Divider().padding(.vertical, 8)
+                        }
+                        SectionGrid(section: section, model: model)
+                    }
                 }
-                SectionGrid(section: section, model: model)
+                .frame(width: MenuView.columnWidth, alignment: .leading)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -46,9 +58,13 @@ struct SectionGrid: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: section.title, color: section.color)
-            LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
-                ForEach(section.tools) { tool in
-                    ToolTile(tool: tool, color: section.color) { model.open(tool) }
+            if section.extra == .timers {
+                TimerGrid(board: model.timers, color: section.color)
+            } else {
+                LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
+                    ForEach(section.tools) { tool in
+                        ToolTile(tool: tool, color: section.color) { model.open(tool) }
+                    }
                 }
             }
             if section.extra == .recentZips {
@@ -94,7 +110,8 @@ struct ToolTile: View {
                 .scaleEffect(hover ? 1.06 : 1)
                 .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hover)
                 Text(tool.name)
-                    .font(.system(size: 10.5))
+                    .font(.system(size: 10.5, weight: hover ? .medium : .regular))
+                    .foregroundStyle(hover ? AnyShapeStyle(color) : AnyShapeStyle(.primary))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .frame(height: 26, alignment: .top)
@@ -104,7 +121,7 @@ struct ToolTile: View {
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(hover ? color.opacity(0.14) : .clear))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressStyle())
         .onHover { hover = $0 }
         .help("\(tool.title)\n\n\(tool.subtitle)")
     }
@@ -170,6 +187,16 @@ struct BottomBar: View {
             Text(updater.state == .upToDate ? "Up to date · \(version)" : version)
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1).textSelection(.enabled)
         }
+    }
+}
+
+/// A plain button that sinks a little while pressed, so a click is felt.
+struct PressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

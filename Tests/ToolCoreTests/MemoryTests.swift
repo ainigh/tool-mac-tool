@@ -139,6 +139,13 @@ final class MemoryTests: XCTestCase {
         XCTAssertEqual(MemoryStore.hideTags("Ok [[forget: half"), "Ok ")
     }
 
+    func testRememberIgnoresAFinalFullStop() throws {
+        let m = MemoryStore(url: root.appendingPathComponent("MEMORY/MEMORY.md"))
+        XCTAssertNotNil(try m.remember("Likes tea."))
+        XCTAssertNil(try m.remember("likes  tea"))
+        XCTAssertEqual(MemoryStore.facts(in: m.read()).count, 1)
+    }
+
     func testForgetRemovesTheLine() throws {
         let m = MemoryStore(url: root.appendingPathComponent("MEMORY/MEMORY.md"))
         try m.remember("Lives in Lagos")

@@ -69,6 +69,7 @@ final class Updater: ObservableObject {
 
     func check(userInitiated: Bool) {
         if busy { return }
+        let before = state
         state = .checking
         Task.detached {
             let outcome: State
@@ -79,8 +80,9 @@ final class Updater: ObservableObject {
             }
             await MainActor.run {
                 // A quiet background check that fails shouldn't leave an error in the menu.
+                // (And an update it already found stays offered.)
                 if case .failed = outcome, !userInitiated {
-                    self.state = .idle
+                    if case .available = before { self.state = before } else { self.state = .idle }
                 } else {
                     self.state = outcome
                 }
@@ -150,11 +152,13 @@ final class Updater: ObservableObject {
 
     nonisolated static func downloadPrebuilt(_ release: Release, into work: URL) throws -> URL {
         let zip = work.appendingPathComponent(assetName)
-        if let gh = ghPath() {
-            try run(gh, ["release", "download", release.tag, "--repo", repo, "--pattern", assetName,
-                         "--dir", work.path, "--clobber"])
+        // gh first (the repository may be private); a gh that isn't signed in falls back to a plain download.
+        if let gh = ghPath(), (try? run(gh, ["release", "download", release.tag, "--repo", repo, "--pattern", assetName,
+                                            "--dir", work.path, "--clobber"])) != nil {
         } else if let asset = release.asset(named: assetName) {
             try download(asset.browserDownloadURL, to: zip)
+        } else {
+            throw Problem("the release has no \(assetName)")
         }
         let unpacked = work.appendingPathComponent("unpacked")
         try FileManager.default.createDirectory(at: unpacked, withIntermediateDirectories: true)
@@ -171,8 +175,7 @@ final class Updater: ObservableObject {
         try checkSwift()
         step("Downloading \(commit.short)…")
         let tarball = work.appendingPathComponent("source.tar.gz")
-        if let gh = ghPath() {
-            try run(gh, ["api", "repos/\(repo)/tarball/\(commit.sha)"], to: tarball)
+        if let gh = ghPath(), (try? run(gh, ["api", "repos/\(repo)/tarball/\(commit.sha)"], to: tarball)) != nil {
         } else {
             try download(URL(string: "https://codeload.github.com/\(repo)/tar.gz/\(commit.sha)")!, to: tarball)
         }

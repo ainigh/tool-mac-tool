@@ -19,7 +19,7 @@ struct Tool: Identifiable {
 }
 
 struct ToolSection: Identifiable {
-    enum Extra { case recentZips }
+    enum Extra { case recentZips, timers }
 
     let title: String
     /// The section's color: its tiles and its title wear it, so a tile's group shows at a glance.
@@ -31,7 +31,10 @@ struct ToolSection: Identifiable {
 }
 
 enum Tools {
-    /// The panel, top to bottom: each section is a titled grid of tiles.
+    /// The panel's two columns, each top to bottom: a titled grid of tiles per section.
+    static let columns: [[ToolSection]] = [Array(sections[0..<4]), Array(sections[4...])]
+
+    /// Every section, left column first.
     static let sections: [ToolSection] = [
         ToolSection(title: "Files", color: Color(red: 0.16, green: 0.48, blue: 0.96), tools: [unzip], extra: .recentZips),
         ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
@@ -43,6 +46,8 @@ enum Tools {
                     tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
         // Things done for you at the times you set: the model, the tools, reminders.
         ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler]),
+        // Countdowns and hourly chimes: a click steps each through its choices (the tiles are the timers').
+        ToolSection(title: "Timers", color: Color(red: 0.90, green: 0.30, blue: 0.62), tools: [], extra: .timers),
     ]
 
     static var all: [Tool] { sections.flatMap(\.tools) }

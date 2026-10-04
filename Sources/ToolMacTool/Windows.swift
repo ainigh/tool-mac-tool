@@ -148,6 +148,21 @@ class GlassPanel: NSPanel {
 }
 
 extension GlassPanel {
+    /// A big panel made for one screen: if it no longer fits the screen it's on (a display was
+    /// unplugged, say), it's resized to 90% of the screen with the pointer and centred there.
+    static func fit(_ panel: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else { return }
+        let v = screen.visibleFrame
+        let f = panel.frame
+        if v.contains(f) || (f.width <= v.width && f.height <= v.height && NSScreen.screens.contains { $0.visibleFrame.contains(f) }) {
+            return
+        }
+        let size = NSSize(width: (v.width * 0.9).rounded(), height: (v.height * 0.9).rounded())
+        panel.setFrame(NSRect(x: v.midX - size.width / 2, y: v.midY - size.height / 2, width: size.width, height: size.height),
+                       display: true)
+    }
+
     /// Drag-anywhere: true when the event was used to move the window (and shouldn't go on).
     fileprivate func moveWindow(_ event: NSEvent) -> Bool {
         switch event.type {

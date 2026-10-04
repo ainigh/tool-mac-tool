@@ -35,6 +35,7 @@ enum SchedulerWindow {
             panel.setFrameOrigin(NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2))
             return panel
         }
+        if let panel = Windows.window("scheduler") { GlassPanel.fit(panel) }
         scheduler.loadModels()
     }
 }
