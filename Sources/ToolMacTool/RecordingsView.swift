@@ -320,8 +320,16 @@ final class RecordingsModel: ObservableObject {
 
     /// Stops it, or takes it out of the queue.
     func cancel(_ item: Recordings.Item) {
-        if isTranscribing(item) { job?.cancel() } else { waiting.removeAll { $0 == item.id } }
+        guard isTranscribing(item) else {
+            waiting.removeAll { $0 == item.id }
+            return
+        }
+        // Still taking a video's sound out (no job yet): it stops as soon as that's done.
+        if let job { job.cancel() } else { stopping = item.id }
     }
+
+    /// A transcription stopped before its job started.
+    private var stopping: String?
 
     private func next() {
         guard transcribing == nil, !waiting.isEmpty else { return }
@@ -334,6 +342,10 @@ final class RecordingsModel: ObservableObject {
             do {
                 // A video's sound is taken out first, so the transcriber reads plain audio.
                 let audio = item.isVideo ? try await Self.soundTrack(of: item.url) : item.url
+                if self.stopping == id {
+                    if item.isVideo { try? FileManager.default.removeItem(at: audio) }
+                    return self.done(item, problem: "Stopped")
+                }
                 self.run(item, audio: audio, temporary: item.isVideo)
             } catch {
                 self.done(item, problem: error.localizedDescription)
@@ -361,6 +373,7 @@ final class RecordingsModel: ObservableObject {
 
     private func done(_ item: Recordings.Item, problem: String?) {
         job = nil
+        stopping = nil
         if let problem {
             if problem != "Stopped" { problems[item.id] = problem }
         } else {
@@ -446,6 +459,7 @@ enum RecordingsWindow {
             panel.setFrameOrigin(NSPoint(x: screen.midX - size.width / 2, y: screen.midY - size.height / 2))
             return panel
         }
+        if let panel = Windows.window("recordings") { GlassPanel.fit(panel) }
         model.reload()
     }
 

@@ -31,6 +31,8 @@ final class ZipModel: ObservableObject {
     @Published private(set) var armed: URL?
 
     private var statuses: [URL: Status] = [:]
+    /// The zip's date and size when its status was set: a different zip under the same name drops it.
+    private var statusStamps: [URL: String] = [:]
     /// Each zip's listing, kept while its date and size stay the same, so refreshing doesn't read
     /// every zip again.
     private var listings: [URL: (stamp: String, entries: [String]?)] = [:]
@@ -69,6 +71,12 @@ final class ZipModel: ObservableObject {
             }
             let found = plans, listings = fresh, trouble = problem
             await MainActor.run {
+                // A zip that changed (downloaded again under the same name) starts fresh, not with
+                // the last one's result.
+                for (url, entry) in listings where self.statuses[url] != nil && self.statuses[url] != .running
+                    && self.statusStamps[url] != entry.stamp {
+                    self.statuses[url] = nil
+                }
                 self.listings = listings
                 self.problem = trouble
                 self.items = found.map { Item(plan: $0, status: self.statuses[$0.zip] ?? .ready) }
@@ -112,9 +120,9 @@ final class ZipModel: ObservableObject {
                 self.set(zip, status)
                 switch status {
                 case .done(let r):
-                    HUD.shared.show(title: "Unzipped", message: r.summary, ok: true, reveal: r.target)
+                    HUD.shared.show(title: "Unzipped", message: r.summary, ok: true, reveal: r.target, at: .center)
                 case .failed(let why):
-                    HUD.shared.show(title: zip.lastPathComponent, message: why, ok: false, reveal: nil)
+                    HUD.shared.show(title: zip.lastPathComponent, message: why, ok: false, reveal: nil, at: .center)
                 default:
                     break
                 }
@@ -133,6 +141,7 @@ final class ZipModel: ObservableObject {
 
     private func set(_ id: URL, _ status: Status) {
         statuses[id] = status
+        if status == .running { statusStamps[id] = listings[id]?.stamp }
         if let i = items.firstIndex(where: { $0.id == id }) { items[i].status = status }
     }
 

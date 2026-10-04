@@ -1,8 +1,8 @@
 # Tool Mac Tool
 
 A wrench icon in the macOS menu bar. Clicking it opens a panel of tool tiles, grouped into sections
-with a divider between them; each section has its own color, worn by its tiles and its title. A
-strip under the tiles shows how the last run went. The bar at the bottom holds updates (with the
+in two columns (so it stays short), with a divider between them; each section has its own color,
+worn by its tiles and its title. The bar at the bottom holds updates (with the
 version you're on), **Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
 
 It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
@@ -94,8 +94,8 @@ What running it does:
 
 If moving stops partway (a file can't be moved, say), it says what had already been added and
 replaced. If Downloads or the Desktop can't be read, the list says so and links to the privacy
-setting. The zip stays in Downloads. A card also fades in under the menu bar with a **Show in Finder**
-button.
+setting. The zip stays in Downloads. A card also fades in at the middle of the screen with a
+**Show in Finder** button.
 
 ### Read aloud, Dictate, Transcribe (Voice)
 
@@ -362,6 +362,32 @@ saves, ⌘W closes. The editor reloads when the file changes on disk (the chat a
 to it), unless you have unsaved edits. If you save over a change made in the meantime, it asks
 first.
 
+### Timers
+
+Six tiles, each set by **clicking it to step through its choices** (past the last one it's off);
+right-click one to pick a choice straight away, restart it or stop it, and the small ✕ on a running
+tile stops it. A ring round the icon shows what's left, and the line under the name the time. Each
+has its own sound, and its card comes up in its own part of the screen, so two at once never cover
+each other.
+
+- **Timer 1** (1, 3, 5, 10, 15 min; top left) and **Timer 2** (20, 30, 45 min, 1 h, 1 h 30, 2 h;
+  bottom left) count down once. At zero they ring, loud (three quick beeps; a siren), until you
+  click **OK** on the card (the sound stops by itself after two minutes, the card stays).
+  **Again** starts the same countdown over.
+- **Repeat 1** (15, 20, 25, 30 min; top right) and **Repeat 2** (45, 50, 60, 90 min; bottom
+  right) count down, ring softly (two falling notes; three rising ones), stay at 0:00 for five
+  minutes, then start again, round after round, until you stop them from the panel (or the card's
+  **Stop timer**).
+- **Day chime** (on or off; top middle): every hour from 6 AM to 10 PM, a bright ding and a card
+  with the time ("Monday 2 PM"), how many hours have passed since 6 AM and how many are left to
+  10 PM, with a bar for the day so far.
+- **Night watch** (on or off; bottom middle): every hour from 11 PM to 5 AM, a low ding-dong and a
+  red warning card with the time ("Tuesday 1 AM") and how many hours are left before 6 AM.
+
+The chimes keep the time zone set in Settings. Timers keep going while the app is closed and pick
+up when it opens again: a countdown that ended over an hour ago switches off quietly, and a chime
+missed by more than five minutes is skipped.
+
 ## Adding a tool
 
 1. Write the logic in `Sources/ToolCore/`, which uses only Foundation. Add tests in
@@ -387,7 +413,7 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text, history), updates
+                              their text, history), timers (what's due when, their sounds), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
@@ -398,7 +424,7 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
                               times, the result card, the Scheduler's window),
-                              MemoryView, HUD, Updater
+                              Timers (the timer tiles, their sounds and cards), MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
                               icon-match); shipped as the app's resources
