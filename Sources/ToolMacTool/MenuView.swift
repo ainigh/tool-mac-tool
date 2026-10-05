@@ -1,9 +1,11 @@
 import AppKit
 import SwiftUI
+import ToolCore
 
-/// The panel that drops down from the menu bar icon: a row across the top (Unzip, the battery,
-/// the next alarm), columns of titled tile grids under it, and a bar at the bottom for updates,
-/// open at login and quit.
+/// The panel that drops down from the menu bar icon: the boards across the top, a row under them
+/// (Unzip, the battery), columns of titled tile grids under that (the last two: the notes running
+/// a timer, and the tags' boards), the notes docked along the bottom, and a bar at the bottom for
+/// updates, open at login and quit.
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: Updater
@@ -14,7 +16,7 @@ struct MenuView: View {
     static let columns = Array(repeating: GridItem(.fixed(tile), spacing: gap), count: perRow)
     /// One column of sections: four tiles across.
     static let columnWidth: CGFloat = tile * CGFloat(perRow) + gap * CGFloat(perRow - 1)
-    /// A bigger tile, for a section stacked in a narrow column of its own (the boards).
+    /// A bigger tile, for a section stacked in a narrow column of its own (the timers, the tags).
     static let bigTile: CGFloat = 96
     /// The columns side by side, a hairline between them (14 points either side), so the panel
     /// stays short.
@@ -30,15 +32,22 @@ struct MenuView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TopRow(model: model)
+            BoardsRow(store: model.boards)
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
+                .padding(.bottom, 10)
+            Divider()
+                .padding(.horizontal, 14)
+            TopRow(model: model)
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
                 .padding(.bottom, 10)
             Divider()
                 .padding(.horizontal, 14)
             ToolGrid(model: model)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+            DockRow(store: model.boards)
             Divider()
             BottomBar(model: model, updater: updater)
         }
@@ -76,8 +85,10 @@ struct SectionGrid: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: section.title, color: section.color)
-            if section.extra == .timers {
-                TimerGrid(board: model.timers, model: model, color: section.color)
+            if section.extra == .timedNotes {
+                TimedNotesColumn(store: model.boards, color: section.color)
+            } else if section.extra == .tagBoards {
+                TagBoardsColumn(store: model.boards)
             } else if section.style == .stack {
                 VStack(spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in
@@ -88,6 +99,11 @@ struct SectionGrid: View {
                 LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in
                         ToolTile(tool: tool, color: section.color) { model.open(tool) }
+                    }
+                    if section.extra == .chimes {
+                        ForEach(ScheduledJob.Builtin.allCases, id: \.self) { b in
+                            ChimeTile(builtin: b, scheduler: model.scheduler, color: section.color)
+                        }
                     }
                 }
             }

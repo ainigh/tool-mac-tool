@@ -104,4 +104,137 @@ final class SchedulesTests: XCTestCase {
         XCTAssertEqual(book.jobs.first?.action, .remind)
         XCTAssertEqual(book.jobs.first?.when.kind, .daily)
     }
+
+    // MARK: Every hour, and events
+
+    func testHourlyKeepsToItsHours() {
+        let s = Schedule(kind: .hourly, minute: 0, hours: Schedule.dayHours)
+        XCTAssertEqual(s.next(after: at(9, 15), calendar: calendar), at(10))
+        XCTAssertEqual(s.next(after: at(22, 1), calendar: calendar), at(6, day: 4))
+        let night = Schedule(kind: .hourly, minute: 0, hours: Schedule.nightHours)
+        XCTAssertEqual(night.next(after: at(12), calendar: calendar), at(23))
+        XCTAssertEqual(night.next(after: at(23, 30), calendar: calendar), at(0, day: 4))
+        XCTAssertEqual(Schedule(kind: .hourly, minute: 30).next(after: at(9, 31), calendar: calendar), at(10, 30))
+    }
+
+    func testHourlyDescribesItsRuns() {
+        XCTAssertEqual(Schedule(kind: .hourly, minute: 0, hours: Schedule.dayHours).describe(), "Every hour, 06:00–22:00")
+        XCTAssertEqual(Schedule(kind: .hourly, minute: 0, hours: Schedule.nightHours).describe(), "Every hour, 23:00–05:00")
+        XCTAssertEqual(Schedule(kind: .hourly, minute: 15).describe(), "Every hour at :15")
+        XCTAssertEqual(Schedule.hourRanges([1, 2, 3, 7]).map { "\($0.from)-\($0.to)" }, ["1-3", "7-7"])
+        XCTAssertTrue(Schedule.hourRanges(Array(0...23)).isEmpty)
+    }
+
+    func testStartAndEndOfTheMonthAndWeek() {
+        let start = Schedule(kind: .event, hour: 9, minute: 0, event: .startOfMonth)
+        var c = DateComponents()
+        (c.year, c.month, c.day, c.hour) = (2026, 11, 1, 9)
+        XCTAssertEqual(start.next(after: at(10), calendar: calendar), calendar.date(from: c))
+        let end = Schedule(kind: .event, hour: 18, minute: 0, event: .endOfMonth)
+        XCTAssertEqual(end.next(after: at(10), calendar: calendar), at(18, day: 31))
+        // 3 October 2026 is a Saturday: the week ends tomorrow and starts again on Monday the 5th.
+        XCTAssertEqual(Schedule(kind: .event, hour: 20, minute: 0, event: .endOfWeek).next(after: at(10), calendar: calendar), at(20, day: 4))
+        XCTAssertEqual(Schedule(kind: .event, hour: 8, minute: 0, event: .startOfWeek).next(after: at(10), calendar: calendar), at(8, day: 5))
+        // One that waits for something to happen has no time.
+        XCTAssertNil(Schedule(kind: .event, event: .alarmRang).next(after: at(10), calendar: calendar))
+    }
+
+    func testEventsMatchTheirLogEntries() {
+        var log = ActivityLog()
+        func add(_ kind: LogEntry.Kind, value: Double? = nil, minute: Int = 0) -> LogEntry {
+            let e = LogEntry(at: at(9, minute), source: "box-goals-1", name: "Goals 1 · Timer 1", kind: kind, value: value)
+            log.add(e)
+            return e
+        }
+        let rang = add(.alarm)
+        XCTAssertTrue(Schedule(kind: .event, event: .alarmRang).matches(rang, log: log, calendar: calendar))
+        XCTAssertFalse(Schedule(kind: .event, event: .alarmSet).matches(rang, log: log, calendar: calendar))
+        XCTAssertFalse(Schedule(kind: .daily).matches(rang, log: log, calendar: calendar))
+        let forty = add(.batteryLevel, value: 40)
+        XCTAssertTrue(Schedule(kind: .event, event: .batteryAt, level: 40).matches(forty, log: log, calendar: calendar))
+        XCTAssertFalse(Schedule(kind: .event, event: .batteryAt, level: 30).matches(forty, log: log, calendar: calendar))
+        XCTAssertTrue(Schedule(kind: .event, event: .batteryChange).matches(forty, log: log, calendar: calendar))
+        let empty = add(.batteryEmpty, value: 0)
+        XCTAssertTrue(Schedule(kind: .event, event: .batteryAt, level: 0).matches(empty, log: log, calendar: calendar))
+        // Over 2 snoozes in a day: the third crosses it, the fourth doesn't again.
+        let over = Schedule(kind: .event, event: .countOver, metric: .snoozes, limit: 2)
+        var crossed: [Int] = []
+        for m in 1...4 {
+            let e = add(.snoozed, minute: m)
+            if over.matches(e, log: log, calendar: calendar) { crossed.append(over.crossing(e, log: log, calendar: calendar) ?? -1) }
+        }
+        XCTAssertEqual(crossed, [3])
+    }
+
+    func testOldSchedulesStillReadWithTheNewFields() throws {
+        let json = #"{"kind":"daily","at":0,"minutes":60,"start":0,"hour":7,"minute":45,"weekdays":[2]}"#
+        let s = try JSONDecoder().decode(Schedule.self, from: Data(json.utf8))
+        XCTAssertEqual(s.kind, .daily)
+        XCTAssertEqual(s.hour, 7)
+        XCTAssertEqual(s.hours, [])
+        XCTAssertEqual(s.event, .alarmRang)
+    }
+
+    // MARK: Built-ins, placeholders, web calls, the old signals
+
+    func testBuiltinsAreAddedOnceAndFirst() {
+        var book = ScheduleBook(jobs: [ScheduledJob(name: "Mine")])
+        book.ensureBuiltins()
+        XCTAssertEqual(book.jobs.map(\.name), ["Day chime", "Night watch", "Mine"])
+        book.ensureBuiltins()
+        XCTAssertEqual(book.jobs.count, 3)
+        XCTAssertTrue(book.jobs[0].isBuiltin)
+        XCTAssertTrue(book.jobs[0].enabled)
+        XCTAssertEqual(book.jobs[0].when.next(after: at(9, 15), calendar: calendar), at(10))
+        XCTAssertEqual(book.jobs[1].when.next(after: at(9, 15), calendar: calendar), at(23))
+    }
+
+    func testPlaceholdersFillFromTheTimeTheLogAndTheEvent() {
+        var log = ActivityLog()
+        log.add(LogEntry(at: at(8), source: "box-goals-1", name: "Goals 1 · Timer 1", kind: .alarm))
+        log.add(LogEntry(at: at(8, 5), source: "box-goals-1", name: "Goals 1 · Timer 1", kind: .snoozed))
+        let e = LogEntry(at: at(9), source: "battery", name: "Battery", kind: .batteryLevel, detail: "40%", value: 40)
+        var values = JobText.logValues(log, now: at(10), calendar: calendar)
+        values.merge(JobText.eventValues(e, now: at(10), calendar: calendar)) { $1 }
+        let text = "{{weekday}} {{day_of_month}} ({{days_left_in_month}} left) · {{alarms_today}}/{{snoozes_today}} · {{event}} · {{event_value}} · {{last_alarm}} · [{{next_alarm}}]"
+        XCTAssertEqual(JobText.fill(text, now: at(10), last: nil, calendar: calendar, values: values),
+                       "Saturday 3 (28 left) · 1/1 · Battery level · Battery · 40% · 40 · Goals 1 · Timer 1 at 08:00 · []")
+    }
+
+    func testAWebCallSendsItsTextOrTheEvent() throws {
+        let job = ScheduledJob(name: "Hook", action: .webhook, target: "https://a.b",
+                               when: Schedule(kind: .event, event: .countOver, metric: .snoozes, limit: 2))
+        let e = LogEntry(at: at(9), source: "box-goals-1", name: "Goals 1", kind: .snoozed)
+        let json = WebCall.body(text: #"{"a": 1}"#, job: job, entry: e, crossing: nil, now: at(9), calendar: calendar, device: "Mac")
+        XCTAssertEqual(json.contentType, "application/json")
+        XCTAssertEqual(WebCall.body(text: "hello", job: job, entry: e, crossing: nil, now: at(9), calendar: calendar, device: "Mac").contentType,
+                       "text/plain; charset=utf-8")
+        let signal = WebCall.body(text: " ", job: job, entry: e, crossing: 3, now: at(9), calendar: calendar, device: "Mac")
+        let object = try JSONSerialization.jsonObject(with: signal.data) as? [String: Any]
+        XCTAssertEqual(object?["type"] as? String, "snooze")
+        XCTAssertEqual((object?["threshold"] as? [String: Any])?["count"] as? Int, 3)
+        let plain = WebCall.body(text: "", job: job, entry: nil, crossing: nil, now: at(9), calendar: calendar, device: "Mac")
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: plain.data) as? [String: Any])?["type"] as? String, "schedule")
+    }
+
+    func testTheOldThresholdsAndSignalsBecomeSchedules() {
+        var s = SignalSettings()
+        s.rules = [ThresholdRule(metric: .alarms, limit: 6)]
+        XCTAssertEqual(ScheduleBook.fromSignals(s).count, 1)
+        s.url = "https://worker.example.dev/signal"
+        s.secret = "shh"
+        s.sendAlarms = true
+        let jobs = ScheduleBook.fromSignals(s)
+        XCTAssertEqual(jobs.map(\.when.event), [.countOver, .thresholdCrossed, .batteryChange, .alarmRang, .alarmSnoozed])
+        XCTAssertEqual(jobs[0].when.limit, 6)
+        XCTAssertEqual(jobs[0].action, .remind)
+        XCTAssertTrue(jobs.dropFirst().allSatisfy { $0.action == .webhook && $0.target == s.url && $0.secret == "shh" })
+    }
+
+    func testOldJobsReadWithoutTheNewFields() throws {
+        let json = #"{"jobs":[{"id":"a","name":"Old","action":"remind","text":"x"}],"runs":[]}"#
+        let book = try JSONDecoder().decode(ScheduleBook.self, from: Data(json.utf8))
+        XCTAssertEqual(book.jobs.first?.secret, "")
+        XCTAssertNil(book.jobs.first?.builtin)
+    }
 }

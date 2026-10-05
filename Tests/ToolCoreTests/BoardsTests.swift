@@ -71,4 +71,23 @@ final class BoardsTests: XCTestCase {
         XCTAssertEqual(odd.boxes.count, Board.maxBoxes)
         XCTAssertEqual(odd.boxes[0], .init(text: "a", tint: 0))
     }
+
+    func testTagsIconAndDockAreKeptAndOldFilesStillRead() throws {
+        var box = Board.Box(text: "\n  Call Sam  \nabout the trip")
+        XCTAssertEqual(box.title, "Call Sam")
+        box.toggle(.think)
+        box.toggle(.important)
+        XCTAssertEqual(box.tags, [.important, .think])
+        box.toggle(.think)
+        XCTAssertEqual(box.tags, [.important])
+        box.icon = "star"
+        box.docked = true
+        let data = try JSONEncoder().encode(box)
+        XCTAssertEqual(try JSONDecoder().decode(Board.Box.self, from: data), box)
+        let old = try JSONDecoder().decode(Board.Box.self, from: Data(#"{"text":"a","tint":2,"tags":["urgent","someday"]}"#.utf8))
+        XCTAssertEqual(old.tags, [.urgent])
+        XCTAssertNil(old.icon)
+        XCTAssertFalse(old.docked)
+        XCTAssertNil(Board.Box(text: " \n ").title)
+    }
 }

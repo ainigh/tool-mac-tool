@@ -177,9 +177,17 @@ struct MenuPill: View {
         .help(help)
     }
 
+    /// An item named with this in front is a heading for the items after it (not an item).
+    static let heading = "# "
+
     func showMenu() {
         let menu = NSMenu()
         for (name, on, run) in items {
+            if name.hasPrefix(Self.heading) {
+                if !menu.items.isEmpty { menu.addItem(.separator()) }
+                menu.addItem(.sectionHeader(title: String(name.dropFirst(Self.heading.count))))
+                continue
+            }
             let item = ActionMenuItem(title: name, run: run)
             item.state = on ? .on : .off
             menu.addItem(item)

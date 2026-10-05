@@ -1,11 +1,13 @@
 import Foundation
 
-// The boards (Goals, Strategies, Entities, Notes): a big panel of boxes to type into. The arrows
-// show more or fewer of them (the hidden ones keep their text), a double-click steps a box through
-// light colors, and the grid fills the panel with a gutter that narrows as the boxes get more.
-// Each box can run one timer (a countdown, a repeating one or a due date) and can be pinned to
-// float on the screen by itself. This is their logic (what's kept, how the grid is laid out); the
-// app draws it.
+// The boards (Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health,
+// Communication): a big panel of boxes (notes) to type into. The arrows show more or fewer of them
+// (the hidden ones keep their text), a double-click steps a box through light colors, and the grid
+// fills the panel with a gutter that narrows as the boxes get more. Each box can run one timer (a
+// countdown, a repeating one or a due date), be pinned to float on the screen by itself, be docked
+// in the menu bar panel, wear an icon of its own, and have tags (Important, Urgent, Delegate,
+// Think), each of which has a board gathering its notes. This is their logic (what's kept, how the
+// grid is laid out); the app draws it.
 
 public struct Board: Codable, Equatable, Sendable {
     public struct Box: Codable, Equatable, Sendable {
@@ -16,23 +18,52 @@ public struct Board: Codable, Equatable, Sendable {
         public var alarm: BoxAlarm?
         /// Floating on the screen in a window of its own.
         public var pinned: Bool
+        /// Its icon (an SF Symbol name); nil wears its board's.
+        public var icon: String?
+        /// The tags it has (Important, Urgent, Delegate, Think), in `NoteTag` order.
+        public var tags: [NoteTag]
+        /// Docked in the row along the bottom of the menu bar panel.
+        public var docked: Bool
 
-        public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false) {
+        public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
+                    tags: [NoteTag] = [], docked: Bool = false) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
             self.pinned = pinned
+            self.icon = icon
+            self.tags = tags
+            self.docked = docked
         }
 
-        private enum CodingKeys: String, CodingKey { case text, tint, alarm, pinned }
+        private enum CodingKeys: String, CodingKey { case text, tint, alarm, pinned, icon, tags, docked }
 
-        // A file from before timers and pins has neither.
+        // A file from before timers, pins, icons, tags and the dock has none of them.
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
             tint = try c.decodeIfPresent(Int.self, forKey: .tint) ?? 0
             alarm = try c.decodeIfPresent(BoxAlarm.self, forKey: .alarm)
             pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+            icon = try c.decodeIfPresent(String.self, forKey: .icon)
+            // A tag this version doesn't know is dropped, not the whole board.
+            let names = (try? c.decodeIfPresent([String].self, forKey: .tags)) ?? nil
+            tags = NoteTag.allCases.filter { (names ?? []).contains($0.rawValue) }
+            docked = try c.decodeIfPresent(Bool.self, forKey: .docked) ?? false
+        }
+
+        public func has(_ tag: NoteTag) -> Bool { tags.contains(tag) }
+
+        /// The tag on, or off again.
+        public mutating func toggle(_ tag: NoteTag) {
+            if has(tag) { tags.removeAll { $0 == tag } } else { tags = NoteTag.allCases.filter { $0 == tag || has($0) } }
+        }
+
+        /// Its first line of text, trimmed (nil when it has none): what it's called in lists.
+        public var title: String? {
+            text.split(whereSeparator: \.isNewline).lazy
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty }
         }
     }
 
@@ -124,6 +155,31 @@ public struct Board: Codable, Equatable, Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url, options: .atomic)
+    }
+}
+
+/// The tags a note can have: each toggled on its note, and each with a board that gathers every
+/// note that has it, from all the boards.
+public enum NoteTag: String, Codable, CaseIterable, Sendable {
+    case important, urgent, delegate, think
+
+    public var title: String {
+        switch self {
+        case .important: return "Important"
+        case .urgent: return "Urgent"
+        case .delegate: return "Delegate"
+        case .think: return "Think"
+        }
+    }
+
+    /// An SF Symbol name.
+    public var symbol: String {
+        switch self {
+        case .important: return "star.fill"
+        case .urgent: return "flame.fill"
+        case .delegate: return "arrowshape.turn.up.right.fill"
+        case .think: return "brain.head.profile"
+        }
     }
 }
 

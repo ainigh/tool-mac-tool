@@ -5,21 +5,23 @@ import ToolCore
 
 // The timers' report, on a glass panel as big as the Scheduler's: counts for the span you pick,
 // when each alarm went off or was snoozed (a timeline), alarms and snoozes per day (and whether
-// anything was set that day), the battery's level, and every entry. Its other side sets the
-// thresholds and the web address signals go to.
+// anything was set that day), the battery's level, and every entry. Its other side lists the
+// thresholds and signals, which are scheduler jobs now (a job that waits for a day's count to go
+// over a limit, or calls a web address when something happens).
 
 @MainActor
 enum TimerLogWindow {
     static func show(_ app: AppModel) {
         let store = app.activity
         let board = app.timers
+        let scheduler = app.scheduler
         Windows.show("timer-log") {
             let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
             let panel = GlassPanel(size: size)
             panel.level = .floating
             let close = { panel.orderOut(nil) }
-            let host = FirstClickHostingView(rootView: TimerLogView(store: store, board: board, close: close))
+            let host = FirstClickHostingView(rootView: TimerLogView(store: store, board: board, scheduler: scheduler, close: close))
             host.sizingOptions = []
             panel.contentView = host
             panel.commands = ["w": close]
@@ -64,6 +66,7 @@ enum LogInk {
 struct TimerLogView: View {
     @ObservedObject var store: ActivityStore
     @ObservedObject var board: TimerBoard
+    @ObservedObject var scheduler: Scheduler
     let close: () -> Void
 
     enum Span: String, CaseIterable, Identifiable {
@@ -96,7 +99,7 @@ struct TimerLogView: View {
                     if side == .report {
                         LogReport(store: store, span: span)
                     } else {
-                        SignalsPane(store: store)
+                        SignalsPane(store: store, scheduler: scheduler)
                     }
                 }
                 .padding(24)
@@ -496,87 +499,57 @@ private struct Empty: View {
     }
 }
 
-// MARK: - Thresholds and signals
+// MARK: - Thresholds and signals (scheduler jobs now)
 
 private struct SignalsPane: View {
     @ObservedObject var store: ActivityStore
+    @ObservedObject var scheduler: Scheduler
     @State private var confirmClear = false
+
+    /// The jobs that do what thresholds and signals did: wait for a day's count to go over a
+    /// limit, or call a web address.
+    private var thresholds: [ScheduledJob] { scheduler.book.jobs.filter { $0.when.kind == .event && $0.when.event == .countOver } }
+    private var signals: [ScheduledJob] { scheduler.book.jobs.filter { $0.action == .webhook } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
-            ChartBox(title: "Thresholds", note: "The moment a day's count goes over the limit, a card comes up in the middle of the screen (and a signal goes out)") {
+            ChartBox(title: "Thresholds", note: "Scheduler jobs that wait for a day's count to go over a limit: with Remind me, a card comes up in the middle of the screen") {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach($store.settings.rules) { $rule in
-                        HStack(spacing: 12) {
-                            Toggle("", isOn: $rule.enabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
-                            Picker("", selection: $rule.metric) {
-                                ForEach(ThresholdRule.Metric.allCases, id: \.self) { Text($0.words).tag($0) }
-                            }
-                            .labelsHidden()
-                            .frame(width: 180)
-                            Text("in a day over")
-                            Stepper(value: $rule.limit, in: 0...999) {
-                                Text("\(rule.limit)").monospacedDigit().frame(minWidth: 30)
-                            }
-                            Spacer()
-                            let today = store.log.days(from: Date(), to: Date(), calendar: store.calendar).first?.count(rule.metric) ?? 0
-                            Text("today: \(today)").foregroundStyle(.white.opacity(0.55)).monospacedDigit()
-                            GlassIcon(symbol: "trash", help: "Delete this threshold") {
-                                store.settings.rules.removeAll { $0.id == rule.id }
-                            }
-                        }
-                        .font(.system(size: 12.5))
-                    }
+                    if thresholds.isEmpty { Empty(text: "No thresholds yet") }
+                    ForEach(thresholds) { job in JobLine(job: job, scheduler: scheduler) }
                     Button {
-                        store.settings.rules.append(ThresholdRule(metric: .alarms, limit: 10))
+                        open(scheduler.add(ScheduledJob(name: "Too many snoozes", action: .remind,
+                                                        text: "{{count}} today: over your limit of {{limit}}.",
+                                                        when: Schedule(kind: .event, event: .countOver, metric: .snoozes, limit: 4))))
                     } label: {
                         Label("Add a threshold", systemImage: "plus")
                     }
                     .buttonStyle(.link)
                 }
             }
-            ChartBox(title: "Signals", note: "Each one is POSTed as JSON to your address (a Cloudflare worker, say). Unsent ones are kept and retried every minute.") {
-                VStack(alignment: .leading, spacing: 12) {
-                    LabeledField(label: "Address") {
-                        TextField("https://your-worker.your-name.workers.dev/signal", text: $store.settings.url)
-                            .textFieldStyle(.roundedBorder)
+            ChartBox(title: "Signals", note: "Scheduler jobs that call a web address (a Cloudflare worker, say) when something happens: with no text, what happened goes as JSON") {
+                VStack(alignment: .leading, spacing: 10) {
+                    if signals.isEmpty { Empty(text: "No signals yet") }
+                    ForEach(signals) { job in JobLine(job: job, scheduler: scheduler) }
+                    Button {
+                        open(scheduler.add(ScheduledJob(name: "Signal: alarms", action: .webhook,
+                                                        when: Schedule(kind: .event, event: .alarmRang), showResult: false)))
+                    } label: {
+                        Label("Add a signal", systemImage: "plus")
                     }
-                    LabeledField(label: "Secret") {
-                        SecureField("Optional: sent as Authorization: Bearer …", text: $store.settings.secret)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    if !store.settings.url.trimmingCharacters(in: .whitespaces).isEmpty && store.settings.endpoint == nil {
-                        Label("That isn't an http(s) address", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11.5)).foregroundStyle(.orange)
-                    }
-                    LabeledField(label: "Send") {
-                        HStack(spacing: 18) {
-                            Toggle("Thresholds crossed", isOn: $store.settings.sendThresholds)
-                            Toggle("The battery (set, every 10%, empty)", isOn: $store.settings.sendBattery)
-                            Toggle("Every alarm and snooze", isOn: $store.settings.sendAlarms)
+                    .buttonStyle(.link)
+                    if !store.outbox.isEmpty {
+                        HStack(spacing: 12) {
+                            Text("\(store.outbox.count) signals from before are waiting to go to \(store.settings.endpoint?.host ?? "the old address")")
+                                .foregroundStyle(.white.opacity(0.65))
+                            Button("Retry now") { store.flush() }
+                                .disabled(store.settings.endpoint == nil)
+                            if store.sending { ProgressView().controlSize(.small) }
+                            if let last = store.lastSend { Text(last).foregroundStyle(.white.opacity(0.55)) }
                         }
-                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11.5))
                     }
-                    HStack(spacing: 12) {
-                        Button("Send a test") { store.sendTest() }
-                            .disabled(store.settings.endpoint == nil)
-                        Button("Retry now (\(store.outbox.count) waiting)") { store.flush() }
-                            .disabled(store.outbox.isEmpty || store.settings.endpoint == nil)
-                        if store.sending { ProgressView().controlSize(.small) }
-                        if let last = store.lastSend {
-                            Text(last).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.65))
-                        }
-                    }
-                    Text("What a signal looks like:").font(.system(size: 11.5, weight: .semibold)).padding(.top, 4)
-                    Text(store.sample)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.3)))
                 }
-                .font(.system(size: 12.5))
             }
             ChartBox(title: "The log", note: "\(store.log.entries.count) entries in \(store.logURL.lastPathComponent)") {
                 Button("Clear the log…") { confirmClear = true }
@@ -586,16 +559,40 @@ private struct SignalsPane: View {
             }
         }
     }
+
+    private func open(_ id: String) { SchedulerWindow.show(scheduler, select: id) }
 }
 
-private struct LabeledField<Content: View>: View {
-    let label: String
-    @ViewBuilder let content: () -> Content
+/// A threshold or signal job: its switch, what it waits for and does, and a way to it in the Scheduler.
+private struct JobLine: View {
+    let job: ScheduledJob
+    @ObservedObject var scheduler: Scheduler
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(label).foregroundStyle(.white.opacity(0.6)).frame(width: 60, alignment: .trailing)
-            content()
+            Toggle("", isOn: Binding(get: { job.enabled }, set: { scheduler.setEnabled(job.id, $0) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            Image(systemName: job.action.symbol).foregroundStyle(.white.opacity(0.6)).frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(job.name).font(.system(size: 12.5, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55))
+            }
+            Spacer()
+            if let ok = job.lastOK {
+                Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(ok ? Color.green.opacity(0.8) : Color.orange)
+                    .help(job.lastResult ?? "")
+            }
+            Button("Open in Scheduler") { SchedulerWindow.show(scheduler, select: job.id) }
         }
+        .font(.system(size: 12.5))
+    }
+
+    /// When it runs and what it does ("When an alarm goes off · Call a web address · worker.dev").
+    private var detail: String {
+        var parts = [job.when.describe(clock24: scheduler.prefs.settings.clock24), job.action.title]
+        if job.action == .webhook { parts.append(URL(string: job.target)?.host ?? "no address yet") }
+        return parts.joined(separator: " · ")
     }
 }
