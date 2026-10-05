@@ -3,10 +3,11 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-// The timers' tiles in the panel, what runs them (a check every second, from launch on), their
+// The chimes' tiles in the panel, what runs them (a check every second, from launch on), their
 // sounds and the big cards they put up: each timer has its own sound and its own spot on the
-// screen. The four countdowns also show reminders on the way down, and allow one snooze. The
-// battery drains in the same tick. Everything that happens goes into the log (ActivityStore).
+// screen. The countdowns and due dates run in the boards' boxes (BoardStore), with these looks
+// and sounds. The battery drains in the same tick. Everything that happens goes into the log
+// (ActivityStore).
 
 /// How each timer looks and sounds.
 struct TimerLook {
@@ -23,6 +24,8 @@ struct TimerLook {
         case "repeat-1": return TimerLook(symbol: "repeat", tone: .marimba, spot: .topRight, accent: Color(red: 0.5, green: 0.85, blue: 1))
         case "repeat-2": return TimerLook(symbol: "arrow.triangle.2.circlepath", tone: .rising, spot: .bottomRight,
                                           accent: Color(red: 0.6, green: 0.95, blue: 0.7))
+        case "due": return TimerLook(symbol: "calendar.badge.clock", tone: .triple, spot: .center,
+                                     accent: Color(red: 0.78, green: 0.62, blue: 1))
         case "day-chime": return TimerLook(symbol: "sun.max", tone: .ding, spot: .topCenter, accent: Color(red: 1, green: 0.85, blue: 0.4))
         default: return TimerLook(symbol: "moon.zzz", tone: .dingDong, spot: .bottomCenter, accent: Color(red: 1, green: 0.35, blue: 0.3))
         }
@@ -34,9 +37,11 @@ final class TimerBoard: ObservableObject {
     @Published private(set) var states: [String: TimerState] = [:]
     @Published private(set) var battery: BatteryState
 
-    let specs = TimerSpec.all
+    /// The two chimes (the countdowns are the boxes').
+    let specs = TimerSpec.chimes
     let activity: ActivityStore
-    private let sounds = TonePlayer()
+    /// Shared with the boxes' timers.
+    let sounds = TonePlayer()
     private let cards = BigCards.shared
     private var ticker: Timer?
     private static let key = "timers"
@@ -50,7 +55,9 @@ final class TimerBoard: ObservableObject {
             ?? BatteryState()
         if let data = defaults.data(forKey: Self.key),
            let saved = try? JSONDecoder().decode([String: TimerState].self, from: data) {
-            states = saved
+            // Only the chimes: the panel's countdowns moved into the boards' boxes.
+            let ids = Set(specs.map(\.id))
+            states = saved.filter { ids.contains($0.key) }
         }
     }
 
@@ -197,61 +204,26 @@ final class TimerBoard: ObservableObject {
     }
 
     private func fire(_ spec: TimerSpec, _ event: TimerEvent) {
+        guard case .chime(let at) = event else { return }
         let look = TimerLook.of(spec)
         // No screen (the lid is closed, or a Power Nap woke the Mac in the dark): nothing to show
-        // or hear it on. It still goes into the log, and a countdown at zero stays at zero.
+        // or hear it on. It still goes into the log.
         guard !NSScreen.screens.isEmpty else {
-            switch event {
-            case .finished, .snoozeOver, .roundDone: log(spec, .alarm, detail: "While the screen was off")
-            case .chime(let at): log(spec, .chime, detail: TimerText.label(at, calendar: calendar) + " (screen off)")
-            case .reminder: break
-            }
+            log(spec, .chime, detail: TimerText.label(at, calendar: calendar) + " (screen off)")
             return
         }
         let ok: () -> Void = { [weak self] in self?.dismiss(spec) }
-        switch event {
-        case .reminder(let left):
-            // In the middle, a moment: how long until it goes off.
-            cards.show("reminder", at: .center, fade: 3) { size in
-                BigCard(size: size, symbol: look.symbol, accent: look.accent,
-                        name: "\(spec.name) · \(TimerText.duration(spec.duration(state(spec.id)) ?? 0))",
-                        headline: TimerText.left(left), line: "left until the alarm") { EmptyView() }
+        log(spec, .chime, detail: TimerText.label(at, calendar: calendar))
+        sounds.play(look.tone, for: spec.id, maxSeconds: nil)
+        if spec.kind == .dayChime {
+            let text = TimerText.day(at, calendar: calendar)
+            cards.show(spec.id, at: look.spot, hideAfter: 30, onEscape: ok) { size in
+                DayChimeCard(size: size, look: look, text: text, ok: ok)
             }
-            return
-        case .finished, .snoozeOver:
-            let length = spec.duration(state(spec.id)) ?? 0
-            let after = event == .snoozeOver(round: 0) || spec.kind == .repeating
-            log(spec, .alarm, detail: after ? "Again after a snooze" : "Time's up · \(TimerText.duration(length))", value: length)
-            sounds.play(look.tone, for: spec.id, maxSeconds: look.tone.loops ? 120 : nil)
-            if spec.kind == .once {
-                cards.show(spec.id, at: look.spot, onEscape: ok) { size in
-                    CountdownDoneCard(size: size, spec: spec, look: look, board: self, length: length, at: Date(),
-                                      snoozed: after, ok: ok, again: { [weak self] in self?.restart(spec) })
-                }
-            } else {
-                cards.show(spec.id, at: look.spot, onEscape: ok) { size in
-                    RoundDoneCard(size: size, spec: spec, look: look, board: self, round: state(spec.id).rung, ok: ok)
-                }
-            }
-        case .roundDone(let round):
-            log(spec, .alarm, detail: "Round \(round) done", value: Double(round))
-            sounds.play(look.tone, for: spec.id, maxSeconds: nil)
-            cards.show(spec.id, at: look.spot, onEscape: ok) { size in
-                RoundDoneCard(size: size, spec: spec, look: look, board: self, round: round, ok: ok)
-            }
-        case .chime(let at):
-            log(spec, .chime, detail: TimerText.label(at, calendar: calendar))
-            sounds.play(look.tone, for: spec.id, maxSeconds: nil)
-            if spec.kind == .dayChime {
-                let text = TimerText.day(at, calendar: calendar)
-                cards.show(spec.id, at: look.spot, hideAfter: 30, onEscape: ok) { size in
-                    DayChimeCard(size: size, look: look, text: text, ok: ok)
-                }
-            } else {
-                let text = TimerText.night(at, calendar: calendar)
-                cards.show(spec.id, at: look.spot, hideAfter: 10 * 60, onEscape: ok) { size in
-                    NightChimeCard(size: size, look: look, text: text, ok: ok)
-                }
+        } else {
+            let text = TimerText.night(at, calendar: calendar)
+            cards.show(spec.id, at: look.spot, hideAfter: 10 * 60, onEscape: ok) { size in
+                NightChimeCard(size: size, look: look, text: text, ok: ok)
             }
         }
     }
@@ -412,75 +384,6 @@ final class TonePlayer {
 
 // MARK: - The cards
 
-/// Timer 1 and 2 at zero: rings until OK; one snooze.
-struct CountdownDoneCard: View {
-    let size: NSSize
-    let spec: TimerSpec
-    let look: TimerLook
-    @ObservedObject var board: TimerBoard
-    let length: TimeInterval
-    let at: Date
-    /// Ringing again after its snooze.
-    let snoozed: Bool
-    let ok: () -> Void
-    let again: () -> Void
-
-    var body: some View {
-        let h = max(36, size.height * 0.1)
-        BigCard(size: size, symbol: look.symbol, accent: look.accent,
-                name: "\(spec.name) · \(TimerText.duration(length)) · done at \(at.formatted(date: .omitted, time: .shortened))",
-                headline: "TIME'S UP", line: snoozed ? "Snoozed once already: click OK" : "Click OK to stop the alarm",
-                mood: .error, close: ok) {
-            HStack(spacing: 10) {
-                Spacer()
-                if board.canSnooze(spec) {
-                    BigButton(title: "Snooze \(TimerText.duration(TimerSpec.snooze))", symbol: "zzz", height: h) { board.snooze(spec) }
-                        .help("Quiet for 3 minutes, then it rings again (once per countdown)")
-                }
-                BigButton(title: "Again", symbol: "arrow.counterclockwise", height: h, action: again)
-                    .help("Start the same countdown again")
-                BigButton(title: "OK", prominent: true, height: h, action: ok)
-            }
-        }
-    }
-}
-
-/// Repeat 1 and 2 at zero: when the next round starts, one snooze a round, and a way to stop.
-struct RoundDoneCard: View {
-    let size: NSSize
-    let spec: TimerSpec
-    let look: TimerLook
-    @ObservedObject var board: TimerBoard
-    let round: Int
-    let ok: () -> Void
-
-    var body: some View {
-        let s = board.state(spec.id)
-        let length = spec.duration(s) ?? 0
-        let h = max(36, size.height * 0.1)
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let next: String = {
-                if case .holding(let left, _) = spec.phase(s, now: context.date) { return "next round in \(TimerText.clock(left))" }
-                return "next round started"
-            }()
-            BigCard(size: size, symbol: look.symbol, accent: look.accent,
-                    name: "\(spec.name) · every \(TimerText.duration(length))",
-                    headline: "ROUND \(round) DONE", line: next, close: ok) {
-                HStack(spacing: 10) {
-                    Spacer()
-                    if board.canSnooze(spec) {
-                        BigButton(title: "Snooze \(TimerText.duration(TimerSpec.snooze))", symbol: "zzz", height: h) { board.snooze(spec) }
-                            .help("Quiet now, ring again in 3 minutes (once a round)")
-                    }
-                    BigButton(title: "Stop timer", symbol: "stop.fill", height: h) { board.stop(spec) }
-                        .help("Stop \(spec.name): no more rounds")
-                    BigButton(title: "OK", prominent: true, height: h, action: ok)
-                }
-            }
-        }
-    }
-}
-
 /// The day chime: the hour, hours since 6 AM and to 10 PM, and how far through the day it is.
 struct DayChimeCard: View {
     let size: NSSize
@@ -538,20 +441,19 @@ struct NightChimeCard: View {
 
 // MARK: - In the panel
 
-/// The six timer tiles, the battery and the log: click a timer to step through its choices; the
-/// ring shows what's left.
+/// The chimes and the log, as big tiles stacked in their column: click a chime to turn it on or
+/// off.
 struct TimerGrid: View {
     @ObservedObject var board: TimerBoard
     let model: AppModel
     let color: Color
 
     var body: some View {
-        LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
+        VStack(spacing: MenuView.gap) {
             ForEach(board.specs) { spec in
-                TimerTile(spec: spec, state: board.state(spec.id), color: color, board: board)
+                TimerTile(spec: spec, state: board.state(spec.id), color: color, board: board, big: true)
             }
-            BatteryTile(battery: board.battery, color: color, board: board)
-            ToolTile(tool: Tools.timerLog, color: color) { model.open(Tools.timerLog) }
+            BigToolTile(tool: Tools.timerLog, color: color) { model.open(Tools.timerLog) }
         }
     }
 }
@@ -567,31 +469,35 @@ private struct TileFace: View {
     let pulse: Bool
     let color: Color
     let hover: Bool
+    /// A size up, for a stacked column (as `BigToolTile` is to `ToolTile`).
+    var big = false
 
     var body: some View {
+        let icon: CGFloat = big ? 54 : 40
+        let weight: Font.Weight = big ? (hover ? .semibold : .medium) : (hover ? .medium : .regular)
         VStack(spacing: 4) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: big ? 13 : 10, style: .continuous)
                     .fill(on ? AnyShapeStyle(color.gradient) : AnyShapeStyle(color.opacity(0.28)))
                 Image(systemName: symbol)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: big ? 24 : 18, weight: .medium))
                     .foregroundStyle(.white)
                     .symbolEffect(.pulse, isActive: pulse)
-                ProgressRing(fraction: fraction, color: color)
+                ProgressRing(fraction: fraction, color: color, size: icon + 12)
             }
-            .frame(width: 40, height: 40)
+            .frame(width: icon, height: icon)
             .scaleEffect(hover ? 1.06 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hover)
             Text(name)
-                .font(.system(size: 10.5, weight: hover ? .medium : .regular))
+                .font(.system(size: big ? 12 : 10.5, weight: weight))
                 .foregroundStyle(hover ? AnyShapeStyle(color) : AnyShapeStyle(.primary))
                 .lineLimit(1)
             Text(status)
-                .font(.system(size: 10, weight: on ? .semibold : .regular).monospacedDigit())
+                .font(.system(size: big ? 10.5 : 10, weight: on ? .semibold : .regular).monospacedDigit())
                 .foregroundStyle(on ? AnyShapeStyle(color) : AnyShapeStyle(.secondary))
                 .lineLimit(1)
         }
-        .frame(width: MenuView.tile, height: 84)
+        .frame(width: big ? MenuView.bigTile : MenuView.tile, height: big ? 108 : 84)
         .contentShape(Rectangle())
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hover ? color.opacity(0.14) : .clear))
     }
@@ -623,6 +529,7 @@ struct TimerTile: View {
     let state: TimerState
     let color: Color
     let board: TimerBoard
+    var big = false
     @State private var hover = false
 
     var body: some View {
@@ -632,7 +539,7 @@ struct TimerTile: View {
             ZStack(alignment: .topTrailing) {
                 Button { board.tap(spec) } label: {
                     TileFace(symbol: look.symbol, name: spec.name, status: status(phase, now: context.date), on: state.isOn,
-                             fraction: fraction(phase), pulse: phase == .finished, color: color, hover: hover)
+                             fraction: fraction(phase), pulse: phase == .finished, color: color, hover: hover, big: big)
                 }
                 .buttonStyle(PressStyle())
                 .help(tip)
@@ -691,63 +598,11 @@ struct TimerTile: View {
             what = "Every hour from 6 AM to 10 PM: a ding, and a card with the time, hours since 6 AM and hours to 10 PM."
         case .nightChime:
             what = "Every hour from 11 PM to 5 AM: a ding, and a warning card with the time and the hours left before 6 AM."
+        case .deadline:
+            what = "Counts down to a day and time, then rings with a big card to click OK."
         }
         let steps = (spec.choices + ["Off"]).joined(separator: " → ")
         return "\(spec.name)\n\n\(what) Its card covers the \(TimerLook.of(spec).spot.words) quarter of the screen.\n\nClick: \(steps). Right-click to pick one."
-    }
-}
-
-/// The battery: click to set 100, 80, 60, 40, 20 or 0%; it drains 20% an hour and stops at 0.
-struct BatteryTile: View {
-    let battery: BatteryState
-    let color: Color
-    let board: TimerBoard
-    @State private var hover = false
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let level = Battery.level(battery, now: context.date)
-            let draining = Battery.isDraining(battery, now: context.date)
-            Button { board.tapBattery() } label: {
-                TileFace(symbol: Self.symbol(level, set: battery.start != nil), name: TimerBoard.batteryName,
-                         status: status(level, draining: draining), on: draining,
-                         fraction: battery.start == nil ? nil : level / 100, pulse: false, color: color, hover: hover)
-            }
-            .buttonStyle(PressStyle())
-            .help(tip(level, draining: draining, now: context.date))
-            .contextMenu {
-                ForEach(Array(Battery.levels.enumerated()), id: \.offset) { i, l in
-                    Button("Set to \(Int(l))%") { board.chooseBattery(i) }
-                }
-            }
-        }
-        .onHover { hover = $0 }
-    }
-
-    static func symbol(_ level: Double, set: Bool) -> String {
-        guard set else { return "battery.0" }
-        switch level {
-        case 87.5...: return "battery.100"
-        case 62.5..<87.5: return "battery.75"
-        case 37.5..<62.5: return "battery.50"
-        case 0.5..<37.5: return "battery.25"
-        default: return "battery.0"
-        }
-    }
-
-    private func status(_ level: Double, draining: Bool) -> String {
-        if battery.start == nil { return "Not set" }
-        if !draining { return "Empty" }
-        // Shown rounded up, so it reads 100% when set and 1% just before it runs out.
-        return "\(Int(level.rounded(.up)))%"
-    }
-
-    private func tip(_ level: Double, draining: Bool, now: Date) -> String {
-        var t = "Battery\n\nClick to set it to 100, 80, 60, 40, 20 or 0% (one step each click). It drains 20% an hour and stops at 0; the Timer log charts it."
-        if draining, let empty = Battery.emptyAt(battery) {
-            t += "\n\nEmpty at \(empty.formatted(date: .omitted, time: .shortened)) (in \(TimerText.left(empty.timeIntervalSince(now))))."
-        }
-        return t
     }
 }
 
@@ -755,6 +610,7 @@ struct BatteryTile: View {
 private struct ProgressRing: View {
     let fraction: Double?
     let color: Color
+    var size: CGFloat = 52
 
     var body: some View {
         if let fraction {
@@ -766,7 +622,7 @@ private struct ProgressRing: View {
                     .rotationEffect(.degrees(-90))
                     .animation(.linear(duration: 1), value: fraction)
             }
-            .frame(width: 52, height: 52)
+            .frame(width: size, height: size)
             .allowsHitTesting(false)
         }
     }

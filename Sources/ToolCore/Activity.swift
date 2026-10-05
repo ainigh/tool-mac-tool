@@ -364,6 +364,31 @@ public enum Battery {
         return start.addingTimeInterval(s.level / rate * 3600)
     }
 
+    /// The 10% steps still to come on the way down (the next first), and when each is reached:
+    /// at 47%, 40% then 30%, 20%, 10% and 0 (empty). Empty when it isn't draining.
+    public static func steps(_ s: BatteryState, now: Date) -> [(level: Int, at: Date)] {
+        guard let start = s.start, isDraining(s, now: now) else { return [] }
+        let l = level(s, now: now)
+        var step = Int((l / 10).rounded(.up)) * 10 - 10
+        var out: [(level: Int, at: Date)] = []
+        while step >= 0 {
+            out.append((step, start.addingTimeInterval((s.level - Double(step)) / rate * 3600)))
+            step -= 10
+        }
+        return out
+    }
+
+    /// When it was last at 100%: the latest time the log has it set to full (or the setting now,
+    /// if that's full and the log doesn't go back that far).
+    public static func lastFull(_ s: BatteryState, entries: [LogEntry]) -> Date? {
+        let logged = entries.last { $0.kind == .batterySet && ($0.value ?? 0) >= 100 }?.at
+        let now = s.level >= 100 ? s.start : nil
+        switch (logged, now) {
+        case let (a?, b?): return max(a, b)
+        default: return logged ?? now
+        }
+    }
+
     public enum Event: Equatable, Sendable {
         /// Passed a 10% step on the way down.
         case step(Int)

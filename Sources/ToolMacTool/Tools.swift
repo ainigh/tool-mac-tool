@@ -34,29 +34,44 @@ struct ToolSection: Identifiable {
 }
 
 enum Tools {
-    /// The panel's columns, each top to bottom: a titled grid of tiles per section. The boards
-    /// get a narrow column of their own, their bigger tiles stacked.
-    static let columns: [[ToolSection]] = [Array(sections[0..<4]), Array(sections[4..<7]), Array(sections[7...])]
+    static let timersColor = Color(red: 0.90, green: 0.30, blue: 0.62)
+    static let batteryColor = Color(red: 0.20, green: 0.66, blue: 0.42)
 
-    /// Every section, left column first.
-    static let sections: [ToolSection] = [
-        ToolSection(title: "Files", color: Color(red: 0.16, green: 0.48, blue: 0.96), tools: [unzip], extra: .recentZips),
-        ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
-        ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
-                    tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
-        ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings]),
-        // What the chat's model can do for you (it calls them as tools); each also works by itself.
-        ToolSection(title: "Model tools", color: Color(red: 0.96, green: 0.56, blue: 0.10),
-                    tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
-        // Things done for you at the times you set: the model, the tools, reminders.
-        ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler]),
-        // Countdowns, hourly chimes and the battery: a click steps each through its choices (the
-        // tiles are the timers'), and the log that charts them.
-        ToolSection(title: "Timers", color: Color(red: 0.90, green: 0.30, blue: 0.62), tools: [], extra: .timers),
-        // Big panels of boxes to type into, one per board.
-        ToolSection(title: "Boards", color: Color(red: 0.36, green: 0.40, blue: 0.92),
-                    tools: [goals, strategies, entities, notes], style: .stack),
+    /// Across the top of the panel, in a row of its own with the battery and the next alarm.
+    static let files = ToolSection(title: "Files", color: Color(red: 0.16, green: 0.48, blue: 0.96), tools: [unzip],
+                                   extra: .recentZips)
+
+    /// The panel's columns under the top row, each top to bottom: a titled grid of tiles per
+    /// section. The last two are narrow, their bigger tiles stacked: what runs at times you set,
+    /// and the boards.
+    static let columns: [[ToolSection]] = [
+        [
+            ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
+            ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
+                        tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
+        ],
+        [
+            ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings]),
+            // What the chat's model can do for you (it calls them as tools); each also works by itself.
+            ToolSection(title: "Model tools", color: Color(red: 0.96, green: 0.56, blue: 0.10),
+                        tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
+        ],
+        [
+            // Things done for you at the times you set: the model, the tools, reminders.
+            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler], style: .stack),
+            // The hourly chimes (a click turns one on or off) and the log that charts the timers.
+            // The countdowns and due dates are set per box, on the boards.
+            ToolSection(title: "Timers", color: timersColor, tools: [], extra: .timers, style: .stack),
+        ],
+        [
+            // Big panels of boxes to type into, one per board.
+            ToolSection(title: "Boards", color: Color(red: 0.36, green: 0.40, blue: 0.92),
+                        tools: [goals, strategies, entities, notes], style: .stack),
+        ],
     ]
+
+    /// Every section: the top row's, then the columns', left first.
+    static var sections: [ToolSection] { [files] + columns.flatMap { $0 } }
 
     static var all: [Tool] { sections.flatMap(\.tools) }
 
@@ -216,17 +231,17 @@ enum Tools {
         symbol: "brain",
         open: { _ in MemoryWindow.show() })
 
-    static let goals = board("goals", "Goals", symbol: "target")
-    static let strategies = board("strategies", "Strategies", symbol: "map")
-    static let entities = board("entities", "Entities", symbol: "circle.hexagongrid")
-    static let notes = board("notes", "Notes", symbol: "note.text")
+    static let goals = board(BoardStore.kinds[0])
+    static let strategies = board(BoardStore.kinds[1])
+    static let entities = board(BoardStore.kinds[2])
+    static let notes = board(BoardStore.kinds[3])
 
-    private static func board(_ id: String, _ name: String, symbol: String) -> Tool {
-        Tool(id: "board-\(id)",
-             name: name,
-             title: "\(name): a board of boxes",
-             subtitle: "A big panel of boxes to type into. The arrows at the top show more or fewer (hidden ones keep their text). Double-click a box to change its color; its corner icons copy its text or open it to fill the panel.",
-             symbol: symbol,
-             open: { _ in BoardWindow.show(id, title: name) })
+    private static func board(_ kind: BoardStore.Kind) -> Tool {
+        Tool(id: "board-\(kind.id)",
+             name: kind.name,
+             title: "\(kind.name): a board of boxes",
+             subtitle: "A big glass panel of boxes to type into. The arrows either side show more or fewer (hidden ones keep their text). Double-click a box to change its color. Down its left: a timer or a due date for it (one at a time), its countdown at its top; at its top right: copy, open it to fill the board, and pin it to float on your screen. Web addresses in a box open with a click.",
+             symbol: kind.symbol,
+             open: { model in model.boards.show(kind.id) })
     }
 }

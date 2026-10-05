@@ -1,8 +1,10 @@
 # Tool Mac Tool
 
-A wrench icon in the macOS menu bar. Clicking it opens a panel of tool tiles, grouped into sections
-in two columns (so it stays short), plus a narrow third column of bigger tiles for the boards,
-with dividers between them; each section has its own color,
+A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, when one is set).
+Clicking it opens a panel: a row across the top (Unzip to Desktop, the battery in detail, the next
+alarm), then tool tiles grouped into sections in two columns (so it stays short), plus two narrow
+columns of bigger tiles (the Scheduler, the chimes and the Timer log; the boards), with dividers
+between them; each section has its own color,
 worn by its tiles and its title. The bar at the bottom holds updates (with the
 version you're on), **Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
 
@@ -363,13 +365,28 @@ saves, ⌘W closes. The editor reloads when the file changes on disk (the chat a
 to it), unless you have unsaved edits. If you save over a change made in the meantime, it asks
 first.
 
+### The top row: Unzip, Battery, Next alarm
+
+Across the top of the panel: the **Unzip to Desktop** tile, then the battery and the next alarm,
+sharing the rest of the row half and half. The zips downloaded lately are listed under it.
+
+- **Battery**: a make-believe battery. Click its icon to set it to 100, 80, 60, 40, 20 or 0% (one
+  step a click; right-click to pick one). It drains 20% an hour and stops at 0. The panel shows the
+  level now, a gauge with a tick every 10% and a mark at the next step, **when it reaches that next
+  step** (and how long until then), when it's empty, **when it was last at 100%**, and the steps
+  after the next one with their times. It's charted in the Timer log and sent in the signals.
+- **Next alarm**: the next timer or due date to ring in the boards' boxes: when ("3:45 PM", "Tue
+  9:00 AM", "12 Mar, 9:00 AM"), the countdown to it, and which box it's in (click to open that
+  box on its board), then the two after it. The same shows **next to the wrench in the menu bar**:
+  the countdown when it's within the hour, otherwise when it rings ("now" while one is ringing).
+
 ### Timers
 
-Six timer tiles and a battery, each set by **clicking it to step through its choices** (past the
-last one it's off); right-click one to pick a choice straight away, restart, snooze or stop it, and
-the small ✕ on a running tile stops it. A ring round the icon shows what's left, and the line under
-the name the time. Each timer has its own sound, and its card covers **a quarter of the screen**
-(half as wide, half as tall) in its own spot, the words zoomed to fill it.
+The countdowns and due dates are set **per box**, on the boards (below): each box runs one at a
+time. Each has its own sound, and its card covers **a quarter of the screen** (half as wide, half
+as tall) in its own spot, the words zoomed to fill it. **Every card a box's timer puts up has the
+box's text at the bottom, to read and edit right there** (it's the box's own text), a way to open
+the box on its board, and waits for **OK** (or Esc).
 
 - **Timer 1** (1, 3, 5, 10, 15 min; top left) and **Timer 2** (20, 30, 45 min, 1 h, 1 h 30, 2 h;
   bottom left) count down once. At zero they ring, loud (three quick beeps; a siren), until you
@@ -378,18 +395,25 @@ the name the time. Each timer has its own sound, and its card covers **a quarter
 - **Repeat 1** (15, 20, 25, 30 min; top right) and **Repeat 2** (45, 50, 60, 90 min; bottom
   right) count down, ring softly (two falling notes; three rising ones), stay at 0:00 for five
   minutes, then start again, round after round, until you stop them. One snooze a round.
-- **Reminders** (the four above): on the way down, a card the same size comes up in the middle of
-  the screen and fades away within about three seconds, saying how long is left. They come at half
-  of what's left each time, in whole minutes, down to a minute: for an hour, at 30, 15, 7, 3 and
-  1 minute left. Clicks pass through them.
-- **Day chime** (on or off; top middle): every hour from 6 AM to 10 PM, a bright ding and a card
+- **Due date** (middle): pick a day and time, hours, days, months or years ahead (a calendar, or
+  1 h, 1 day, 1 week, 1 month, 1 year from now). It counts down to it, then rings until **OK**
+  (one snooze). Unlike a countdown, one that came while the Mac was off still rings when the app
+  next runs.
+- **Reminders**: on the way down, a card the same size comes up in the middle of the screen, saying
+  how long is left (counting down live), and stays until you click **OK** (or **Stop timer**). A
+  countdown's come at half of what's left each time, in whole minutes, down to a minute: for an
+  hour, at 30, 15, 7, 3 and 1 minute left. A due date's come at whole spans: 1 year, 6 months,
+  3 months, 30, 14, 7, 3 and 2 days, 1 day, 12, 6, 3 and 1 hours, then 30, 15, 5 and 1 minutes
+  before (those that fit).
+
+Two more stay in the panel, as big tiles in the fourth column with the Scheduler and the Timer
+log. Click one to turn it on or off:
+
+- **Day chime** (top middle): every hour from 6 AM to 10 PM, a bright ding and a card
   with the time ("Monday 2 PM"), how many hours have passed since 6 AM and how many are left to
   10 PM, with a bar for the day so far.
-- **Night watch** (on or off; bottom middle): every hour from 11 PM to 5 AM, a low ding-dong and a
+- **Night watch** (bottom middle): every hour from 11 PM to 5 AM, a low ding-dong and a
   red, pulsing warning card with the time ("Tuesday 1 AM") and how many hours are left before 6 AM.
-- **Battery**: click to set it to 100, 80, 60, 40, 20 or 0% (one step a click). It drains 20% an
-  hour, like a countdown, and stops at 0. Nothing pops up: it shows on its tile, in the Timer log's
-  battery chart, and in the signals.
 
 The chimes keep the time zone set in Settings. Timers keep going while the app is closed and pick
 up when it opens again: a countdown that ended over an hour ago switches off quietly, and a chime
@@ -431,12 +455,24 @@ Its **Thresholds & signals** side sets:
 
 ### Goals, Strategies, Entities, Notes (Boards)
 
-Four boards, each a big window of boxes to type into. They have the panel's third column to
-themselves, their tiles a size bigger and stacked. The arrows at the top show more or fewer boxes
-(1 to 36); a hidden box keeps its text for when it's shown again. The boxes fill the window, the
+Four boards, each a big glass panel (nine tenths of the screen, the same moving colors as the
+other glass panels) of boxes to type into. They have the panel's last column to themselves, their
+tiles a size bigger and stacked. The big arrows either side of the boxes show fewer or more
+(1 to 36); a hidden box keeps its text for when it's shown again. The boxes fill the panel, the
 gutter between them narrowing as there are more. Double-click a box to step it through light
-colors. In each box's top right corner, the copy icon copies its text and the open icon opens it
-to fill the window (click again to go back to the grid). Everything is saved as you go, in
+colors. Web addresses in a box are underlined: click one to open it in your browser.
+
+- **Down each box's left**, a thin column: Timer 1, Timer 2, Repeat 1, Repeat 2 and a due date.
+  Click one to pick how long (or the day and time); the one running is filled in. One timer a box:
+  setting another replaces it. Its **countdown shows at the top middle of the box**, with a ✕ to
+  stop it.
+- **At its top right**: copy its text, open it to fill the board (Esc or click again to go back),
+  and **pin** it: the box floats on your screen in a little window of its own, above other windows
+  and on every desktop. Drag it anywhere, resize it, type in it; the button at its bottom opens
+  its board with the box opened, and the pin (or ⌘W) puts it away. Pinned boxes come back where
+  you left them after a relaunch.
+
+⌘W closes a board. Everything is saved as you go, in
 `~/Library/Application Support/ToolMacTool/boards/<board>.json`.
 
 ## Adding a tool
@@ -464,9 +500,10 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text, history), timers (what's due when, reminders, snoozes, their sounds), the timer log (counts, thresholds, signals, the battery), boards (boxes, their colors, the grid), updates
+                              their text, history), timers (what's due when, reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery and its steps), boards (boxes, their colors, timers and pins, the grid), updates
                               (testable anywhere)
-Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the registry), Windows,
+Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the next alarm,
+                              the menu bar's countdown), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
                               ShortcutTools (running shortcuts, the Tools window), ModelTools (the built-in
                               tools, the alarm, this Mac), BuildTools,
@@ -475,9 +512,10 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), Tools (the r
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
                               times, the result card, the Scheduler's window),
-                              Timers (the timer tiles, their sounds and cards), BigCards (the quarter-screen cards),
+                              Timers (the chime tiles, the sounds, the chimes' cards), BigCards (the quarter-screen cards),
                               ActivityStore (the log, thresholds, sending signals), TimerLogView (the report),
-                              BoardView (the boards: Goals, Strategies, Entities, Notes),
+                              BoardView (the boards: Goals, Strategies, Entities, Notes; a box, pinned or not),
+                              BoardStore (every board, its boxes' timers, pinned boxes), BoxCards (their cards),
                               MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
