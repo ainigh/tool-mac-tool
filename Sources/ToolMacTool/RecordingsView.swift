@@ -787,6 +787,30 @@ struct Badge: View {
     }
 }
 
+/// AppKit's player view, with its controls. (SwiftUI's VideoPlayer brought the app down the moment
+/// a recording was opened, in this app built with SwiftPM rather than Xcode.)
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = true
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player?.pause()
+        view.player = nil
+    }
+}
+
 /// One recording on its own: it plays on the left, its transcript (or what's being written down)
 /// is on the right.
 struct RecordingDetail: View {
@@ -813,15 +837,17 @@ struct RecordingDetail: View {
             HStack(spacing: 18) {
                 Group {
                     if let player {
-                        VideoPlayer(player: player) {
-                            if !item.isVideo {
-                                Image(systemName: "waveform")
-                                    .font(.system(size: 64, weight: .medium))
-                                    .foregroundStyle(Ink.reply(ink))
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .allowsHitTesting(false)
+                        PlayerView(player: player)
+                            .overlay {
+                                if !item.isVideo {
+                                    Image(systemName: "waveform")
+                                        .font(.system(size: 64, weight: .medium))
+                                        .foregroundStyle(Ink.reply(ink))
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .padding(.bottom, 60)
+                                        .allowsHitTesting(false)
+                                }
                             }
-                        }
                     } else {
                         Color.black
                     }

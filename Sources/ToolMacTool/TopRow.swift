@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-// The row across the top of the panel: Unzip to Desktop, then the battery in detail and the next
-// alarm coming up in the boards' boxes, sharing the rest of the row half and half. The zips
-// downloaded lately are listed under it.
+// The row under the boards at the top of the panel: Unzip to Desktop, then the battery in detail,
+// across the rest of the row. The zips downloaded lately are listed under it. (The alarms coming
+// up are the notes in the panel's Timers column, and the countdown beside the wrench.)
 
 struct TopRow: View {
     @ObservedObject var model: AppModel
@@ -18,8 +18,6 @@ struct TopRow: View {
                     ToolTile(tool: Tools.unzip, color: files.color) { model.open(Tools.unzip) }
                 }
                 BatteryPanel(board: model.timers, activity: model.activity, color: Tools.batteryColor)
-                    .frame(maxWidth: .infinity)
-                NextAlarmPanel(store: model.boards, color: Tools.timersColor)
                     .frame(maxWidth: .infinity)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -113,7 +111,8 @@ struct BatteryPanel: View {
             HStack(spacing: 10) {
                 Fact(symbol: "battery.100", text: full.map { "Full \(AlarmTime.short($0, now: now))" } ?? "Not full lately")
                 Spacer(minLength: 4)
-                ForEach(Array(steps.dropFirst().prefix(3).enumerated()), id: \.offset) { _, step in
+                // The row is wide: the steps after the next one, up to six of them.
+                ForEach(Array(steps.dropFirst().prefix(6).enumerated()), id: \.offset) { _, step in
                     StepChip(level: step.level, at: step.at, now: now)
                 }
             }
@@ -216,79 +215,6 @@ private struct Fact: View {
         }
         .font(.system(size: 11, weight: strong ? .medium : .regular).monospacedDigit())
         .lineLimit(1)
-    }
-}
-
-// MARK: - The next alarm
-
-/// The next alarm in the boards' boxes: when it rings, the countdown to it, and which box it's
-/// in (a click opens it), then the two after it.
-struct NextAlarmPanel: View {
-    @ObservedObject var store: BoardStore
-    let color: Color
-
-    var body: some View {
-        RowCard(title: "Next alarm", color: color) {
-            if let first = store.upcoming.first {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    content(first, now: context.date)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "bell.slash").foregroundStyle(color)
-                        Text("No alarms set").font(.system(size: 15, weight: .semibold, design: .rounded))
-                    }
-                    Text("Set a timer or a due date from the column down the left of a box on a board.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
-    private func content(_ u: BoardStore.Upcoming, now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button { store.show(u.board.id, focus: u.index) } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Image(systemName: u.at == nil ? "bell.and.waves.left.and.right.fill" : TimerLook.of(u.spec).symbol)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(color)
-                    Text(u.at.map { AlarmTime.short($0, now: now) } ?? "Ringing now")
-                        .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    if let at = u.at {
-                        Text("in \(TimerText.countdown(at.timeIntervalSince(now)))")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
-                            .foregroundStyle(color)
-                            .lineLimit(1)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Open \(u.place)")
-            Text([u.place, u.spec.name, u.title].compactMap { $0 }.joined(separator: " · "))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            ForEach(store.upcoming.dropFirst().prefix(2)) { later in
-                Button { store.show(later.board.id, focus: later.index) } label: {
-                    HStack(spacing: 4) {
-                        Text("then").foregroundStyle(.tertiary)
-                        Text(later.at.map { AlarmTime.short($0, now: now) } ?? "now").fontWeight(.medium)
-                        Text("· \(later.place) · \(later.spec.name)").foregroundStyle(.secondary)
-                    }
-                    .font(.system(size: 10.5).monospacedDigit())
-                    .lineLimit(1)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Open \(later.place)")
-            }
-        }
     }
 }
 

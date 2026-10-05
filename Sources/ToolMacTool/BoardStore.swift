@@ -5,7 +5,10 @@ import ToolCore
 // Every board, loaded at launch so the timers in their boxes run whether or not a board is open:
 // a check every second rings them, shows their reminders and cards (each with the box's text, to
 // edit right there), and keeps the list of alarms coming up for the panel and the menu bar. The
-// pinned boxes float on the screen in windows of their own, and come back after a relaunch.
+// pinned boxes float on the screen in windows of their own, and come back after a relaunch. It
+// also keeps a summary of every note for the panel: the ones docked along its bottom, and the
+// ones each tag's board gathers (Important, Urgent, Delegate, Think). A board can be docked in
+// the menu bar too, its icon beside the wrench: a click opens it.
 
 @MainActor
 final class BoardStore: ObservableObject {
@@ -13,14 +16,46 @@ final class BoardStore: ObservableObject {
         let id: String
         let name: String
         let symbol: String
+        /// Its own color in the panel, a darker shade (red, green and blue from 0 to 1).
+        let red: Double
+        let green: Double
+        let blue: Double
+
+        var color: Color { Color(red: red, green: green, blue: blue) }
     }
 
     nonisolated static let kinds: [Kind] = [
-        Kind(id: "goals", name: "Goals", symbol: "target"),
-        Kind(id: "strategies", name: "Strategies", symbol: "map"),
-        Kind(id: "entities", name: "Entities", symbol: "circle.hexagongrid"),
-        Kind(id: "notes", name: "Notes", symbol: "note.text"),
+        Kind(id: "goals", name: "Goals", symbol: "target", red: 0.72, green: 0.16, blue: 0.22),
+        Kind(id: "strategies", name: "Strategies", symbol: "map", red: 0.80, green: 0.38, blue: 0.08),
+        Kind(id: "entities", name: "Entities", symbol: "circle.hexagongrid", red: 0.62, green: 0.50, blue: 0.05),
+        Kind(id: "notes", name: "Notes", symbol: "note.text", red: 0.14, green: 0.52, blue: 0.24),
+        Kind(id: "people", name: "People", symbol: "person.2.fill", red: 0.04, green: 0.48, blue: 0.50),
+        Kind(id: "ideas", name: "Ideas", symbol: "lightbulb.fill", red: 0.13, green: 0.33, blue: 0.76),
+        Kind(id: "dreams", name: "Dreams", symbol: "moon.stars.fill", red: 0.34, green: 0.22, blue: 0.70),
+        Kind(id: "projects", name: "Projects", symbol: "hammer.fill", red: 0.55, green: 0.17, blue: 0.62),
+        Kind(id: "health", name: "Health", symbol: "heart.fill", red: 0.74, green: 0.14, blue: 0.46),
+        Kind(id: "communication", name: "Communication", symbol: "bubble.left.and.bubble.right.fill",
+             red: 0.42, green: 0.31, blue: 0.22),
     ]
+
+    /// A note in a box, summed up for the panel and the tags' boards.
+    struct Note: Identifiable, Equatable {
+        let board: Kind
+        let index: Int
+        let title: String?
+        let icon: String
+        let tint: Int
+        let tags: [NoteTag]
+        let docked: Bool
+        var id: String { "\(board.id)-\(index)" }
+        /// "Goals · box 3".
+        var place: String { "\(board.name) · box \(index + 1)" }
+    }
+
+    /// Every note worth listing: one with text, a tag, a dock or a timer.
+    @Published private(set) var notes: [Note] = []
+    /// The boards docked in the menu bar (a board's id, or a tag's board: "tag-urgent").
+    @Published private(set) var menuBarBoards: [String] = UserDefaults.standard.stringArray(forKey: BoardStore.menuBarKey) ?? []
 
     /// An alarm coming up (or ringing now) in a box.
     struct Upcoming: Identifiable, Equatable {
@@ -31,6 +66,11 @@ final class BoardStore: ObservableObject {
         let at: Date?
         /// The box's first line of text, if it has any.
         let title: String?
+        /// The note's icon and color.
+        let icon: String
+        let tint: Int
+        /// What's left of the countdown, from 1 down to 0 (nil when it isn't counting).
+        let fraction: Double?
         var id: String { "\(board.id)-\(index)" }
         /// "Goals · box 3".
         var place: String { "\(board.name) · box \(index + 1)" }
@@ -47,6 +87,10 @@ final class BoardStore: ObservableObject {
     private let cards = BigCards.shared
     private var ticker: Timer?
     private var pins: [String: GlassPanel] = [:]
+    private var statusItems: [String: NSStatusItem] = [:]
+    private var statusTargets: [String: StatusTarget] = [:]
+    private var notesQueued = false
+    nonisolated static let menuBarKey = "menuBarBoards"
 
     /// What each box's card is showing, so OK knows what it's putting away.
     private enum Shown { case reminder, ringing, round }
@@ -55,7 +99,12 @@ final class BoardStore: ObservableObject {
     init(sounds: TonePlayer, activity: ActivityStore) {
         self.sounds = sounds
         self.activity = activity
-        for kind in Self.kinds { models[kind.id] = BoardModel(id: kind.id) }
+        for kind in Self.kinds {
+            let m = BoardModel(id: kind.id)
+            m.onChange = { [weak self] in self?.queueNotes() }
+            models[kind.id] = m
+        }
+        refreshNotes()
     }
 
     func model(_ board: Kind) -> BoardModel { models[board.id]! }
@@ -72,10 +121,12 @@ final class BoardStore: ObservableObject {
         RunLoop.main.add(t, forMode: .common)
         ticker = t
         tick()
-        // The pinned boxes come back once the app has finished starting up.
+        // The pinned boxes (and the boards docked in the menu bar) come back once the app has
+        // finished starting up.
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 800_000_000)
             self?.restorePins()
+            self?.syncMenuBar()
         }
     }
 
@@ -83,6 +134,105 @@ final class BoardStore: ObservableObject {
     func show(_ id: String, focus: Int? = nil) {
         guard let board = Self.kind(id) else { return }
         BoardWindow.show(self, board, focus: focus)
+    }
+
+    /// Opens a tag's board: every note with that tag, from all the boards.
+    func show(_ tag: NoteTag) { TagBoardWindow.show(self, tag) }
+
+    /// Opens a board docked in the menu bar (a board's id, or "tag-…").
+    func open(docked id: String) {
+        if let tag = Self.tag(fromDock: id) { show(tag) } else { show(id) }
+    }
+
+    // MARK: A note's icon, tags and dock
+
+    func icon(_ board: Kind, _ i: Int) -> String { model(board).board.boxes[i].icon ?? board.symbol }
+
+    /// A different icon for the note (nil: its board's again).
+    func setIcon(_ symbol: String?, _ board: Kind, _ i: Int) {
+        model(board).board.boxes[i].icon = symbol == board.symbol ? nil : symbol
+    }
+
+    func toggle(_ tag: NoteTag, _ board: Kind, _ i: Int) { model(board).board.boxes[i].toggle(tag) }
+
+    /// In the row along the bottom of the panel, or out of it.
+    func setDocked(_ on: Bool, _ board: Kind, _ i: Int) { model(board).board.boxes[i].docked = on }
+
+    func tagged(_ tag: NoteTag) -> [Note] { notes.filter { $0.tags.contains(tag) } }
+    var docked: [Note] { notes.filter(\.docked) }
+
+    /// A change in a board: the summaries are made again once this moment's changes are in.
+    private func queueNotes() {
+        guard !notesQueued else { return }
+        notesQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.notesQueued = false
+            self.refreshNotes()
+        }
+    }
+
+    private func refreshNotes() {
+        var out: [Note] = []
+        for kind in Self.kinds {
+            for (i, box) in model(kind).board.boxes.enumerated() {
+                guard box.title != nil || !box.tags.isEmpty || box.docked || box.alarm != nil else { continue }
+                out.append(Note(board: kind, index: i, title: box.title, icon: box.icon ?? kind.symbol, tint: box.tint,
+                                tags: box.tags, docked: box.docked))
+            }
+        }
+        if out != notes { notes = out }
+    }
+
+    // MARK: Boards docked in the menu bar
+
+    nonisolated static func dockID(_ tag: NoteTag) -> String { "tag-\(tag.rawValue)" }
+    nonisolated static func tag(fromDock id: String) -> NoteTag? {
+        id.hasPrefix("tag-") ? NoteTag(rawValue: String(id.dropFirst(4))) : nil
+    }
+
+    /// A docked board's name and icon.
+    nonisolated static func label(forDock id: String) -> (name: String, symbol: String)? {
+        if let tag = tag(fromDock: id) { return (tag.title, tag.symbol) }
+        if let kind = kind(id) { return (kind.name, kind.symbol) }
+        return nil
+    }
+
+    func isInMenuBar(_ id: String) -> Bool { menuBarBoards.contains(id) }
+
+    /// Its icon in the menu bar beside the wrench (a click opens it), or not.
+    func setInMenuBar(_ on: Bool, _ id: String) {
+        menuBarBoards.removeAll { $0 == id }
+        if on { menuBarBoards.append(id) }
+        UserDefaults.standard.set(menuBarBoards, forKey: Self.menuBarKey)
+        syncMenuBar()
+    }
+
+    private func syncMenuBar() {
+        let wanted = Set(menuBarBoards)
+        for (id, item) in statusItems where !wanted.contains(id) {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItems[id] = nil
+            statusTargets[id] = nil
+        }
+        for id in menuBarBoards where statusItems[id] == nil {
+            guard let label = Self.label(forDock: id) else { continue }
+            let name = label.name, symbol = label.symbol
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.autosaveName = "ToolMacTool.board.\(id)"
+            let target = StatusTarget { [weak self] in self?.open(docked: id) }
+            if let button = item.button {
+                button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
+                button.image?.isTemplate = true
+                button.toolTip = "\(name): open the board (right-click to take it out of the menu bar)"
+                button.target = target
+                button.action = #selector(StatusTarget.clicked(_:))
+                button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            }
+            target.onRightClick = { [weak self] in self?.setInMenuBar(false, id) }
+            statusItems[id] = item
+            statusTargets[id] = target
+        }
     }
 
     // MARK: A box's timer
@@ -205,9 +355,10 @@ final class BoardStore: ObservableObject {
                 let ringing = spec.phase(a.state, now: now) == .finished
                 let at = a.nextRing(now: now).map { Date(timeIntervalSinceReferenceDate: $0.timeIntervalSinceReferenceDate.rounded()) }
                 guard ringing || at != nil else { continue }
-                let title = box.text.split(whereSeparator: \.isNewline).first
-                    .map { $0.trimmingCharacters(in: .whitespaces) }.flatMap { $0.isEmpty ? nil : $0 }
-                out.append(Upcoming(board: board, index: i, spec: spec, at: ringing ? nil : at, title: title))
+                var fraction: Double?
+                if case .counting(let left, let total, _) = spec.phase(a.state, now: now), total > 0 { fraction = left / total }
+                out.append(Upcoming(board: board, index: i, spec: spec, at: ringing ? nil : at, title: box.title,
+                                    icon: box.icon ?? board.symbol, tint: box.tint, fraction: fraction.map { ($0 * 100).rounded() / 100 }))
             }
         }
         out.sort { ($0.at ?? .distantPast) < ($1.at ?? .distantPast) }
@@ -310,6 +461,19 @@ final class BoardStore: ObservableObject {
         panel.setFrameAutosaveName(name)
         pins[id] = panel
         panel.orderFrontRegardless()
+    }
+}
+
+/// The target of a board's icon in the menu bar: a click opens the board, a right-click takes it out.
+@MainActor
+final class StatusTarget: NSObject {
+    let action: () -> Void
+    var onRightClick: (() -> Void)?
+
+    init(_ action: @escaping () -> Void) { self.action = action }
+
+    @objc func clicked(_ sender: Any?) {
+        if NSApp.currentEvent?.type == .rightMouseUp { onRightClick?() } else { action() }
     }
 }
 

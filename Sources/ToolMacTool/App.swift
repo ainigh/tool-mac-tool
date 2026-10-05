@@ -28,7 +28,7 @@ final class AppModel: ObservableObject {
     let scheduler = Scheduler()
     /// The timers' log: thresholds and the signals sent from it.
     let activity = ActivityStore()
-    /// The chimes and the battery, ticking from launch on.
+    /// The battery, ticking from launch on, and the chimes' sounds and cards.
     lazy var timers = TimerBoard(activity: activity)
     /// The boards, and the timers in their boxes, ticking from launch on.
     lazy var boards = BoardStore(sounds: timers.sounds, activity: activity)
@@ -55,6 +55,9 @@ final class AppModel: ObservableObject {
         updater.start()
         ModelTools.shared.app = self
         MacFacts.prepare()
+        // The scheduler hears of what goes into the timer log (its event jobs), runs the chimes
+        // (its built-in jobs), and reads the battery and the boards' alarms for its placeholders.
+        scheduler.attach(activity: activity, timers: timers, boards: boards)
         scheduler.start()
         timers.start()
         boards.start()

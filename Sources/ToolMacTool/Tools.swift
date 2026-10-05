@@ -19,7 +19,9 @@ struct Tool: Identifiable {
 }
 
 struct ToolSection: Identifiable {
-    enum Extra { case recentZips, timers }
+    /// Something shown with (or instead of) the tiles: the zips downloaded lately, the chimes'
+    /// switches (after the tiles), the notes running a timer, the tags' boards.
+    enum Extra { case recentZips, chimes, timedNotes, tagBoards }
     /// How its tiles are laid out: four across, or bigger ones stacked in a column of their own.
     enum Style { case grid, stack }
 
@@ -36,16 +38,26 @@ struct ToolSection: Identifiable {
 enum Tools {
     static let timersColor = Color(red: 0.90, green: 0.30, blue: 0.62)
     static let batteryColor = Color(red: 0.20, green: 0.66, blue: 0.42)
+    static let boardsColor = Color(red: 0.36, green: 0.40, blue: 0.92)
+    static let tagsColor = Color(red: 0.85, green: 0.45, blue: 0.10)
+    static let dockColor = Color(red: 0.45, green: 0.45, blue: 0.52)
 
-    /// Across the top of the panel, in a row of its own with the battery and the next alarm.
+    /// The row across the very top of the panel: every board, each in its own color (BoardsRow).
+    static var boards: [Tool] { BoardStore.kinds.map(board) }
+
+    /// Under the boards, in a row of its own with the battery.
     static let files = ToolSection(title: "Files", color: Color(red: 0.16, green: 0.48, blue: 0.96), tools: [unzip],
                                    extra: .recentZips)
 
-    /// The panel's columns under the top row, each top to bottom: a titled grid of tiles per
-    /// section. The last two are narrow, their bigger tiles stacked: what runs at times you set,
-    /// and the boards.
+    /// The panel's columns under the top rows, each top to bottom: a titled grid of tiles per
+    /// section. The last two are narrow: the notes running a timer (docked there by themselves
+    /// while it runs), and the tags' boards, each gathering the notes with that tag.
     static let columns: [[ToolSection]] = [
         [
+            // Things done for you at the times you set, or when something happens; the log that
+            // charts the timers; and the chimes (built-in schedules: a click turns one on or off).
+            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, timerLog],
+                        extra: .chimes),
             ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
             ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
                         tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
@@ -57,23 +69,19 @@ enum Tools {
                         tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
         ],
         [
-            // Things done for you at the times you set: the model, the tools, reminders.
-            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler], style: .stack),
-            // The hourly chimes (a click turns one on or off) and the log that charts the timers.
-            // The countdowns and due dates are set per box, on the boards.
-            ToolSection(title: "Timers", color: timersColor, tools: [], extra: .timers, style: .stack),
+            // The notes running a timer or a due date, soonest first: a click opens one.
+            ToolSection(title: "Timers", color: timersColor, tools: [], extra: .timedNotes, style: .stack),
         ],
         [
-            // Big panels of boxes to type into, one per board.
-            ToolSection(title: "Boards", color: Color(red: 0.36, green: 0.40, blue: 0.92),
-                        tools: [goals, strategies, entities, notes], style: .stack),
+            // A board per tag, each gathering every note with that tag.
+            ToolSection(title: "Tags", color: tagsColor, tools: [], extra: .tagBoards, style: .stack),
         ],
     ]
 
     /// Every section: the top row's, then the columns', left first.
     static var sections: [ToolSection] { [files] + columns.flatMap { $0 } }
 
-    static var all: [Tool] { sections.flatMap(\.tools) }
+    static var all: [Tool] { boards + sections.flatMap(\.tools) }
 
     static let unzip = Tool(
         id: "unzip-to-desktop",
@@ -211,7 +219,7 @@ enum Tools {
         id: "scheduler",
         name: "Scheduler",
         title: "Scheduler: things done at the times you set",
-        subtitle: "Once, every so often, or at a time of day: ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, or run a model tool or a shortcut with your text. Runs while the app is open.",
+        subtitle: "Once, every so often, at a time of day, every hour, or when something happens (an alarm, the battery, a day's count over a limit, the month starting): ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, run a model tool or a shortcut, call a web address, or chime. The day chime and the night watch are built in. Runs while the app is open.",
         symbol: "calendar.badge.clock",
         open: { model in SchedulerWindow.show(model.scheduler) })
 
@@ -219,7 +227,7 @@ enum Tools {
         id: "timer-log",
         name: "Timer log",
         title: "Timer log: when alarms went off, snoozes, the battery",
-        subtitle: "A big report of the timers: when each was set, went off or was snoozed, counts per day (and the days nothing was set), the battery's level over time, and the thresholds that send a signal to your web address.",
+        subtitle: "A big report of the timers: when each was set, went off or was snoozed, counts per day (and the days nothing was set), the battery's level over time, and the thresholds and signals (scheduler jobs that wait for a count to go over a limit, or call your web address).",
         symbol: "chart.bar.xaxis",
         open: { model in TimerLogWindow.show(model) })
 
@@ -231,16 +239,11 @@ enum Tools {
         symbol: "brain",
         open: { _ in MemoryWindow.show() })
 
-    static let goals = board(BoardStore.kinds[0])
-    static let strategies = board(BoardStore.kinds[1])
-    static let entities = board(BoardStore.kinds[2])
-    static let notes = board(BoardStore.kinds[3])
-
-    private static func board(_ kind: BoardStore.Kind) -> Tool {
+    static func board(_ kind: BoardStore.Kind) -> Tool {
         Tool(id: "board-\(kind.id)",
              name: kind.name,
-             title: "\(kind.name): a board of boxes",
-             subtitle: "A big glass panel of boxes to type into. The arrows either side show more or fewer (hidden ones keep their text). Double-click a box to change its color. Down its left: a timer or a due date for it (one at a time), its countdown at its top; at its top right: copy, open it to fill the board, and pin it to float on your screen. Web addresses in a box open with a click.",
+             title: "\(kind.name): a board of notes",
+             subtitle: "A big glass panel of notes to type into, the first line of each its title. The arrows either side show more or fewer (hidden ones keep their text). Double-click a note to change its color. Down its left: its icon (click to pick another), a timer or a due date (one at a time; the note shows in the panel's Timers column while it runs), and its tags (Important, Urgent, Delegate, Think). At its top right: copy, open it to fill the board, dock it along the bottom of this panel, and pin it to float on your screen. Right-click the tile to dock the board in the menu bar.",
              symbol: kind.symbol,
              open: { model in model.boards.show(kind.id) })
     }

@@ -1,12 +1,14 @@
 # Tool Mac Tool
 
-A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, when one is set).
-Clicking it opens a panel: a row across the top (Unzip to Desktop, the battery in detail, the next
-alarm), then tool tiles grouped into sections in two columns (so it stays short), plus two narrow
-columns of bigger tiles (the Scheduler, the chimes and the Timer log; the boards), with dividers
-between them; each section has its own color,
-worn by its tiles and its title. The bar at the bottom holds updates (with the
-version you're on), **Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over time, and the app updates itself from GitHub.
+A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, when one is set,
+and beside that any boards you've docked there). Clicking it opens a panel: the ten boards across
+the top, each in its own color; a row under them (Unzip to Desktop, the battery in detail); tool
+tiles grouped into sections in two columns (Automate, Voice and Record; Glass and Model tools),
+plus two narrow columns (the notes running a timer, and the tags' boards), with dividers between
+them; and the notes you've docked, in a row along the bottom. Each section has its own color, worn
+by its tiles and its title. The bar at the bottom holds updates (with the version you're on),
+**Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over
+time, and the app updates itself from GitHub.
 
 It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
 builds it on every push and publishes a release when something lands on `main`. When GitHub hasn't
@@ -159,39 +161,80 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   transcript, show it in Finder or move it (with its transcript) to the Trash. The buttons along
   the bottom start a new recording.
 
-### Scheduler (Automate)
+### Scheduler, Timer log, Day chime, Night watch (Automate)
 
-Things done for you at the times you set, while the app is open (it starts at login). The tile
-opens a glass panel as big as the diagram's: your schedules down the left (each with what it
-does, when, a countdown to its next run, how the last one went, and a switch), and the one you
-pick on the right. **New schedule** (⌘N) adds one. Each schedule has:
+The first section of the first column. The Scheduler and the Timer log open their windows; the
+two chimes are built-in schedules: click one to turn it on or off (right-click to open it in the
+Scheduler and change its hours).
+
+#### The Scheduler
+
+Things done for you at the times you set, or when something happens, while the app is open (it
+starts at login). The tile opens a glass panel as big as the diagram's: your schedules down the
+left (each with what it does, when, a countdown to its next run or what it waits for, how the
+last one went, and a switch), and the one you pick on the right. **New schedule** (⌘N) adds one.
+Each schedule has:
 
 - **What it does**, with its **text**:
   - **Ask the model**: the text is a prompt. The model (the chat's, or another you pick) answers
     it and, if you let it, can call the model tools and your shortcuts while it does, up to four
     rounds. It's told it's a scheduled job with nobody at the keyboard, plus the date, time and
     place. A shortcut set to ask first isn't run, since nobody is there to say yes.
-  - **Remind me**: the text comes up on a card that stays until you close it.
+  - **Remind me**: the text comes up on a card that stays until you close it. For a schedule that
+    waits for a day's count to go over a limit, the card comes up big in the middle of the screen
+    (what the timer log's thresholds used to do).
   - **Say it**: the text is read out in the voice from Read aloud.
   - **Model tool**: the alarm (the text is the seconds), open a link, copy to the clipboard or
     draw a diagram, given the text.
   - **Shortcut**: one of your Apple Shortcuts, with the text as its input.
+  - **Call a web address**: the text is POSTed to an address (a Cloudflare worker, say), with an
+    optional secret sent as `Authorization: Bearer …`; it goes as JSON if it reads as JSON, else
+    as plain text. **Leave the text empty** and what happened goes as JSON, in the shape the timer
+    log's signals had (below), so a worker written for those keeps working. What the address
+    answers is the result (a 2xx is a success).
+  - **Chime**: a ding and a card, the day chime's or the night watch's.
 
-  The text can hold `{{date}}`, `{{time}}`, `{{last}}` (what it gave back the last time) and
-  `{{clipboard}}`, filled in when it runs.
-- **When**: **Once** (a date and time; it turns itself off after), **Every** so many minutes,
-  hours or days (from when you set it), or **At a time of day**, every day or on the weekdays you
-  pick.
-- **With the result** (the model's answer, a shortcut's output): show it on a card, say it out
-  loud, or both. Cards come up at the top right with **Copy**, **Say it** and **Scheduler**; a
-  failure always gets a card.
+- **Insert**: the placeholders the text can hold, filled in when it runs, in groups:
+  - *Time*: `{{date}}`, `{{time}}`, `{{weekday}}`, `{{month}}`, `{{day_of_month}}`,
+    `{{days_left_in_month}}`.
+  - *This job*: `{{last}}` (what it gave back the last time), `{{clipboard}}`, `{{job}}` (its
+    name), `{{when}}` (when it runs, in words).
+  - *What happened* (for a schedule that waits for an event): `{{event}}` ("Alarm · Goals 3 ·
+    Timer 1 · Time's up · 5 min"), `{{event_name}}`, `{{event_detail}}`, `{{event_value}}`,
+    `{{event_time}}`, and for a count over a limit `{{count}}` and `{{limit}}`.
+  - *Timer log*: `{{alarms_today}}`, `{{snoozes_today}}`, `{{sets_today}}`, `{{stops_today}}`,
+    `{{chimes_today}}`, `{{alarms_week}}`, `{{snoozes_week}}`, `{{last_alarm}}`, `{{next_alarm}}`
+    (the next one coming up in the notes), `{{battery}}` (its level now) and `{{battery_empty}}`.
+- **When**:
+  - **Once** (a date and time; it turns itself off after);
+  - **Every** so many minutes, hours or days (from when you set it);
+  - **At a time of day**, every day or on the weekdays you pick;
+  - **Every hour**, at so many minutes past, through the hours you pick (**Day** 6–22, **Night**
+    23–5, all day, or any of the 24);
+  - **Event**: when something happens. **Alarms**: one is set, goes off, is snoozed, is stopped,
+    or is OK'd. **Battery**: it's at a level you pick (it passes each 10% on the way down; 0 is
+    empty), or it changes at all. **Timer log**: a chime sounds; **a day's count goes over a
+    limit** (snoozes, alarms, timers set, timers stopped or batteries emptied, over any number:
+    once a day at most, and it's logged as a threshold crossed); any threshold is crossed.
+    **Calendar**: the start or end of the week (Monday, Sunday) or of the month (the 1st, the last
+    day), at a time you pick. **This Mac**: the app starts, or the Mac wakes from sleep.
+- **With the result** (the model's answer, a shortcut's output, what a web address answered):
+  show it on a card, say it out loud, or both. Cards come up at the top right with **Copy**,
+  **Say it** and **Scheduler**; a failure always gets a card.
 - **Run now**, **Duplicate**, **Delete**, and a **history** of every run: when, whether it worked,
   the tools it used and what it gave back.
 
+**Built in**: the **Day chime** and the **Night watch** (below) are schedules that come on, at
+the top of the list with a lock. They can be turned off and their hours changed (**Reset** puts
+them back), but not deleted or made to do something else; **Duplicate** makes an ordinary copy.
+Their runs go into the timer log rather than the history.
+
 A job missed by more than an hour (the Mac was asleep, or the app closed) waits for its next time
-instead of running late; one missed by less runs straight away. Schedules and the last 300 runs
-are kept in `~/Library/Application Support/ToolMacTool/schedules.json`. Two examples come with it,
-turned off: a reminder to stretch every hour and a spoken morning briefing on weekdays.
+instead of running late; one missed by less runs straight away (a chime, by more than five
+minutes, waits for the next hour). A job set off by an event isn't set off again within a second,
+so one can't keep setting itself off. Schedules and the last 300 runs are kept in
+`~/Library/Application Support/ToolMacTool/schedules.json`. Two examples come with it, turned
+off: a reminder to stretch every hour and a spoken morning briefing on weekdays.
 
 ### Chat (Glass)
 
@@ -365,20 +408,24 @@ saves, ⌘W closes. The editor reloads when the file changes on disk (the chat a
 to it), unless you have unsaved edits. If you save over a change made in the meantime, it asks
 first.
 
-### The top row: Unzip, Battery, Next alarm
+### The boards row, and the row under it: Unzip, Battery
 
-Across the top of the panel: the **Unzip to Desktop** tile, then the battery and the next alarm,
-sharing the rest of the row half and half. The zips downloaded lately are listed under it.
+**Across the very top of the panel, the ten boards** (below), each tile in its own darker color.
+Click one to open it; right-click to dock it in the menu bar.
+
+Under them: the **Unzip to Desktop** tile, then the battery across the rest of the row. The zips
+downloaded lately are listed under it.
 
 - **Battery**: a make-believe battery. Click its icon to set it to 100, 80, 60, 40, 20 or 0% (one
   step a click; right-click to pick one). It drains 20% an hour and stops at 0. The panel shows the
   level now, a gauge with a tick every 10% and a mark at the next step, **when it reaches that next
   step** (and how long until then), when it's empty, **when it was last at 100%**, and the steps
-  after the next one with their times. It's charted in the Timer log and sent in the signals.
-- **Next alarm**: the next timer or due date to ring in the boards' boxes: when ("3:45 PM", "Tue
-  9:00 AM", "12 Mar, 9:00 AM"), the countdown to it, and which box it's in (click to open that
-  box on its board), then the two after it. The same shows **next to the wrench in the menu bar**:
-  the countdown when it's within the hour, otherwise when it rings ("now" while one is ringing).
+  after the next one with their times. It's charted in the Timer log, and a schedule can wait for
+  it to reach a level.
+
+The next alarm shows **next to the wrench in the menu bar**: the countdown when it's within the
+hour, otherwise when it rings ("now" while one is ringing). The notes running a timer are in the
+panel's **Timers** column.
 
 ### Timers
 
@@ -406,8 +453,8 @@ the box on its board, and waits for **OK** (or Esc).
   3 months, 30, 14, 7, 3 and 2 days, 1 day, 12, 6, 3 and 1 hours, then 30, 15, 5 and 1 minutes
   before (those that fit).
 
-Two more stay in the panel, as big tiles in the fourth column with the Scheduler and the Timer
-log. Click one to turn it on or off:
+Two more chime on the hour. They're the Scheduler's built-in jobs, on from the start, with a tile
+each beside the Scheduler: click one to turn it on or off, or change its hours in the Scheduler.
 
 - **Day chime** (top middle): every hour from 6 AM to 10 PM, a bright ding and a card
   with the time ("Monday 2 PM"), how many hours have passed since 6 AM and how many are left to
@@ -415,11 +462,15 @@ log. Click one to turn it on or off:
 - **Night watch** (bottom middle): every hour from 11 PM to 5 AM, a low ding-dong and a
   red, pulsing warning card with the time ("Tuesday 1 AM") and how many hours are left before 6 AM.
 
-The chimes keep the time zone set in Settings. Timers keep going while the app is closed and pick
-up when it opens again: a countdown that ended over an hour ago switches off quietly, and a chime
-or reminder that's long past is skipped.
+Timers keep going while the app is closed and pick up when it opens again: a countdown that ended
+over an hour ago switches off quietly, and a chime or reminder that's long past is skipped.
 
-### Timer log (Timers)
+**The panel's Timers column**: a note with a timer or a due date running docks itself there while
+it runs, soonest (and ringing) first: its icon in a ring that empties as the time goes, the timer's
+badge, its title and the countdown, on a dashed card in the timer's color (red while it rings).
+Click one to open the note.
+
+### Timer log (Automate)
 
 A big glass report of everything the timers did, kept in
 `~/Library/Application Support/ToolMacTool/timer-log.json`. Pick today, 7 days or 30 days:
@@ -433,44 +484,65 @@ A big glass report of everything the timers did, kept in
 - **The battery's level** over time, with where it ran out.
 - **Every entry**, newest first.
 
-Its **Thresholds & signals** side sets:
+Its **Thresholds & signals** side lists the schedules that do what the thresholds and signals used
+to (they're Scheduler jobs now; the first time this version ran, the ones you had were turned into
+schedules, the default "Snoozes in a day over 4" among them):
 
-- **Thresholds**: "Snoozes in a day over 4" (the default), or alarms, times set, stops or
-  batteries emptied over any number. The moment a day's count goes over, a card comes up in the
-  middle of the screen until you click **OK**. Add as many as you like, or turn them off.
-- **Signals**: an address (a Cloudflare worker, say) that each signal is POSTed to as JSON, with an
-  optional secret sent as `Authorization: Bearer …`. Pick what goes: thresholds crossed, the
-  battery (set, every 10% on the way down, empty) and every alarm and snooze. Signals that don't get
-  through are kept (up to 500) and retried every minute; a 4xx answer drops one. **Send a test**
-  tries the address, and the pane shows what a signal looks like:
+- **Thresholds**: schedules that wait for a day's count to go over a limit and remind you (a card
+  in the middle of the screen until you click **OK**). **Add a threshold** makes one.
+- **Signals**: schedules that call a web address when something happens: thresholds crossed, the
+  battery changing, alarms, snoozes, or anything else a schedule can wait for. **Add a signal**
+  makes one. With no text, a signal is the event as JSON:
 
   ```json
-  {"app":"ToolMacTool","at":"2026-10-04T15:02:11Z","day":"2026-10-04","detail":"Snoozes in a day over 4: 5 snoozes today",
-   "device":"Sam's MacBook","id":"…","kind":"threshold","name":"Thresholds","source":"thresholds",
-   "threshold":{"count":5,"limit":4,"metric":"snoozes","rule":"Snoozes in a day over 4"},"type":"threshold","value":5}
+  {"app":"ToolMacTool","at":"2026-10-04T15:02:11Z","day":"2026-10-04","detail":"Snoozes in a day over 4: 5 today",
+   "device":"Sam's MacBook","id":"…","kind":"threshold","name":"Too many snoozes","source":"thresholds",
+   "value":5,"type":"threshold"}
   ```
 
-  `type` is `threshold`, `battery`, `alarm`, `snooze` or `test`; `id` repeats when a send is
-  retried, so a worker can drop one it has already seen.
+  `type` is `threshold`, `battery`, `alarm` or `snooze` (`schedule` for a job run at a time rather
+  than by an event); a schedule waiting for a count over a limit adds `threshold` (its count,
+  limit and metric). Signals from before that hadn't gone through are still sent on.
 
-### Goals, Strategies, Entities, Notes (Boards)
+Each line has its switch and **Open in Scheduler**.
 
-Four boards, each a big glass panel (nine tenths of the screen, the same moving colors as the
-other glass panels) of boxes to type into. They have the panel's last column to themselves, their
-tiles a size bigger and stacked. The big arrows either side of the boxes show fewer or more
-(1 to 36); a hidden box keeps its text for when it's shown again. The boxes fill the panel, the
-gutter between them narrowing as there are more. Double-click a box to step it through light
-colors. Web addresses in a box are underlined: click one to open it in your browser.
+### The boards: Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health, Communication
 
-- **Down each box's left**, a thin column: Timer 1, Timer 2, Repeat 1, Repeat 2 and a due date.
-  Click one to pick how long (or the day and time); the one running is filled in. One timer a box:
-  setting another replaces it. Its **countdown shows at the top middle of the box**, with a ✕ to
-  stop it.
+Ten boards, each a big glass panel (nine tenths of the screen, the same moving colors as the other
+glass panels) of notes to type into. Their tiles run across the top of the panel, each in its own
+color. The big arrows either side of the notes show fewer or more (1 to 36); a hidden note keeps
+its text for when it's shown again. The notes fill the panel, the gutter between them narrowing as
+there are more. Double-click a note to step it through light colors. **A note's first line is
+twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
+it in your browser.
+
+- **Down each note's left**, a thin column (its buttons shrink to fit a small note):
+  - at the top, **the note's icon** (its board's at first): click it to pick another;
+  - its timers: Timer 1, Timer 2, Repeat 1, Repeat 2 and a due date. Click one to pick how long
+    (or the day and time); the one running is filled in. One timer a note: setting another
+    replaces it. Its **countdown shows at the top middle of the note**, with a ✕ to stop it, and
+    the note docks itself in the panel's **Timers** column while it runs;
+  - at the bottom, its four **tags**: **Important** (a star), **Urgent** (a flame), **Delegate**
+    (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its color when on.
 - **At its top right**: copy its text, open it to fill the board (Esc or click again to go back),
-  and **pin** it: the box floats on your screen in a little window of its own, above other windows
-  and on every desktop. Drag it anywhere, resize it, type in it; the button at its bottom opens
-  its board with the box opened, and the pin (or ⌘W) puts it away. Pinned boxes come back where
-  you left them after a relaunch.
+  **dock** it, and **pin** it.
+  - **Dock**: the note shows in the **Docked notes** row along the bottom of the panel, across all
+    its columns: a small icon on the note's color (its board's, if it's plain), with its title and
+    a badge when it's running a timer. Click it to open the note; right-click to pin or undock it.
+  - **Pin**: the note floats on your screen in a little window of its own, above other windows and
+    on every desktop. **Drag anywhere on it to move it**, its text too (a click still puts the
+    caret there; hold ⌥ while dragging to select text). Resize it, type in it; the button at its
+    bottom opens its board with the note opened, and the pin (or ⌘W) puts it away. Pinned notes
+    come back where you left them after a relaunch.
+
+**The tags' boards** have the panel's last column: **Important**, **Urgent**, **Delegate** and
+**Think**, each with how many notes have the tag. Each opens a board of every note with that tag,
+from all ten boards: the notes themselves, so what you type there is typed on their own boards,
+and a button at the bottom of each opens its board. Take the tag off a note to take it off.
+
+**Dock a board in the menu bar**: right-click a board's tile (or a tag's) in the panel, or click
+**Dock in the menu bar** at the top of the board. Its icon then sits in the menu bar beside the
+wrench: a click opens the board, a right-click takes it out. (⌘-drag to move it along the bar.)
 
 ⌘W closes a board. Everything is saved as you go, in
 `~/Library/Application Support/ToolMacTool/boards/<board>.json`.
@@ -500,10 +572,13 @@ Sources/ToolCore/             the tools' logic: zips, memory, chat context, Olla
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text, history), timers (what's due when, reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery and its steps), boards (boxes, their colors, timers and pins, the grid), updates
+                              their text and placeholders, events, web calls, built-in chimes, history), timers (what's due when,
+                              reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery
+                              and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, the grid), updates
                               (testable anywhere)
-Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the next alarm,
-                              the menu bar's countdown), Tools (the registry), Windows,
+Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the menu bar's
+                              countdown), PanelRows (the boards row, the chimes' tiles, the Timers column, the tags'
+                              boards, the docked notes), Tools (the registry), Windows,
                               Zips, Chat + ChatView + Glass, VoiceChat (the chat's voice modes), DiagramView,
                               ShortcutTools (running shortcuts, the Tools window), ModelTools (the built-in
                               tools, the alarm, this Mac), BuildTools,
@@ -511,11 +586,13 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
-                              times, the result card, the Scheduler's window),
-                              Timers (the chime tiles, the sounds, the chimes' cards), BigCards (the quarter-screen cards),
-                              ActivityStore (the log, thresholds, sending signals), TimerLogView (the report),
-                              BoardView (the boards: Goals, Strategies, Entities, Notes; a box, pinned or not),
-                              BoardStore (every board, its boxes' timers, pinned boxes), BoxCards (their cards),
+                              times or on events, the built-in chimes, the result card, the Scheduler's window),
+                              Timers (the battery, the sounds, the chimes' cards), BigCards (the quarter-screen cards),
+                              ActivityStore (the log, and who hears of each entry), TimerLogView (the report, the
+                              thresholds and signals as schedules),
+                              BoardView (the boards; a note, pinned or not), NoteViews (the tags' boards, the icon
+                              picker, docking a board in the menu bar),
+                              BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards), BoxCards (their cards),
                               MemoryView, HUD, Updater
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,

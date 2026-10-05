@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-// The Scheduler's window: a glass panel as big as the diagram's, its jobs down the left and the
-// one you pick on the right: what it does, its text, when it runs, what happens with the result,
-// and what happened each time it ran.
+// The Scheduler's window: a glass panel as big as the diagram's, its jobs down the left (the
+// built-in chimes first) and the one you pick on the right: what it does, its text (with the
+// placeholders to insert), when it runs (or what it waits for), what happens with the result, and
+// what happened each time it ran.
 
 @MainActor
 enum SchedulerWindow {
@@ -145,7 +146,7 @@ struct SchedulerView: View {
             Text(scheduler.book.jobs.isEmpty ? "Nothing scheduled yet" : "Pick a schedule")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(Ink.reply(ink))
-            Text("A schedule takes some text and, at the times you set, asks the model with it (the model can use the model tools and your shortcuts), shows it as a reminder, says it, or hands it to a model tool or a shortcut.")
+            Text("A schedule takes some text and, at the times you set or when something happens (an alarm, the battery, a day's count over a limit, the month starting), asks the model with it (the model can use the model tools and your shortcuts), shows it as a reminder, says it, hands it to a model tool or a shortcut, calls a web address with it, or chimes.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -156,7 +157,7 @@ struct SchedulerView: View {
     }
 }
 
-/// A job in the list: what it does, when, when it runs next, and its switch.
+/// A job in the list: what it does, when, when it runs next (or what it waits for), and its switch.
 struct JobRow: View {
     let job: ScheduledJob
     let selected: Bool
@@ -173,10 +174,18 @@ struct JobRow: View {
                 .frame(width: 30, height: 30)
                 .background(Circle().fill(JobRow.color(job.action).opacity(job.enabled ? 0.85 : 0.3)))
             VStack(alignment: .leading, spacing: 3) {
-                Text(job.name.isEmpty ? "Untitled" : job.name)
-                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(job.enabled ? 0.95 : 0.55))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(job.name.isEmpty ? "Untitled" : job.name)
+                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(job.enabled ? 0.95 : 0.55))
+                        .lineLimit(1)
+                    if job.isBuiltin {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .help("Built in: it can be turned off and its hours changed, not deleted")
+                    }
+                }
                 Text(job.when.describe(clock24: clock24))
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
@@ -188,6 +197,9 @@ struct JobRow: View {
                     } else if job.enabled, let next = job.next {
                         Image(systemName: "clock")
                         Text("Next ") + Text(next, style: .relative)
+                    } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
+                        Image(systemName: job.when.event.symbol)
+                        Text("Waiting for it")
                     } else {
                         Text(job.enabled ? "Not again" : "Off")
                     }
@@ -223,12 +235,52 @@ struct JobRow: View {
         case .speak: return Color(red: 0.1, green: 0.6, blue: 0.85)
         case .tool: return Color(red: 0.96, green: 0.56, blue: 0.1)
         case .shortcut: return Color(red: 0.93, green: 0.3, blue: 0.45)
+        case .webhook: return Color(red: 0.2, green: 0.62, blue: 0.62)
+        case .chime: return Color(red: 0.9, green: 0.3, blue: 0.62)
+        }
+    }
+}
+
+/// Lays its views out left to right, wrapping onto a new line when one doesn't fit.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += line + lineSpacing
+                line = 0
+            }
+            widest = max(widest, x + size.width)
+            x += size.width + spacing
+            line = max(line, size.height)
+        }
+        return CGSize(width: widest, height: y + line)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, line: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += line + lineSpacing
+                line = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            line = max(line, size.height)
         }
     }
 }
 
 /// One job, to edit: its name, what it does and with which text, when, what happens with the
-/// result, and its history.
+/// result, and its history. A built-in job's name and what it does stay as they are.
 struct JobEditor: View {
     @Binding var job: ScheduledJob
     @ObservedObject var scheduler: Scheduler
@@ -244,27 +296,32 @@ struct JobEditor: View {
         HStack(alignment: .top, spacing: 18) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    TextField("Name", text: $job.name, prompt: Text("Name it").foregroundColor(.white.opacity(0.3)))
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 24, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Ink.reply(ink))
+                    HStack(spacing: 10) {
+                        TextField("Name", text: $job.name, prompt: Text("Name it").foregroundColor(.white.opacity(0.3)))
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 24, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Ink.reply(ink))
+                            .disabled(job.isBuiltin)
+                        if job.isBuiltin {
+                            Label("Built in", systemImage: "lock.fill")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.55))
+                                .padding(.horizontal, 9)
+                                .frame(height: 22)
+                                .background(Capsule().fill(.white.opacity(0.1)))
+                                .help("Built in: on from the start. Turn it off or change its hours; it can't be deleted.")
+                        }
+                    }
                     section("What it does") { whatRow }
-                    section(textTitle) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            GlassEditor(text: $job.text, hint: textHint, ink: ink)
-                                .frame(minHeight: 130, maxHeight: 220)
-                                .padding(10)
-                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.black.opacity(0.18)))
-                            HStack(spacing: 6) {
-                                Text("Insert:")
-                                ForEach(JobText.placeholders, id: \.self) { p in
-                                    ActionChip(title: p, symbol: "plus", help: Self.placeholderHelp(p)) {
-                                        job.text += (job.text.isEmpty || job.text.hasSuffix(" ") ? "" : " ") + p
-                                    }
-                                }
+                    if job.action != .chime {
+                        section(textTitle) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                GlassEditor(text: $job.text, hint: textHint, ink: ink)
+                                    .frame(minHeight: 130, maxHeight: 220)
+                                    .padding(10)
+                                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.black.opacity(0.18)))
+                                insertRow
                             }
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.5))
                         }
                     }
                     section("When") { WhenEditor(when: $job.when, clock24: settings.clock24) }
@@ -296,18 +353,50 @@ struct JobEditor: View {
         }
     }
 
+    // MARK: Insert
+
+    /// The placeholders, in their groups: a click adds one to the end of the text.
+    var insertRow: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(JobText.groups.indices, id: \.self) { i in
+                let group = JobText.groups[i]
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(group.title)
+                        .frame(width: 92, alignment: .trailing)
+                        .foregroundStyle(.white.opacity(group.title == "What happened" && job.when.kind != .event ? 0.3 : 0.5))
+                    FlowLayout(spacing: 5, lineSpacing: 5) {
+                        ForEach(group.items, id: \.token) { p in
+                            ActionChip(title: p.token, symbol: "plus", help: p.help) {
+                                job.text += (job.text.isEmpty || job.text.hasSuffix(" ") || job.text.hasSuffix("\n") ? "" : " ") + p.token
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+    }
+
     // MARK: What it does
 
     var whatRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                ForEach(ScheduledJob.Action.allCases, id: \.self) { a in
-                    PillButton(title: a.title, prominent: job.action == a) {
-                        guard job.action != a else { return }
-                        job.action = a
-                        job.target = Self.defaultTarget(a, settings: settings)
+            if job.isBuiltin {
+                HStack(spacing: 8) {
+                    PillButton(title: job.action.title, prominent: true) {}
+                    Text("The \(job.target == "night" ? "night watch's" : "day chime's") sound and card.")
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            } else {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(ScheduledJob.Action.allCases, id: \.self) { a in
+                        PillButton(title: a.title, prominent: job.action == a) {
+                            guard job.action != a else { return }
+                            job.action = a
+                            job.target = Self.defaultTarget(a, settings: settings)
+                        }
+                        .help(Self.actionHelp(a))
                     }
-                    .help(Self.actionHelp(a))
                 }
             }
             HStack(spacing: 10) {
@@ -336,6 +425,31 @@ struct JobEditor: View {
                                  (n, job.target == n, { job.target = n })
                              })
                     if shortcutNames.isEmpty { Text("No shortcuts found yet").foregroundStyle(.white.opacity(0.5)) }
+                case .webhook:
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Text("Address").frame(width: 56, alignment: .trailing)
+                            TextField("https://your-worker.your-name.workers.dev/signal", text: $job.target)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        HStack(spacing: 8) {
+                            Text("Secret").frame(width: 56, alignment: .trailing)
+                            SecureField("Optional: sent as Authorization: Bearer …", text: $job.secret)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        if !job.target.trimmingCharacters(in: .whitespaces).isEmpty, !Self.isWebAddress(job.target) {
+                            Label("That isn't an http(s) address", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .frame(maxWidth: 560)
+                case .chime:
+                    if !job.isBuiltin {
+                        PillButton(title: "Day chime's card", prominent: job.target != "night") { job.target = "day" }
+                            .help("A ding, and a card with the hour, hours since 6 AM and to 10 PM")
+                        PillButton(title: "Night watch's card", prominent: job.target == "night") { job.target = "night" }
+                            .help("A ding, and a warning card with the hours left before 6 AM")
+                    }
                 case .remind, .speak:
                     EmptyView()
                 }
@@ -357,10 +471,16 @@ struct JobEditor: View {
     /// Your shortcuts: the ones the Shortcuts app has, and the ones set up for the model.
     var shortcutNames: [String] { Array(Set(shortcuts + settings.shortcuts.map(\.shortcut))).sorted() }
 
+    static func isWebAddress(_ text: String) -> Bool {
+        guard let u = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), let scheme = u.scheme?.lowercased() else { return false }
+        return (scheme == "https" || scheme == "http") && u.host?.isEmpty == false
+    }
+
     static func defaultTarget(_ action: ScheduledJob.Action, settings: AppSettings) -> String {
         switch action {
         case .tool: return BuiltinTool.Kind.soundAlarm.rawValue
         case .shortcut: return settings.shortcuts.first?.shortcut ?? ""
+        case .chime: return "day"
         default: return ""
         }
     }
@@ -368,10 +488,12 @@ struct JobEditor: View {
     static func actionHelp(_ a: ScheduledJob.Action) -> String {
         switch a {
         case .askModel: return "The text is a prompt for the model, which may call tools. Its answer goes on a card or is read out."
-        case .remind: return "The text comes up on a card that stays until you close it."
+        case .remind: return "The text comes up on a card that stays until you close it (big, in the middle, for a count gone over its limit)."
         case .speak: return "The text is read out in the voice from Read aloud."
         case .tool: return "One of the model tools (alarm, open a link, copy, draw a diagram) runs with the text."
         case .shortcut: return "One of your Apple Shortcuts runs with the text as its input; what it gives back can go on a card or be read out."
+        case .webhook: return "The text is POSTed to a web address (a Cloudflare worker, say). Leave it empty to send what happened as JSON, as the timer log's signals did."
+        case .chime: return "A ding and a card, like the day chime's or the night watch's."
         }
     }
 
@@ -381,6 +503,8 @@ struct JobEditor: View {
         case .remind: return "The reminder"
         case .speak: return "What to say"
         case .tool, .shortcut: return "What it's given"
+        case .webhook: return "What it sends"
+        case .chime: return "Text"
         }
     }
 
@@ -398,15 +522,8 @@ struct JobEditor: View {
             default: return "What the tool is given"
             }
         case .shortcut: return "The shortcut's input (it can be empty)"
-        }
-    }
-
-    static func placeholderHelp(_ p: String) -> String {
-        switch p {
-        case "{{date}}": return "Today's date when it runs"
-        case "{{time}}": return "The time when it runs"
-        case "{{last}}": return "What it gave back the last time it ran"
-        default: return "What's on the clipboard when it runs"
+        case .webhook: return "Empty: what happened, as JSON. Or write your own, e.g. {\"text\": \"{{event}}\", \"battery\": \"{{battery}}\"}"
+        case .chime: return ""
         }
     }
 
@@ -418,22 +535,29 @@ struct JobEditor: View {
                 .disabled(running)
                 .help("Run it now (its schedule stays as it is)")
             PillButton(title: "Duplicate") { select(scheduler.duplicate(job.id)) }
-            PillButton(title: "Delete") {
-                let id = job.id
-                let next = scheduler.book.jobs.first { $0.id != id }?.id
-                select(next)
-                scheduler.delete(id)
+            if job.isBuiltin {
+                PillButton(title: "Reset") { scheduler.reset(job.id) }
+                    .help("Back to how it came: on, at its hours")
+            } else {
+                PillButton(title: "Delete") {
+                    let id = job.id
+                    let next = scheduler.book.jobs.first { $0.id != id }?.id
+                    select(next)
+                    scheduler.delete(id)
+                }
             }
             Spacer()
-            if job.enabled, let next = job.next {
-                (Text("Next: ") + Text(next, style: .relative) + Text(" · ") + Text(next, style: .time))
-                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.55))
-            } else {
-                Text(job.enabled ? "Won't run again (its time has passed)" : "Off")
-                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.55))
+            Group {
+                if job.enabled, let next = job.next {
+                    Text("Next: ") + Text(next, style: .relative) + Text(" · ") + Text(next, style: .time)
+                } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
+                    Text("Waiting: " + job.when.describe(clock24: settings.clock24))
+                } else {
+                    Text(job.enabled ? "Won't run again (its time has passed)" : "Off")
+                }
             }
+            .font(.system(size: 11.5, weight: .medium, design: .rounded))
+            .foregroundStyle(.white.opacity(0.55))
         }
     }
 
@@ -520,8 +644,8 @@ struct RunRow: View {
     }
 }
 
-/// When a job runs: once at a date and time, every so many minutes, hours or days, or at a time
-/// of day on the weekdays you pick.
+/// When a job runs: once at a date and time, every so many minutes, hours or days, at a time of
+/// day on the weekdays you pick, every hour through the hours you pick, or when something happens.
 struct WhenEditor: View {
     @Binding var when: Schedule
     let clock24: Bool
@@ -585,25 +709,125 @@ struct WhenEditor: View {
                     Text("on")
                     ForEach(Schedule.week, id: \.self) { d in
                         let on = when.weekdays.contains(d)
-                        Button {
+                        DayChip(title: Schedule.dayNames[d - 1], on: on, all: when.weekdays.isEmpty, width: 38) {
                             if on { when.weekdays.removeAll { $0 == d } } else { when.weekdays.append(d) }
-                        } label: {
-                            Text(Schedule.dayNames[d - 1])
-                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                                .foregroundStyle(on || when.weekdays.isEmpty ? Color.black.opacity(0.85) : Color.white.opacity(0.7))
-                                .frame(width: 38, height: 24)
-                                .background(Capsule().fill(on ? Color.white.opacity(0.88)
-                                                              : when.weekdays.isEmpty ? Color.white.opacity(0.45) : Color.white.opacity(0.1)))
                         }
-                        .buttonStyle(.plain)
                     }
                 }
                 Text(when.weekdays.isEmpty ? "No days picked: every day." : when.describe(clock24: clock24))
                     .foregroundStyle(.white.opacity(0.45))
+            case .hourly:
+                hourly
+            case .event:
+                event
             }
         }
         .font(.system(size: 12.5, weight: .medium, design: .rounded))
         .foregroundStyle(.white.opacity(0.8))
+    }
+
+    // MARK: Every hour
+
+    var hourly: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("At")
+                Stepper(value: Binding(get: { when.minute }, set: { when.minute = min(59, max(0, $0)) }), in: 0...59, step: 5) {
+                    Text(String(format: ":%02d", when.minute)).monospacedDigit().frame(minWidth: 30)
+                }
+                .fixedSize()
+                Text("past the hour, in these hours:")
+                Spacer().frame(width: 10)
+                PillButton(title: "Day (6–22)", prominent: Set(when.hours) == Set(Schedule.dayHours)) { when.hours = Schedule.dayHours }
+                PillButton(title: "Night (23–5)", prominent: Set(when.hours) == Set(Schedule.nightHours)) { when.hours = Schedule.nightHours }
+                PillButton(title: "All day", prominent: when.hours.isEmpty) { when.hours = [] }
+            }
+            ForEach([0, 12], id: \.self) { first in
+                HStack(spacing: 4) {
+                    ForEach(first..<(first + 12), id: \.self) { h in
+                        let on = when.hours.contains(h)
+                        DayChip(title: clock24 ? String(format: "%02d", h) : TimerText.hourLabel(h).replacingOccurrences(of: " ", with: ""),
+                                on: on, all: when.hours.isEmpty, width: 44) {
+                            if on { when.hours.removeAll { $0 == h } } else { when.hours = (when.hours + [h]).sorted() }
+                        }
+                    }
+                }
+            }
+            Text(when.describe(clock24: clock24) + (when.hours.isEmpty ? " (no hours picked: all of them)" : ""))
+                .foregroundStyle(.white.opacity(0.45))
+        }
+    }
+
+    // MARK: An event
+
+    var event: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("When")
+                MenuPill(title: when.event.title, help: "What it waits for", items: eventItems)
+                switch when.event {
+                case .batteryAt:
+                    Stepper(value: Binding(get: { when.level }, set: { when.level = min(100, max(0, $0)) }), in: 0...100, step: 10) {
+                        Text(when.level <= 0 ? "empty" : "\(when.level)%").monospacedDigit().frame(minWidth: 44)
+                    }
+                    .fixedSize()
+                    .help("The battery passes each 10% on its way down, and can be set to 100, 80, 60, 40, 20 or 0")
+                case .countOver:
+                    MenuPill(title: when.metric.words, help: "What's counted",
+                             items: ThresholdRule.Metric.allCases.map { m in (m.words, m == when.metric, { when.metric = m }) })
+                    Text("in a day go over")
+                    Stepper(value: Binding(get: { when.limit }, set: { when.limit = min(999, max(0, $0)) }), in: 0...999) {
+                        Text("\(when.limit)").monospacedDigit().frame(minWidth: 30)
+                    }
+                    .fixedSize()
+                case .startOfWeek, .endOfWeek, .startOfMonth, .endOfMonth:
+                    Text("at")
+                    DatePicker("", selection: timeOfDay, displayedComponents: [.hourAndMinute])
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .fixedSize()
+                default:
+                    EmptyView()
+                }
+            }
+            Text(Self.eventHelp(when))
+                .foregroundStyle(.white.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The events, under their groups' headings.
+    var eventItems: [(String, Bool, () -> Void)] {
+        var items: [(String, Bool, () -> Void)] = []
+        for group in ScheduleEvent.groups {
+            items.append((MenuPill.heading + group.title, false, {}))
+            for e in group.events {
+                let pick: () -> Void = { when.event = e }
+                items.append((e.title, e == when.event, pick))
+            }
+        }
+        return items
+    }
+
+    static func eventHelp(_ when: Schedule) -> String {
+        switch when.event {
+        case .alarmSet: return "Each time a timer or a due date is set on a note. {{event}} says which."
+        case .alarmRang: return "Each time a note's countdown reaches zero, a repeating one finishes a round, a snooze is up or a due date comes."
+        case .alarmSnoozed: return "Each time an alarm is snoozed."
+        case .alarmStopped: return "Each time a note's timer is stopped by hand."
+        case .alarmDismissed: return "Each time OK is clicked on an alarm's card."
+        case .batteryAt: return when.level <= 0 ? "When the battery runs out." : "When the battery passes \(when.level)% on its way down, or is set to it."
+        case .batteryChange: return "When the battery is set, passes each 10% on the way down, or runs out (what the timer log's battery signals sent)."
+        case .chime: return "Each time the day chime or the night watch (or a chime of your own) sounds."
+        case .countOver: return "The moment the day's count goes over the limit: once a day at most. With Remind me it comes up big in the middle of the screen, as the timer log's thresholds did."
+        case .thresholdCrossed: return "Each time any schedule's count goes over its limit."
+        case .startOfWeek: return "Every Monday at this time."
+        case .endOfWeek: return "Every Sunday at this time."
+        case .startOfMonth: return "On the 1st of each month at this time."
+        case .endOfMonth: return "On the last day of each month at this time."
+        case .appLaunch: return "A couple of seconds after Tool Mac Tool starts (at login, after an update)."
+        case .macWake: return "When the Mac wakes from sleep."
+        }
     }
 
     /// The hour and minute as a date today, for the time picker.
@@ -615,5 +839,25 @@ struct WhenEditor: View {
             when.hour = c.hour ?? 9
             when.minute = c.minute ?? 0
         })
+    }
+}
+
+/// A day or an hour to pick: white when picked, half-lit when none are (all of them count).
+private struct DayChip: View {
+    let title: String
+    let on: Bool
+    let all: Bool
+    let width: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(on || all ? Color.black.opacity(0.85) : Color.white.opacity(0.7))
+                .frame(width: width, height: 24)
+                .background(Capsule().fill(on ? Color.white.opacity(0.88) : all ? Color.white.opacity(0.45) : Color.white.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
     }
 }

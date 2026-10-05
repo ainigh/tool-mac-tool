@@ -2,11 +2,14 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-/// The timers' log, kept on disk, with what watches it: the thresholds (a card the moment one is
-/// crossed) and the signals sent to a web address (kept and retried until they get through).
+/// The timers' log, kept on disk, and who's told of each entry as it goes in: the scheduler, whose
+/// event jobs wait for alarms, the battery and a day's counts (the thresholds and signals that
+/// used to live here are schedules now). Signals still waiting from before that are sent on.
 @MainActor
 final class ActivityStore: ObservableObject {
     @Published private(set) var log: ActivityLog
+    /// The thresholds and signals as they were set before they became schedules (read once, to
+    /// turn them into schedules; its address still takes the signals left waiting).
     @Published var settings: SignalSettings {
         didSet {
             if settings != oldValue {
@@ -50,22 +53,20 @@ final class ActivityStore: ObservableObject {
 
     var calendar: Calendar { Scheduler.calendar(Preferences.shared.settings) }
 
-    /// Adds to the log; then the thresholds it crosses come up, and what's sent goes out.
-    func record(_ kind: LogEntry.Kind, source: String, name: String, detail: String = "", value: Double? = nil, at: Date = Date()) {
+    /// Told of every entry once it's in the log.
+    private var listeners: [(LogEntry) -> Void] = []
+
+    func onRecord(_ listener: @escaping (LogEntry) -> Void) { listeners.append(listener) }
+
+    /// Adds to the log; then everyone listening hears of it (the scheduler's event jobs).
+    @discardableResult
+    func record(_ kind: LogEntry.Kind, source: String, name: String, detail: String = "", value: Double? = nil,
+                at: Date = Date()) -> LogEntry {
         let entry = LogEntry(at: at, source: source, name: name, kind: kind, detail: detail, value: value)
         log.add(entry)
         scheduleSave()
-        if settings.sends(kind) { send(Signal(entry: entry, calendar: calendar, device: Self.device)) }
-        for crossing in ThresholdRule.crossed(by: entry, rules: settings.rules, log: log, calendar: calendar) {
-            let text = "\(crossing.count) \(crossing.rule.metric.words.lowercased()) today"
-            let note = LogEntry(at: at, source: "thresholds", name: "Thresholds", kind: .threshold,
-                                detail: "\(crossing.rule.describe): \(text)", value: Double(crossing.count))
-            log.add(note)
-            if settings.sends(.threshold) {
-                send(Signal(entry: note, calendar: calendar, device: Self.device, threshold: crossing))
-            }
-            ThresholdCard.show(rule: crossing.rule, count: crossing.count)
-        }
+        for listener in listeners { listener(entry) }
+        return entry
     }
 
     func clearLog() {
@@ -73,15 +74,7 @@ final class ActivityStore: ObservableObject {
         scheduleSave()
     }
 
-    // MARK: Signals
-
-    private func send(_ signal: Signal) {
-        guard settings.endpoint != nil else { return }
-        outbox.append(signal)
-        if outbox.count > Self.outboxLimit { outbox.removeFirst(outbox.count - Self.outboxLimit) }
-        saveOutbox()
-        flush()
-    }
+    // MARK: Signals left from before (sent on, then this is quiet)
 
     /// Sends what's waiting, one at a time, oldest first. A refusal (4xx) drops that signal; no
     /// answer or a server error keeps it for the next try (every minute).
@@ -109,24 +102,6 @@ final class ActivityStore: ObservableObject {
         }
     }
 
-    /// A test signal, sent straight away (not kept if it fails).
-    func sendTest() {
-        guard let url = settings.endpoint else {
-            lastSend = "Add an http(s) address first"
-            return
-        }
-        let entry = LogEntry(at: Date(), source: "test", name: "Test", kind: .alarm, detail: "A test from Tool Mac Tool")
-        let signal = Signal(entry: entry, calendar: calendar, device: Self.device)
-        lastSend = "Sending a test…"
-        let secret = settings.secret
-        Task {
-            switch await Self.post(signal, to: url, secret: secret) {
-            case .sent: self.lastSend = "Test sent · it worked"
-            case .refused(let why), .failed(let why): self.lastSend = "Test failed: \(why)"
-            }
-        }
-    }
-
     enum PostResult { case sent, refused(String), failed(String) }
 
     nonisolated static func post(_ signal: Signal, to url: URL, secret: String) async -> PostResult {
@@ -146,19 +121,6 @@ final class ActivityStore: ObservableObject {
         } catch {
             return .failed(error.localizedDescription)
         }
-    }
-
-    /// What a signal looks like, for writing the worker that takes them.
-    var sample: String {
-        let rule = settings.rules.first ?? ThresholdRule(metric: .snoozes, limit: 4)
-        let entry = LogEntry(at: Date(), source: "thresholds", name: "Thresholds", kind: .threshold,
-                             detail: "\(rule.describe): \(rule.limit + 1) \(rule.metric.words.lowercased()) today",
-                             value: Double(rule.limit + 1))
-        let signal = Signal(entry: entry, calendar: calendar, device: Self.device, threshold: (rule, rule.limit + 1))
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return (try? encoder.encode(signal)).map { String(decoding: $0, as: UTF8.self) } ?? ""
     }
 
     // MARK: Saving

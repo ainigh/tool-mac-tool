@@ -226,16 +226,18 @@ struct BigCard<Extra: View>: View {
 
 // MARK: - A crossed threshold
 
+/// A count gone over its limit (a scheduler job that waits for that, and reminds): big, in the
+/// middle of the screen, with the job's text.
 @MainActor
 enum ThresholdCard {
-    static func show(rule: ThresholdRule, count: Int) {
+    static func show(title: String, metric: ThresholdRule.Metric, count: Int, limit: Int, text: String) {
         NSSound(named: NSSound.Name("Funk"))?.play()
         let id = "threshold"
         BigCards.shared.show(id, at: .center, onEscape: { BigCards.shared.hide(id) }) { size in
             BigCard(size: size, symbol: "exclamationmark.octagon.fill", accent: Color(red: 1, green: 0.62, blue: 0.3),
-                    name: "Threshold crossed · \(rule.describe)",
-                    headline: "\(count) \(rule.metric.words.lowercased())",
-                    line: "today: over your limit of \(rule.limit)", mood: .error) {
+                    name: "Threshold crossed · \(title)",
+                    headline: "\(count) \(metric.words.lowercased())",
+                    line: text.isEmpty ? "today: over your limit of \(limit)" : text, mood: .error) {
                 HStack {
                     Text(Date().formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: max(12, size.height * 0.035), weight: .medium, design: .rounded))

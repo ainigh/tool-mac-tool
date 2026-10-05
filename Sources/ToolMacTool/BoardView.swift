@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-/// The boards (Goals, Strategies, Entities, Notes): each a big glass panel of boxes to type into,
-/// kept in ~/Library/Application Support/ToolMacTool/boards/<id>.json.
+/// The boards (Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health,
+/// Communication): each a big glass panel of boxes (notes) to type into, kept in
+/// ~/Library/Application Support/ToolMacTool/boards/<id>.json.
 @MainActor
 enum BoardWindow {
     static func show(_ store: BoardStore, _ board: BoardStore.Kind, focus: Int? = nil) {
@@ -41,9 +42,14 @@ enum BoardWindow {
 final class BoardModel: ObservableObject {
     @Published var board: Board {
         didSet {
-            if board != oldValue { scheduleSave() }
+            if board != oldValue {
+                scheduleSave()
+                onChange?()
+            }
         }
     }
+    /// Told after each change (the store keeps its summaries of the notes up to date).
+    var onChange: (() -> Void)?
     /// The box opened to fill the board, if one is.
     @Published var expanded: Int?
     @Published private(set) var problem: String?
@@ -129,6 +135,7 @@ struct BoardView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
                 .help("Drag to move")
+            MenuBarDockButton(store: store, id: board.id, name: board.name)
             GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
         }
         .padding(.leading, 22)
@@ -139,7 +146,7 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Its left column sets a timer or a due date (one per box); the pin floats it on your screen. Click a web address to open it.")
+            Text("Double-click a box to change its color. Down its left: its icon, a timer or a due date (one per box), and its tags. At its top right: dock it in the panel, or pin it to float on your screen. Click a web address to open it.")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -205,10 +212,11 @@ private struct SideArrow: View {
     }
 }
 
-/// A box: a thin column of timers down its left, its text, the countdown of the timer it runs at
-/// its top middle, and copy, open (to fill the board) and pin at its top right. A double-click
-/// steps it through the light colors. Pinned, it floats in a window of its own, with a way back
-/// to its board at the bottom.
+/// A box: a thin column down its left (its icon, a click to change it; its timers; its tags at
+/// the bottom), its text (the first line twice the size, as its title), the countdown of the timer
+/// it runs at its top middle, and copy, open (to fill the board), dock and pin at its top right. A
+/// double-click steps it through the light colors. Pinned, it floats in a window of its own (a
+/// drag anywhere on it moves it), with a way back to its board at the bottom.
 struct BoardBox: View {
     @ObservedObject var model: BoardModel
     let store: BoardStore
@@ -218,8 +226,10 @@ struct BoardBox: View {
     var expanded = false
     /// Opens it to fill the board, or puts it back (nil: no such button, as when pinned).
     var toggleExpand: (() -> Void)?
-    /// Opens its board (shown at the bottom when it's pinned).
+    /// Opens its board (shown at the bottom when it's pinned, or on a tag's board).
     var openBoard: (() -> Void)?
+    /// Floating in a window of its own: a drag on its text moves the window too.
+    var floating = false
     @State private var copied = false
 
     var body: some View {
@@ -228,8 +238,7 @@ struct BoardBox: View {
         let fill = Color(red: t.red, green: t.green, blue: t.blue)
         let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
         HStack(alignment: .top, spacing: 0) {
-            AlarmColumn(store: store, board: board, index: index, alarm: box.alarm)
-                .padding(.top, 3)
+            NoteSideColumn(store: store, board: board, index: index, box: box)
                 .padding(.leading, 3)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
@@ -249,9 +258,15 @@ struct BoardBox: View {
                         BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                                   help: expanded ? "Back to the grid (Esc)" : "Open to fill the board", action: toggleExpand)
                     }
+                    BoxButton(symbol: "dock.arrow.down.rectangle",
+                              help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
+                                  : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
+                              tint: box.docked ? board.color : nil) {
+                        store.setDocked(!box.docked, board, index)
+                    }
                     BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
                               help: box.pinned ? "Unpin: put the floating box away (it stays here)"
-                                  : "Pin: float this box on your screen, above other windows",
+                                  : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
                               tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
                         store.setPinned(!box.pinned, board, index)
                     }
@@ -259,7 +274,7 @@ struct BoardBox: View {
                 .frame(height: 20)
                 .padding(.horizontal, 3)
                 .padding(.top, 2)
-                BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, onDoubleClick: cycle)
+                BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, onDoubleClick: cycle)
                     .padding([.horizontal, .bottom], 4)
                 if let openBoard {
                     OpenBoardButton(board: board, action: openBoard)
@@ -291,7 +306,8 @@ struct BoardBox: View {
     }
 }
 
-/// A box floating by itself (pinned): the same box, with its board a click away.
+/// A box floating by itself (pinned): the same box, with its board a click away. A drag anywhere
+/// on it moves it (⌥-drag to select text).
 struct PinnedBox: View {
     @ObservedObject var model: BoardModel
     let store: BoardStore
@@ -300,14 +316,14 @@ struct PinnedBox: View {
 
     var body: some View {
         BoardBox(model: model, store: store, board: board, index: index, fontSize: 14,
-                 openBoard: { store.show(board.id, focus: index) })
+                 openBoard: { store.show(board.id, focus: index) }, floating: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.colorScheme, .light)
     }
 }
 
-/// "⊞ Goals": back to the board a pinned box belongs to.
-private struct OpenBoardButton: View {
+/// "⊞ Goals": back to the board a box belongs to.
+struct OpenBoardButton: View {
     let board: BoardStore.Kind
     let action: () -> Void
     @State private var hover = false
@@ -331,20 +347,91 @@ private struct OpenBoardButton: View {
     }
 }
 
-/// The thin column down a box's left: its five timers (two countdowns, two repeating ones and a
-/// due date). The one it runs is filled in; a click opens its choices.
-private struct AlarmColumn: View {
+/// The thin column down a box's left: its icon at the top (a click picks another), then its five
+/// timers (two countdowns, two repeating ones and a due date; the one it runs is filled in, a click
+/// opens its choices), and its four tags at the bottom (a click turns one on or off). The buttons
+/// shrink to fit a small box.
+private struct NoteSideColumn: View {
     let store: BoardStore
     let board: BoardStore.Kind
     let index: Int
-    let alarm: BoxAlarm?
+    let box: Board.Box
 
     var body: some View {
-        VStack(spacing: 2) {
-            ForEach(TimerSpec.forBoxes) { spec in
-                AlarmButton(spec: spec, store: store, board: board, index: index, alarm: alarm)
+        GeometryReader { g in
+            let count = CGFloat(1 + TimerSpec.forBoxes.count + NoteTag.allCases.count)
+            let h = max(9, min(19, (g.size.height - 10 - 2 * count) / count))
+            VStack(spacing: 2) {
+                NoteIconButton(store: store, board: board, index: index, symbol: box.icon ?? board.symbol, height: h)
+                    .padding(.bottom, 2)
+                ForEach(TimerSpec.forBoxes) { spec in
+                    AlarmButton(spec: spec, store: store, board: board, index: index, alarm: box.alarm, height: h)
+                }
+                Spacer(minLength: 2)
+                ForEach(NoteTag.allCases, id: \.self) { tag in
+                    TagButton(tag: tag, on: box.has(tag), height: h) { store.toggle(tag, board, index) }
+                }
+            }
+            .padding(.vertical, 3)
+            .frame(width: g.size.width, height: g.size.height, alignment: .top)
+        }
+        .frame(width: 23)
+    }
+}
+
+/// The note's icon (its board's until you pick one): a click opens the icons to pick from.
+private struct NoteIconButton: View {
+    let store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let symbol: String
+    let height: CGFloat
+    @State private var open = false
+    @State private var hover = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            Image(systemName: symbol)
+                .font(.system(size: height * 0.62, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: height + 2)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(board.color.opacity(hover ? 1 : 0.85)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help("The note's icon: click to pick another")
+        .popover(isPresented: $open, arrowEdge: .trailing) {
+            IconPicker(current: symbol, board: board) { picked in
+                store.setIcon(picked, board, index)
+                open = false
             }
         }
+    }
+}
+
+/// A tag at the bottom of a note's column: lit in its color when the note has it.
+private struct TagButton: View {
+    let tag: NoteTag
+    let on: Bool
+    let height: CGFloat
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: tag.symbol)
+                .font(.system(size: height * 0.55, weight: on ? .bold : .medium))
+                .foregroundStyle(on ? Color.white : Color.black.opacity(hover ? 0.6 : 0.28))
+                .frame(width: 22, height: height)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(on ? AnyShapeStyle(tag.color) : AnyShapeStyle(Color.black.opacity(hover ? 0.08 : 0))))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(on ? "\(tag.title): on (it's on the \(tag.title) board). Click to take it off."
+                 : "\(tag.title): click to tag it (it shows on the \(tag.title) board)")
     }
 }
 
@@ -354,6 +441,7 @@ private struct AlarmButton: View {
     let board: BoardStore.Kind
     let index: Int
     let alarm: BoxAlarm?
+    var height: CGFloat = 19
     @State private var open = false
     @State private var hover = false
 
@@ -362,9 +450,9 @@ private struct AlarmButton: View {
         let on = alarm?.spec == spec.id
         Button { open.toggle() } label: {
             Image(systemName: look.symbol)
-                .font(.system(size: 10.5, weight: on ? .bold : .medium))
+                .font(.system(size: height * 0.55, weight: on ? .bold : .medium))
                 .foregroundStyle(Color.black.opacity(on ? 0.8 : hover ? 0.75 : 0.38))
-                .frame(width: 22, height: 19)
+                .frame(width: 22, height: height)
                 .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(on ? AnyShapeStyle(look.accent) : AnyShapeStyle(Color.black.opacity(hover ? 0.08 : 0))))
                 .contentShape(Rectangle())
@@ -613,33 +701,75 @@ private struct BoxButton: View {
     }
 }
 
-/// Plain text to type in, that says when it's double-clicked (SwiftUI's TextEditor keeps its
-/// clicks to itself), with its web addresses underlined: a click on one opens it in your browser.
-/// Dark on the light boxes; `ink` sets it (white on the glass cards).
+/// Text to type in, that says when it's double-clicked (SwiftUI's TextEditor keeps its clicks to
+/// itself), with its first line twice the size of the rest (the note's title) and its web addresses
+/// underlined: a click on one opens it in your browser. Dark on the light boxes; `ink` sets it
+/// (white on the glass cards). With `dragsWindow` (a floating note), a press that moves drags the
+/// window; a click still puts the caret there, and ⌥-drag selects.
 struct BoxEditor: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat
     var ink = NSColor(white: 0.12, alpha: 1)
     var linkInk = NSColor(red: 0.1, green: 0.36, blue: 0.85, alpha: 1)
+    /// How much bigger the first line is.
+    var titleScale: CGFloat = 2
+    var dragsWindow = false
     var onDoubleClick: () -> Void = {}
 
     final class TextView: NSTextView {
         var onDoubleClick: (() -> Void)?
+        var dragsWindow = false
 
         override func mouseDown(with event: NSEvent) {
+            if dragsWindow, event.clickCount == 1, !event.modifierFlags.contains(.option), let window,
+               moveWindow(window) { return }
             super.mouseDown(with: event)
             if event.clickCount == 2 { onDoubleClick?() }
         }
+
+        /// Waits to see whether the press is a drag (it moves the window: true) or a click (the
+        /// release is put back for the text to take as usual: false).
+        private func moveWindow(_ window: NSWindow) -> Bool {
+            let start = NSEvent.mouseLocation
+            let origin = window.frame.origin
+            var dragging = false
+            defer { if dragging { NSCursor.pop() } }
+            while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+                if next.type == .leftMouseUp {
+                    if !dragging { window.postEvent(next, atStart: true) }
+                    return dragging
+                }
+                let now = NSEvent.mouseLocation
+                let dx = now.x - start.x, dy = now.y - start.y
+                if !dragging, hypot(dx, dy) > 4 {
+                    dragging = true
+                    NSCursor.closedHand.push()
+                }
+                if dragging { window.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy)) }
+            }
+            return dragging
+        }
+
+        // Only plain text comes in: the look is the note's own.
+        override func paste(_ sender: Any?) { pasteAsPlainText(sender) }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: BoxEditor
+        /// The size it was last styled at.
+        var fontSize: CGFloat = 0
         init(_ parent: BoxEditor) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
-            BoxEditor.markLinks(tv)
+            // Not while a word is being composed (an input method's marked text keeps its look).
+            if !tv.hasMarkedText() { BoxEditor.style(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink) }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            BoxEditor.matchTyping(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink)
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -652,16 +782,44 @@ struct BoxEditor: NSViewRepresentable {
 
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    /// Marks every web address in the text as a link (and nothing else).
-    static func markLinks(_ tv: NSTextView) {
-        guard let storage = tv.textStorage, let detector = Self.detector else { return }
+    /// How long the first line is (up to its line break), in UTF-16 units.
+    static func titleLength(_ string: NSString) -> Int {
+        let br = string.rangeOfCharacter(from: .newlines)
+        return br.location == NSNotFound ? string.length : br.location
+    }
+
+    static func fonts(_ size: CGFloat, _ scale: CGFloat) -> (body: NSFont, title: NSFont) {
+        (.systemFont(ofSize: size), .systemFont(ofSize: (size * scale).rounded(), weight: .semibold))
+    }
+
+    /// The whole text in its look: the first line big, the rest the size of the box, every web
+    /// address a link (and nothing else, whatever was pasted or dropped in).
+    static func style(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
+        guard let storage = tv.textStorage else { return }
+        let f = fonts(size, titleScale)
         let all = NSRange(location: 0, length: storage.length)
+        let title = titleLength(storage.string as NSString)
         storage.beginEditing()
-        storage.removeAttribute(.link, range: all)
-        for match in detector.matches(in: storage.string, range: all) {
-            if let url = match.url { storage.addAttribute(.link, value: url, range: match.range) }
+        storage.setAttributes([.font: f.body, .foregroundColor: ink], range: all)
+        if title > 0 { storage.addAttribute(.font, value: f.title, range: NSRange(location: 0, length: title)) }
+        if let detector {
+            for match in detector.matches(in: storage.string, range: all) {
+                if let url = match.url { storage.addAttribute(.link, value: url, range: match.range) }
+            }
         }
         storage.endEditing()
+        matchTyping(tv, size: size, titleScale: titleScale, ink: ink)
+    }
+
+    /// What's typed next takes the size of the line the caret is on.
+    static func matchTyping(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
+        let f = fonts(size, titleScale)
+        let onTitle = tv.selectedRange().location <= titleLength(tv.string as NSString)
+        var attributes = tv.typingAttributes
+        attributes[.font] = onTitle ? f.title : f.body
+        attributes[.foregroundColor] = ink
+        attributes[.link] = nil
+        tv.typingAttributes = attributes
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -681,7 +839,10 @@ struct BoxEditor: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         tv.drawsBackground = false
-        tv.isRichText = false
+        // Rich text, so the first line can be bigger; what comes in is made plain (`style`).
+        tv.isRichText = true
+        tv.importsGraphics = false
+        tv.usesFontPanel = false
         tv.allowsUndo = true
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
@@ -694,8 +855,10 @@ struct BoxEditor: NSViewRepresentable {
         tv.string = text
         tv.delegate = context.coordinator
         tv.onDoubleClick = onDoubleClick
+        tv.dragsWindow = dragsWindow
         scroll.documentView = tv
-        Self.markLinks(tv)
+        context.coordinator.fontSize = fontSize
+        Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink)
         return scroll
     }
 
@@ -703,10 +866,16 @@ struct BoxEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let tv = scroll.documentView as? TextView else { return }
         tv.onDoubleClick = onDoubleClick
+        tv.dragsWindow = dragsWindow
+        var restyle = false
         if tv.string != text {
             tv.string = text
-            Self.markLinks(tv)
+            restyle = true
         }
-        if tv.font?.pointSize != fontSize { tv.font = .systemFont(ofSize: fontSize) }
+        if context.coordinator.fontSize != fontSize {
+            context.coordinator.fontSize = fontSize
+            restyle = true
+        }
+        if restyle { Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink) }
     }
 }
