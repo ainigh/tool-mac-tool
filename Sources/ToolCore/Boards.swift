@@ -3,17 +3,36 @@ import Foundation
 // The boards (Goals, Strategies, Entities, Notes): a big panel of boxes to type into. The arrows
 // show more or fewer of them (the hidden ones keep their text), a double-click steps a box through
 // light colors, and the grid fills the panel with a gutter that narrows as the boxes get more.
-// This is their logic (what's kept, how the grid is laid out); the app draws it.
+// Each box can run one timer (a countdown, a repeating one or a due date) and can be pinned to
+// float on the screen by itself. This is their logic (what's kept, how the grid is laid out); the
+// app draws it.
 
 public struct Board: Codable, Equatable, Sendable {
     public struct Box: Codable, Equatable, Sendable {
         public var text: String
         /// Which of `Board.tints` it wears.
         public var tint: Int
+        /// The one timer it runs, if any.
+        public var alarm: BoxAlarm?
+        /// Floating on the screen in a window of its own.
+        public var pinned: Bool
 
-        public init(text: String = "", tint: Int = 0) {
+        public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false) {
             self.text = text
             self.tint = tint
+            self.alarm = alarm
+            self.pinned = pinned
+        }
+
+        private enum CodingKeys: String, CodingKey { case text, tint, alarm, pinned }
+
+        // A file from before timers and pins has neither.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+            tint = try c.decodeIfPresent(Int.self, forKey: .tint) ?? 0
+            alarm = try c.decodeIfPresent(BoxAlarm.self, forKey: .alarm)
+            pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         }
     }
 
@@ -58,6 +77,9 @@ public struct Board: Codable, Equatable, Sendable {
         if b.boxes.count > Self.maxBoxes { b.boxes = Array(b.boxes.prefix(Self.maxBoxes)) }
         b.boxes += Array(repeating: Box(), count: Self.maxBoxes - b.boxes.count)
         for i in b.boxes.indices where !Self.tints.indices.contains(b.boxes[i].tint) { b.boxes[i].tint = 0 }
+        for i in b.boxes.indices where b.boxes[i].alarm?.timer == nil || b.boxes[i].alarm?.state.isOn != true {
+            b.boxes[i].alarm = nil
+        }
         return b
     }
 
@@ -103,4 +125,21 @@ public struct Board: Codable, Equatable, Sendable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url, options: .atomic)
     }
+}
+
+/// The timer a box runs: which one (a `TimerSpec.forBoxes` id) and where it's got to.
+public struct BoxAlarm: Codable, Equatable, Sendable {
+    public var spec: String
+    public var state: TimerState
+
+    public init(spec: String, state: TimerState) {
+        self.spec = spec
+        self.state = state
+    }
+
+    /// Its timer (nil for an id that isn't one a box runs).
+    public var timer: TimerSpec? { TimerSpec.forBoxes.first { $0.id == spec } }
+
+    /// When it next rings, if it's counting towards that.
+    public func nextRing(now: Date) -> Date? { timer?.nextRing(state, now: now) }
 }

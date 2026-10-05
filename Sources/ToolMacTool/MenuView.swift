@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// The panel that drops down from the menu bar icon: columns of titled tile grids, and a bar
-/// at the bottom for updates, open at login and quit.
+/// The panel that drops down from the menu bar icon: a row across the top (Unzip, the battery,
+/// the next alarm), columns of titled tile grids under it, and a bar at the bottom for updates,
+/// open at login and quit.
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: Updater
@@ -13,11 +14,14 @@ struct MenuView: View {
     static let columns = Array(repeating: GridItem(.fixed(tile), spacing: gap), count: perRow)
     /// One column of sections: four tiles across.
     static let columnWidth: CGFloat = tile * CGFloat(perRow) + gap * CGFloat(perRow - 1)
-    /// A bigger tile, for a section stacked in a column of its own (the boards).
+    /// A bigger tile, for a section stacked in a narrow column of its own (the boards).
     static let bigTile: CGFloat = 96
-    /// Two columns side by side and the boards' narrow one, a hairline between them, so the panel
+    /// The columns side by side, a hairline between them (14 points either side), so the panel
     /// stays short.
-    static let width: CGFloat = 14 + columnWidth + 29 + columnWidth + 29 + bigTile + 14
+    static var width: CGFloat {
+        let columns = Tools.columns.map(width(of:)).reduce(0, +)
+        return 14 + columns + 29 * CGFloat(Tools.columns.count - 1) + 14
+    }
 
     /// A column of stacked sections is one big tile wide; the others four tiles.
     static func width(of column: [ToolSection]) -> CGFloat {
@@ -26,6 +30,12 @@ struct MenuView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            TopRow(model: model)
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
+            Divider()
+                .padding(.horizontal, 14)
             ToolGrid(model: model)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)

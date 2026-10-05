@@ -1,9 +1,11 @@
 import Foundation
 
-// The timers: six tiles, each set by clicking it to step through its choices. Two count down once
-// and ring until you say OK; two count down, ring softly, sit at zero for five minutes and start
-// again until you stop them; two chime on the hour, one through the day and one through the night.
-// This is their logic (what's due when, and what the cards say); the app plays and shows it.
+// The timers. Two count down once and ring until you say OK; two count down, ring softly, sit at
+// zero for five minutes and start again until you stop them; a due date counts down to a day and
+// time you pick (days, months or years ahead) and rings then. Those five are set per box on the
+// boards, one at a time. Two more chime on the hour, one through the day and one through the
+// night, from the panel. This is their logic (what's due when, and what the cards say); the app
+// plays and shows it.
 
 public struct TimerSpec: Identifiable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
@@ -15,6 +17,9 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         case dayChime
         /// Chimes every hour from 11 PM to 5 AM.
         case nightChime
+        /// Counts down to a date and time (`TimerState.until`), with reminders on the way; rings
+        /// until you say OK, even if that's long after (the Mac was off when it came).
+        case deadline
     }
 
     public let id: String
@@ -54,7 +59,18 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         TimerSpec(id: "night-chime", name: "Night watch", kind: .nightChime),
     ]
 
+    /// The four countdowns a box can run.
+    public static var countdowns: [TimerSpec] { all.filter { $0.kind == .once || $0.kind == .repeating } }
+    /// The two chimes, set from the panel.
+    public static var chimes: [TimerSpec] { all.filter(\.isChime) }
+    /// The due date: a countdown to a day and time you pick.
+    public static let deadline = TimerSpec(id: "due", name: "Due date", kind: .deadline)
+    /// What a box can run, one at a time: the four countdowns and a due date.
+    public static var forBoxes: [TimerSpec] { countdowns + [deadline] }
+
     public var isChime: Bool { kind == .dayChime || kind == .nightChime }
+    /// Counts down once to a moment and waits there for OK.
+    public var isOneOff: Bool { kind == .once || kind == .deadline }
 
     /// The hours it chimes at.
     public var hours: [Int] {
@@ -67,6 +83,13 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
 
     /// The choices a click steps through, then back to off: "5 min", "1 h 30 min"; "On" for a chime.
     public var choices: [String] { isChime ? ["On"] : presets.map(TimerText.duration) }
+
+    /// A due date set for `until`, counting from now (its only choice is 0).
+    public func due(until: Date, now: Date) -> TimerState {
+        var s = TimerState(choice: 0, start: now)
+        s.until = until
+        return s
+    }
 
     /// One click: the next choice, started now (past the last, it's off).
     public func cycled(_ s: TimerState, now: Date) -> TimerState {
@@ -94,6 +117,22 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         return out
     }
 
+    /// The marks a countdown of this kind reminds you at: a due date's are whole spans (a month, a
+    /// week, a day, an hour…), the others' halve what's left.
+    public func reminderMarks(for duration: TimeInterval) -> [TimeInterval] {
+        kind == .deadline ? Self.deadlineReminders(for: duration) : Self.reminders(for: duration)
+    }
+
+    /// A due date's reminders, as the time left at each: the spans below that fit in nine tenths
+    /// of the wait (so none comes the moment it's set). A week: 3 days, 2 days, 1 day, 12, 6, 3
+    /// and 1 hours, then 30, 15, 5 and 1 minutes.
+    public static func deadlineReminders(for duration: TimeInterval) -> [TimeInterval] {
+        let day: TimeInterval = 86_400
+        let marks: [TimeInterval] = [365 * day, 182 * day, 91 * day, 30 * day, 14 * day, 7 * day, 3 * day, 2 * day, day,
+                                     12 * 3600, 6 * 3600, 3 * 3600, 3600, 30 * 60, 15 * 60, 5 * 60, 60]
+        return marks.filter { $0 <= duration * 0.9 }
+    }
+
     /// Whether its snooze can still be used now: a finished one-off countdown, or a repeating one at
     /// zero, that hasn't been snoozed yet (this round).
     public func canSnooze(_ s: TimerState, now: Date) -> Bool {
@@ -117,6 +156,10 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
 
     /// The countdown's length, if it's counting.
     public func duration(_ s: TimerState) -> TimeInterval? {
+        if kind == .deadline {
+            guard s.choice != nil, let start = s.start, let until = s.until else { return nil }
+            return max(1, until.timeIntervalSince(start))
+        }
         guard !isChime, let c = s.choice, presets.indices.contains(c) else { return nil }
         return presets[c]
     }
@@ -126,7 +169,7 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
         if isChime { return .chiming }
         guard let d = duration(s) else { return .off }
         let elapsed = max(0, now.timeIntervalSince(start))
-        if kind == .once {
+        if isOneOff {
             if elapsed < d { return .counting(remaining: d - elapsed, of: d, round: 0) }
             if let at = s.snoozeAt, at > now { return .snoozed(remaining: at.timeIntervalSince(now)) }
             return .finished
@@ -143,13 +186,14 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
     public func due(_ s: TimerState, now: Date, calendar: Calendar) -> (event: TimerEvent?, state: TimerState)? {
         guard s.choice != nil, let start = s.start else { return nil }
         switch kind {
-        case .once:
+        case .once, .deadline:
             guard let d = duration(s) else { return nil }
             if let snoozed = snoozeDue(s, now: now) { return snoozed }
             let end = start.addingTimeInterval(d)
             if now < end { return reminderDue(s, remaining: end.timeIntervalSince(now), duration: d, round: 0) }
             guard s.rung == 0 else { return nil }
-            if now.timeIntervalSince(end) > Self.lateness { return (nil, TimerState()) }
+            // A due date still rings when it was missed: you set it to be told.
+            if kind == .once, now.timeIntervalSince(end) > Self.lateness { return (nil, TimerState()) }
             var after = s
             after.rung = 1
             return (.finished(at: end), after)
@@ -193,13 +237,27 @@ public struct TimerSpec: Identifiable, Equatable, Sendable {
     private func reminderDue(_ s: TimerState, remaining: TimeInterval, duration: TimeInterval,
                              round: Int) -> (event: TimerEvent?, state: TimerState)? {
         // The smallest mark reached so far.
-        guard let mark = Self.reminders(for: duration).last(where: { remaining <= $0 }) else { return nil }
+        guard let mark = reminderMarks(for: duration).last(where: { remaining <= $0 }) else { return nil }
         let shown = s.remindedRound == round ? s.reminded : nil
         if let shown, shown <= mark { return nil }
         var after = s
         after.reminded = mark
         after.remindedRound = round
         return (mark - remaining <= Self.reminderGrace ? .reminder(left: remaining) : nil, after)
+    }
+
+    /// When it next rings (a countdown reaching zero, a snooze running out), if it's counting
+    /// towards that now; nil when it's off, at zero waiting for OK, or a chime.
+    public func nextRing(_ s: TimerState, now: Date) -> Date? {
+        switch phase(s, now: now) {
+        case .counting(let left, _, _), .snoozed(let left):
+            return now.addingTimeInterval(left)
+        case .holding(let left, let round):
+            if let at = s.snoozeAt, s.snoozedRound == round, at > now { return at }
+            return duration(s).map { now.addingTimeInterval(left + $0) }
+        case .off, .finished, .chiming:
+            return nil
+        }
     }
 
     /// The next time a chime sounds, after `now`.
@@ -230,6 +288,8 @@ public struct TimerState: Codable, Equatable, Sendable {
     /// The last reminder shown (as the time left at its mark), and in which round.
     public var reminded: TimeInterval?
     public var remindedRound: Int?
+    /// What a due date counts down to.
+    public var until: Date?
 
     public init(choice: Int? = nil, start: Date? = nil, rung: Int = 0, lastChime: Date? = nil) {
         self.choice = choice
@@ -284,6 +344,25 @@ public enum TimerText {
         let h = s / 3600, m = (s % 3600) / 60
         if h == 0 { return "\(m) min" }
         return m == 0 ? "\(h) h" : "\(h) h \(m) min"
+    }
+
+    /// "4:59", "1:05:00", and past a day "3d 04:12:09": a countdown that may run for months.
+    public static func countdown(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds).rounded(.up))
+        let d = s / 86_400
+        guard d > 0 else { return clock(seconds) }
+        let h = (s % 86_400) / 3600, m = (s % 3600) / 60, sec = s % 60
+        return String(format: "%dd %02d:%02d:%02d", d, h, m, sec)
+    }
+
+    /// "2 y 30 d", "45 d 6 h", "3 d", and under a day as `left` does: a long time left.
+    public static func span(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds).rounded())
+        let d = s / 86_400
+        guard d > 0 else { return left(seconds) }
+        let y = d / 365, days = d % 365, h = (s % 86_400) / 3600
+        if y > 0 { return days == 0 ? "\(y) y" : "\(y) y \(days) d" }
+        return h == 0 ? "\(d) d" : "\(d) d \(h) h"
     }
 
     /// "30 min", "1 min 30 s", "45 s": time left, for a reminder.

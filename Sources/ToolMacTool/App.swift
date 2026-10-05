@@ -10,18 +10,9 @@ struct ToolMacToolApp: App {
         MenuBarExtra {
             MenuView(model: model, updater: model.updater)
         } label: {
-            MenuBarIcon(updater: model.updater)
+            MenuBarIcon(updater: model.updater, boards: model.boards)
         }
         .menuBarExtraStyle(.window)
-    }
-}
-
-struct MenuBarIcon: View {
-    @ObservedObject var updater: Updater
-
-    var body: some View {
-        // The filled icon means an update is waiting.
-        Image(systemName: updater.hasUpdate ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
     }
 }
 
@@ -37,8 +28,10 @@ final class AppModel: ObservableObject {
     let scheduler = Scheduler()
     /// The timers' log: thresholds and the signals sent from it.
     let activity = ActivityStore()
-    /// The six timers and the battery, ticking from launch on.
+    /// The chimes and the battery, ticking from launch on.
     lazy var timers = TimerBoard(activity: activity)
+    /// The boards, and the timers in their boxes, ticking from launch on.
+    lazy var boards = BoardStore(sounds: timers.sounds, activity: activity)
     // The chat's voice, the diagram tool and the voice tools, made when first opened.
     lazy var chatLink = VoiceLink(chat: chat)
     lazy var diagram = DiagramModel()
@@ -64,6 +57,7 @@ final class AppModel: ObservableObject {
         MacFacts.prepare()
         scheduler.start()
         timers.start()
+        boards.start()
         // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {
