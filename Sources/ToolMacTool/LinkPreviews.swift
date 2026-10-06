@@ -73,12 +73,26 @@ final class LinkPreviews: ObservableObject {
             let got = await Self.load(link)
             self.loading.remove(key)
             self.info[key] = got
+            self.images[key] = nil
             self.trim()
             self.scheduleSave()
         }
     }
 
     func isLoading(_ link: URL) -> Bool { loading.contains(link.absoluteString) }
+
+    /// Decoded icons, so a note's redraw doesn't decode them again (not published: it only
+    /// remembers what `info` already holds).
+    private var images: [String: NSImage] = [:]
+
+    /// The link's icon as a picture, if it has one.
+    func icon(for link: URL) -> NSImage? {
+        let key = link.absoluteString
+        if let image = images[key] { return image }
+        guard let data = info[key]?.icon, let image = NSImage(data: data) else { return nil }
+        images[key] = image
+        return image
+    }
 
     /// What pasting text brings: its links are fetched straight away.
     func pasted(_ text: String) {
@@ -158,7 +172,10 @@ final class LinkPreviews: ObservableObject {
 
     private func trim() {
         guard info.count > Self.limit else { return }
-        for (key, _) in info.sorted(by: { $0.value.fetched < $1.value.fetched }).prefix(info.count - Self.limit) { info[key] = nil }
+        for (key, _) in info.sorted(by: { $0.value.fetched < $1.value.fetched }).prefix(info.count - Self.limit) {
+            info[key] = nil
+            images[key] = nil
+        }
     }
 
     private func scheduleSave() {
@@ -263,7 +280,7 @@ struct LinkLine: View {
     }
 
     @ViewBuilder private var icon: some View {
-        if let data = info?.icon, let image = NSImage(data: data) {
+        if let image = LinkPreviews.shared.icon(for: link) {
             Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
         } else if loading {
             ProgressView().controlSize(.mini)

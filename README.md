@@ -3,7 +3,7 @@
 A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, when one is set,
 and beside that any boards you've docked there). Clicking it opens a panel: the ten boards across
 the top, each in its own color; a row under them (Unzip to Desktop, the battery in detail); tool
-tiles grouped into sections in two columns (Automate, Voice and Record; Glass and Model tools),
+tiles grouped into sections in two columns (Automate, Voice and Record; Glass, Model tools and Privacy),
 plus two narrow columns (the notes running a timer, and the tags' boards), with dividers between
 them; and the notes you've docked, in a row along the bottom. Each section has its own color, worn
 by its tiles and its title, with a pin at the right of the title to float the group on your screen
@@ -422,6 +422,34 @@ top of Tools turns them off everywhere. Shortcuts are run with macOS's `shortcut
 first run may ask for permission. Not every model can call tools (llama3.1 and newer, qwen2.5 and
 newer, mistral and others can): with one that can't, the chat answers without them.
 
+### Redact, Redaction map (Privacy)
+
+Takes people's names out of text before you send it anywhere, the same way every time.
+
+- **The Redaction map** is every word you've met that should be swapped, each with what stands
+  in for it, kept in `~/Library/Application Support/ToolMacTool/redaction-map.json` (nothing else
+  has it). New names come in as `Person1`, `Person2`… marked **New**; change a stand-in to whatever
+  you like, give one person's several names (Robert, Bob) the same one (**Same substitute**), or
+  tick **Keep** for a word the model took for a name and isn't (May, Will). Add any word by hand
+  (a company, an email). **Learn from text…** fills it from past text: paste it, and the model
+  lists its names and the new ones join the map. Search, and the New and Kept filters, find them.
+- **Two buckets, one map.** The window has **Critical** at the top (the few words that matter
+  most, to watch closely) and **Everything else** under it (the many everyday ones). Click a
+  word's star (or right-click, or **Move to Critical** / **Move out of Critical**) to move it
+  between them; **Critical** when adding one puts it straight in. Redacting uses both buckets as
+  one map. **Every redacted text is checked for the critical words**, anywhere in it, not only
+  as whole words (joined to another word, inside an email address): any still there come up in a
+  red bar over the result, so nothing critical gets through unnoticed.
+- **Redact**: paste text and **Find & redact** (⌘Return). The model (the chat's, through Ollama,
+  on this Mac) is asked only for a list of the people's names in it, **one word per line**, so a
+  first and a last name always come apart; long texts go a piece at a time. New ones join the map
+  (**Review N new…** opens them), then every word in the map is swapped for its stand-in: whole
+  words only, all in one pass (a stand-in is never swapped again), the original's capitals kept
+  (JOHN → PERSON1), "John's" → "Person1's". **Redact** alone swaps through the map without asking
+  the model. **Mapping at the top** puts the substitutions used at the top of the result as front
+  matter (`substitutions: "John": "Person1"`). **Restore** goes the other way: paste a reply that
+  uses the stand-ins and get the real names back (the first one, for a shared stand-in).
+
 ### Diagram (Glass)
 
 A glass canvas covering most of the screen (90% of it). It opens from its tile, or when the chat's
@@ -674,7 +702,8 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic: focus sessions (rounds, rests, reminders, snooze, the next note),
+Sources/ToolCore/             the tools' logic: redaction (the map, the model's names, the swap and its way back),
+                              focus sessions (rounds, rests, reminders, snooze, the next note),
                               the app's modes and its clock (normal, test, quiet), link previews
                               (a page's title and icons, YouTube addresses), zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
@@ -706,7 +735,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               MemoryView, HUD (the small cards, stacked), Updater, Modes (the mode switch, quiet
                               mode's held pop-ups, asking before a schedule goes on or off), PinnedGroups,
                               Screenshots, LinkPreviews (a note's links, the YouTube player), Focus (focus on a
-                              board: its card, the board's Focus button, the focus bar)
+                              board: its card, the board's Focus button, the focus bar), Redact (Redact, the
+                              Redaction map)
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
                               icon-match); shipped as the app's resources
