@@ -49,6 +49,8 @@ final class ModeCenter: ObservableObject {
 
     /// Into `new` from now (again from the start, if it's the one it's in).
     func set(_ new: AppMode) {
+        // Strict focus: nothing may be sped up or held back.
+        if new != .normal && FocusCenter.shared.isStrict { return }
         let old = state
         state = ModeState.entering(new, at: Date())
         AppClock.warp = state.warp
@@ -157,6 +159,7 @@ enum Confirm {
 /// Normal, test and quiet: the one on is lit, with the time it has left.
 struct ModeSwitch: View {
     @ObservedObject var modes: ModeCenter
+    @ObservedObject private var focus = FocusCenter.shared
 
     var body: some View {
         HStack(spacing: 2) {
@@ -171,7 +174,10 @@ struct ModeSwitch: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(Self.help(m, on: on))
+                // Strict focus: nothing may be sped up or held back.
+                .disabled(focus.isStrict && m != .normal)
+                .help(focus.isStrict && m != .normal ? "Strict focus is on: test and quiet mode are locked until it's over"
+                      : Self.help(m, on: on))
             }
             if modes.mode != .normal {
                 TimelineView(.periodic(from: .now, by: 1)) { context in

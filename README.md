@@ -41,6 +41,44 @@ the menu bar, and the bottom bar shows the time it has left.
 
 The mode is kept across a relaunch (with what's left of its time); what quiet mode held back isn't.
 
+## Focus on a board
+
+The **Focus** button at the top of every board works through that board's notes one at a time.
+Pick the **focus interval** (10 minutes to start; 5 to 60) and start **Focus** or **Strict focus**
+(each asks first, saying what it means; strict asks twice). Only one board can be in focus at a
+time.
+
+- **It starts on the board's first note** (the first that isn't Completed): the note is **pinned**
+  on your screen, a focus bar on it shows the countdown, and the **battery is set to 100%**.
+- **On the way down**, reminders halve what's left, as a countdown's do (10 minutes: at 5, 2 and 1
+  minute left).
+- **At time's up** a card in the middle of the screen rings, with the note's text to read and
+  edit, and waits for an answer:
+  - **Snooze 3 min**: once a round; it rings again after three minutes.
+  - **Pending**: not done yet. The note is marked Pending, a **3-minute rest** starts, then another
+    round on **the same note**.
+  - **Completed**: the note is done. It's marked Completed and unpinned, **the next note is pinned**
+    (the next one that isn't Completed, going round; when every shown note is done, the next hidden
+    one is shown), and the **3-minute rest** starts.
+- **Completed can be clicked any time** during a round (the ✓ on the focus bar, the card, or the
+  note's own Completed at the bottom left): the next note is pinned and the rest starts at once,
+  even with time left in the interval.
+- **An empty note works too**, but it can't be completed until it has some text: the card asks for
+  it (type right there on the card, or in the pinned note).
+- After each rest the next round starts by itself (a card and a sound), and so on **until the
+  battery is empty** (it drains 20% an hour: about 5 hours; in test mode, about 5 minutes). Then a
+  last card says how many notes were completed.
+- While focus is on, the menu bar shows its phase and countdown beside the wrench, the board's
+  Focus button shows it too, and the battery can't be set (it's focus's clock). The note in focus
+  can't be unpinned.
+
+**Focus** can be stopped any time: **Stop focus** in the board's Focus button. **Strict focus**
+can't be stopped from the app at all: there's no Stop, and **Quit, Update, the battery, test and
+quiet mode are locked** (quiet mode, if it was on, goes back to normal), and its note can't be
+unpinned. It ends when the battery is empty, or if the app is quit from outside it (**Force
+Quit**, ⌥⌘Esc, or Activity Monitor) or the Mac restarts: focus isn't kept across a relaunch.
+Strict focus started in test mode ends when test mode does, so it can be tried out quickly.
+
 ## Pinned groups
 
 Any group in the panel (Boards, Files, Automate, Voice, Record, Glass, Model tools, Timers, Tags)
@@ -636,7 +674,8 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic: the app's modes and its clock (normal, test, quiet), link previews
+Sources/ToolCore/             the tools' logic: focus sessions (rounds, rests, reminders, snooze, the next note),
+                              the app's modes and its clock (normal, test, quiet), link previews
                               (a page's title and icons, YouTube addresses), zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
                               shortcuts as tools and tool calls,
@@ -666,7 +705,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards), BoxCards (their cards),
                               MemoryView, HUD (the small cards, stacked), Updater, Modes (the mode switch, quiet
                               mode's held pop-ups, asking before a schedule goes on or off), PinnedGroups,
-                              Screenshots, LinkPreviews (a note's links, the YouTube player)
+                              Screenshots, LinkPreviews (a note's links, the YouTube player), Focus (focus on a
+                              board: its card, the board's Focus button, the focus bar)
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
                               icon-match); shipped as the app's resources

@@ -68,6 +68,7 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             if leftTest {
                 let now = Date()
+                FocusCenter.shared.leftTestClock(now: now)
                 self.boards.leftTestClock(now: now)
                 self.timers.leftTestClock(now: now)
                 self.activity.dropFuture(after: now)
@@ -75,6 +76,7 @@ final class AppModel: ObservableObject {
             self.scheduler.replanAll()
         }
         ModeCenter.shared.start()
+        FocusCenter.shared.attach(boards: boards, timers: timers)
         scheduler.start()
         timers.start()
         boards.start()
