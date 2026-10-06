@@ -7,13 +7,15 @@ import ToolCore
 /// ~/Library/Application Support/ToolMacTool/boards/<id>.json.
 @MainActor
 enum BoardWindow {
+    static func id(_ board: String) -> String { "board-\(board)" }
+
     static func show(_ store: BoardStore, _ board: BoardStore.Kind, focus: Int? = nil) {
         let model = store.model(board)
         if let focus, model.board.boxes.indices.contains(focus) {
-            if focus >= model.board.shown { model.board.shown = focus + 1 }
+            model.board.reveal(focus)
             model.expanded = focus
         }
-        let id = "board-\(board.id)"
+        let id = Self.id(board.id)
         Windows.show(id) {
             let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
@@ -77,8 +79,8 @@ final class BoardModel: ObservableObject {
     }
 }
 
-/// The glass panel: the board's name at the top, the boxes filling the middle (or one box, opened
-/// to fill it all) with an arrow either side for fewer or more, and a line of hints at the bottom.
+/// The glass panel: the board's name at the top, the boxes filling the middle in their order, some
+/// spanning more blocks (or one box, opened to fill it all) with an arrow either side for fewer or more, and a line of hints at the bottom.
 struct BoardView: View {
     @ObservedObject var model: BoardModel
     let store: BoardStore
@@ -86,6 +88,20 @@ struct BoardView: View {
     let close: () -> Void
     @State private var clock = GlassClock()
     @Environment(\.controlActiveState) private var active
+    /// The box being dragged to a new place, and the last box whose place it took.
+    @State private var moving: Int?
+    @State private var lastTarget: Int?
+    /// The box being resized, and the size it would take.
+    @State private var sizing: Sizing?
+
+    struct Sizing: Equatable {
+        let box: Int
+        var across: Int
+        var down: Int
+    }
+
+    /// The grid's coordinate space, which a box's drag reports the pointer in.
+    static let space = "board-grid"
 
     var body: some View {
         let shown = model.board.shown
@@ -96,10 +112,10 @@ struct BoardView: View {
                     withAnimation(.easeInOut(duration: 0.2)) { model.board.fewer() }
                 }
                 GeometryReader { geo in
-                    if let e = model.expanded, e < shown {
+                    if let e = model.expanded, model.board.isShown(e) {
                         box(e, count: 1)
                     } else {
-                        grid(shown: shown, size: geo.size)
+                        grid(size: geo.size)
                     }
                 }
                 SideArrow(symbol: "chevron.right", help: "More boxes", enabled: shown < Board.maxBoxes) {
@@ -112,8 +128,8 @@ struct BoardView: View {
         }
         .background(GlassCard(clock: clock, mood: .idle, paused: active == .inactive, radius: 30))
         .environment(\.colorScheme, .dark)
-        .onChange(of: shown) { _, now in
-            if let e = model.expanded, e >= now { model.expanded = nil }
+        .onChange(of: shown) { _, _ in
+            if let e = model.expanded, !model.board.isShown(e) { model.expanded = nil }
         }
     }
 
@@ -147,7 +163,7 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily, Weekly or Monthly (a reminder every hour until it's done). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
+            Text("Double-click a box to change its color. Drag its top strip to move it, its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -159,31 +175,154 @@ struct BoardView: View {
         .padding(.vertical, 10)
     }
 
-    private func grid(shown: Int, size: CGSize) -> some View {
+    /// The shown boxes in their order, each in its place (a big one spanning blocks). Drag a box
+    /// by the strip along its top to move it to another's place; drag its corner to resize it.
+    private func grid(size: CGSize) -> some View {
+        let shown = model.board.shown
         let gap = CGFloat(Board.gutter(for: shown)) + 2
-        let rows = Board.rows(for: shown, width: size.width, height: size.height)
-        let starts = rows.indices.map { rows.prefix($0).reduce(0, +) }
-        return VStack(spacing: gap) {
-            ForEach(rows.indices, id: \.self) { r in
-                HStack(spacing: gap) {
-                    ForEach(starts[r]..<(starts[r] + rows[r]), id: \.self) { i in
-                        box(i, count: shown)
+        let layout = model.board.layout(width: size.width, height: size.height)
+        let block = CGSize(width: (size.width + gap) / CGFloat(layout.across), height: (size.height + gap) / CGFloat(layout.down))
+        return ZStack(alignment: .topLeading) {
+            ForEach(layout.cells, id: \.box) { cell in
+                let frame = Self.frame(cell, size: size, gap: gap)
+                let lifted = moving == cell.box || sizing?.box == cell.box
+                box(cell.box, count: shown, arrange: arrange(cell.box, size: size, gap: gap, block: block))
+                    .frame(width: frame.width, height: frame.height)
+                    .overlay(alignment: .topLeading) {
+                        if let s = sizing, s.box == cell.box {
+                            SizeOutline(across: s.across, down: s.down)
+                                .frame(width: CGFloat(s.across) * block.width - gap, height: CGFloat(s.down) * block.height - gap)
+                        }
                     }
-                }
+                    .scaleEffect(moving == cell.box ? 1.03 : 1)
+                    .opacity(moving == cell.box ? 0.85 : 1)
+                    .zIndex(lifted ? 1 : 0)
+                    .offset(x: frame.minX, y: frame.minY)
             }
         }
-        .frame(width: size.width, height: size.height)
+        .frame(width: size.width, height: size.height, alignment: .topLeading)
+        .coordinateSpace(name: Self.space)
     }
 
-    private func box(_ i: Int, count: Int) -> some View {
+    /// A cell's frame in points, a gutter between it and its neighbours.
+    static func frame(_ cell: Board.Cell, size: CGSize, gap: CGFloat) -> CGRect {
+        let w = size.width + gap, h = size.height + gap
+        return CGRect(x: CGFloat(cell.x) * w, y: CGFloat(cell.y) * h,
+                      width: CGFloat(cell.width) * w - gap, height: CGFloat(cell.height) * h - gap)
+    }
+
+    /// Moving and resizing a box on the grid.
+    private func arrange(_ i: Int, size: CGSize, gap: CGFloat, block: CGSize) -> BoxArrange {
+        BoxArrange(
+            move: { point in
+                moving = i
+                // The board as it is now (it changes as the box takes other places).
+                let x = Double((point.x + gap / 2) / (size.width + gap)), y = Double((point.y + gap / 2) / (size.height + gap))
+                guard let target = model.board.layout(width: size.width, height: size.height).cells
+                    .first(where: { $0.contains(x: x, y: y) })?.box else { return }
+                if target == i {
+                    lastTarget = nil
+                } else if target != lastTarget {
+                    lastTarget = target
+                    withAnimation(.easeInOut(duration: 0.2)) { model.board.move(i, to: target) }
+                }
+            },
+            moved: {
+                withAnimation(.easeOut(duration: 0.15)) { moving = nil }
+                lastTarget = nil
+            },
+            resize: { drag in
+                let box = model.board.boxes[i]
+                let across = min(max(box.across + Int((drag.width / block.width).rounded()), 1), Board.maxSpan)
+                let down = min(max(box.down + Int((drag.height / block.height).rounded()), 1), Board.maxSpan)
+                let s = Sizing(box: i, across: across, down: down)
+                if sizing != s { sizing = s }
+            },
+            resized: {
+                guard let s = sizing else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.board.resize(i, across: s.across, down: s.down)
+                    sizing = nil
+                }
+            },
+            reset: {
+                withAnimation(.easeInOut(duration: 0.2)) { model.board.resize(i, across: 1, down: 1) }
+            })
+    }
+
+    private func box(_ i: Int, count: Int, arrange: BoxArrange? = nil) -> some View {
         let open = model.expanded == i
         return BoardBox(model: model, store: store, board: board, index: i,
                         fontSize: open ? 18 : count <= 4 ? 16 : count <= 9 ? 15 : count <= 16 ? 14 : 13,
                         expanded: open, toggleExpand: {
                             withAnimation(.easeInOut(duration: 0.2)) { model.expanded = open ? nil : i }
-                        })
+                        }, arrange: arrange)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+    }
+}
+
+/// What a box on the board's grid does when it's dragged by its top strip (to another's place)
+/// or by its corner (to span more or fewer blocks).
+struct BoxArrange {
+    /// The pointer, in the grid's coordinate space (`BoardView.space`).
+    let move: (CGPoint) -> Void
+    let moved: () -> Void
+    /// How far the corner's been dragged.
+    let resize: (CGSize) -> Void
+    let resized: () -> Void
+    /// Back to one block.
+    let reset: () -> Void
+}
+
+/// Where a box being resized would reach: a dashed outline with its size in blocks.
+private struct SizeOutline: View {
+    let across: Int
+    let down: Int
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        shape.fill(Color.white.opacity(0.08))
+            .overlay(shape.strokeBorder(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+            .overlay(
+                Text("\(across) × \(down)")
+                    .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+            )
+            .allowsHitTesting(false)
+    }
+}
+
+/// The corner of a box on the board's grid: drag it to span more or fewer blocks, across and
+/// down; a double-click puts it back to one.
+private struct ResizeGrip: View {
+    let arrange: BoxArrange
+    let across: Int
+    let down: Int
+    @State private var hover = false
+
+    var body: some View {
+        Canvas { context, size in
+            var lines = Path()
+            for k in 1...3 {
+                let d = CGFloat(k) * size.width / 3.4
+                lines.move(to: CGPoint(x: size.width - d, y: size.height))
+                lines.addLine(to: CGPoint(x: size.width, y: size.height - d))
+            }
+            context.stroke(lines, with: .color(.black.opacity(hover ? 0.6 : 0.3)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        }
+        .frame(width: 12, height: 12)
+        .frame(width: 16, height: 18, alignment: .bottomTrailing)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .onTapGesture(count: 2, perform: arrange.reset)
+        .gesture(DragGesture(minimumDistance: 2)
+            .onChanged { arrange.resize($0.translation) }
+            .onEnded { _ in arrange.resized() })
+        .help("\(across) × \(down) blocks: drag to make the box span more or fewer (up to \(Board.maxSpan) each way); double-click for one")
     }
 }
 
@@ -231,6 +370,8 @@ struct BoardBox: View {
     var openBoard: (() -> Void)?
     /// Floating in a window of its own: a drag on its text moves the window too.
     var floating = false
+    /// On a board's grid: dragged by its top strip to move it, by its corner to resize it.
+    var arrange: BoxArrange?
     @State private var copied = false
     @ObservedObject private var focus = FocusCenter.shared
 
@@ -253,13 +394,30 @@ struct BoardBox: View {
                 .padding(.leading, 3)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    // Next to the note's icon: Daily, Weekly, Monthly (one at a time).
+                    // Next to the note's icon: Daily, Mornings, Afternoons, Evenings, Weekly, Monthly (one at a time).
                     RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
                         .padding(.leading, 2)
-                    // The strip above the text: a double-click here steps the color too.
+                    // The strip above the text: a double-click here steps the color too, and on a
+                    // board's grid, a drag moves the box to another's place.
                     Color.clear
                         .contentShape(Rectangle())
+                        .overlay {
+                            if arrange != nil {
+                                Image(systemName: "line.3.horizontal")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Color.black.opacity(0.22))
+                                    .allowsHitTesting(false)
+                            }
+                        }
                         .onTapGesture(count: 2, perform: cycle)
+                        .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .named(BoardView.space))
+                            .onChanged { arrange?.move($0.location) }
+                            .onEnded { _ in arrange?.moved() })
+                        .onHover { inside in
+                            guard arrange != nil else { return }
+                            if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
+                        }
+                        .help(arrange != nil ? "Drag to move the box to another's place; double-click to change its color" : "")
                     BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
                         Clipboard.copy(box.text)
                         copied = true
@@ -304,6 +462,7 @@ struct BoardBox: View {
                     ForEach(NoteTag.allCases, id: \.self) { tag in
                         TagButton(tag: tag, on: box.has(tag), height: 18) { store.toggle(tag, board, index) }
                     }
+                    if let arrange { ResizeGrip(arrange: arrange, across: box.across, down: box.down) }
                 }
                 .frame(height: 20)
                 .padding(.horizontal, 3)
@@ -438,8 +597,9 @@ private struct NoteIconButton: View {
     }
 }
 
-/// Daily, Weekly, Monthly, at the top left of a note: the one on comes round with a Note
-/// reminder every hour of its day from 6 AM until it's completed. A click asks first.
+/// Daily, Mornings, Afternoons, Evenings (a sun rising, the sun, the moon), Weekly, Monthly, at the
+/// top left of a note: the one on comes round with a Note reminder every hour of its hours until
+/// it's completed. A click asks first.
 private struct RepeatButtons: View {
     let store: BoardStore
     let board: BoardStore.Kind
@@ -450,11 +610,11 @@ private struct RepeatButtons: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(NoteRepeat.allCases, id: \.self) { r in
-                NotePill(title: short ? String(r.title.prefix(1)) : r.title, symbol: nil, on: on == r,
+                NotePill(title: r.symbol != nil ? nil : short ? String(r.title.prefix(1)) : r.title, symbol: r.symbol, on: on == r,
                          color: Color(red: 0.16, green: 0.55, blue: 0.42),
                          help: on == r
-                            ? "\(r.title): on. A Note reminder pops up every hour (6 AM to 10 PM) until it's marked completed, then not again until \(r.until). Click to turn it off."
-                            : "\(r.title): a Note reminder every hour of the day from 6 AM until it's completed, then not again until \(r.until). Click to turn it on (it asks first).") {
+                            ? "\(r.title): on. A Note reminder pops up every hour (\(r.hoursText)) until it's marked completed, then not again until \(r.until). Click to turn it off."
+                            : "\(r.title): a Note reminder every hour, \(r.hoursText), until it's completed, then not again until \(r.until). Click to turn it on (it asks first).") {
                     store.chooseRepeat(r, board, index)
                 }
             }
