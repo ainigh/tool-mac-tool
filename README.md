@@ -12,6 +12,19 @@ test or quiet, below), **Open at login** and **Quit**. Hover over a tile to see 
 tile, a board, a note or anything else that opens a window puts the panel away as it does. New
 tools get added over time, and the app updates itself from GitHub.
 
+## Permissions, right after installing
+
+After every install or update, a small panel comes up at the bottom of the screen ("Tool Mac Tool
+vX installed") and checks, one at a time, everything macOS has to allow: the **Downloads** and
+**Desktop** folders (Unzip to Desktop), the **Documents** folder (the Glass folder), the
+**Microphone** and **Screen Recording**. Where macOS asks, it asks right then: click **Allow**.
+While it checks, every window of the app that floats above others (pinned notes and groups, the
+glass panels, the cards) is brought down to the normal level and put back afterwards, and the
+panel itself is an ordinary window, so macOS's question is never hidden behind the app (a question
+nobody can see, that the app waits on, is what looked like a freeze). One that's off says how to
+turn it on, with **Open Settings** and **Check**. The shield in the bottom bar runs it again any
+time. (An update can make macOS ask again: the app is ad-hoc signed.)
+
 ## Pop-ups stay until you close them
 
 Every card the app puts up (a timer ringing, a reminder, a chime, a Note reminder, a schedule's
@@ -734,7 +747,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards), BoxCards (their cards),
                               MemoryView, HUD (the small cards, stacked), Updater, Modes (the mode switch, quiet
                               mode's held pop-ups, asking before a schedule goes on or off), PinnedGroups,
-                              Screenshots, LinkPreviews (a note's links, the YouTube player), Focus (focus on a
+                              Screenshots, Permissions (the check after installing, keeping macOS's
+                              questions above the app's windows), LinkPreviews (a note's links, the YouTube player), Focus (focus on a
                               board: its card, the board's Focus button, the focus bar), Redact (Redact, the
                               Redaction map)
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map

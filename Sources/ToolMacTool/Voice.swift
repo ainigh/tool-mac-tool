@@ -647,7 +647,11 @@ final class Listener: ObservableObject {
 
     /// Asks for the microphone; the answer is nil, or what to switch on.
     static func authorize(_ done: @escaping (String?) -> Void) {
+        // Asked for the first time, macOS's question must not end up under a floating window.
+        let asking = AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
+        if asking { Task { @MainActor in PromptSafety.lower() } }
         AVCaptureDevice.requestAccess(for: .audio) { granted in
+            if asking { Task { @MainActor in PromptSafety.restore() } }
             DispatchQueue.main.async {
                 done(granted ? nil : "The microphone is off for Tool Mac Tool: turn it on in System Settings → Privacy & Security → Microphone")
             }

@@ -81,6 +81,8 @@ final class AppModel: ObservableObject {
         timers.start()
         boards.start()
         groups.restore()
+        // Just installed or updated: the permissions, one at a time, where macOS's questions show.
+        Permissions.shared.afterLaunch()
         // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {
