@@ -235,6 +235,10 @@ struct BottomBar: View {
             Spacer(minLength: 8)
             ModeSwitch(modes: ModeCenter.shared)
             Spacer(minLength: 8)
+            IconButton(symbol: "checkmark.shield", help: "Permissions: check the folders, the microphone and screen recording (macOS asks for each, one at a time)") {
+                MenuPanel.close()
+                Permissions.shared.show()
+            }
             IconButton(symbol: "hammer", help: "Build tools: check and install what building updates here needs") {
                 MenuPanel.close()
                 BuildToolsWindow.show()
