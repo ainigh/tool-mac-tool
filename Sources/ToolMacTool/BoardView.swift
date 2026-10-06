@@ -79,8 +79,10 @@ final class BoardModel: ObservableObject {
     }
 }
 
-/// The glass panel: the board's name at the top, the boxes filling the middle in their order, some
-/// spanning more blocks (or one box, opened to fill it all) with an arrow either side for fewer or more, and a line of hints at the bottom.
+/// The glass panel: the board's name at the top (its icon a click to change), and in the middle of
+/// the top, fewer and more either side of: show every note with text, in 2 rows, colors. The boxes
+/// fill the middle in their order, some spanning more blocks (or one box, opened to fill it all),
+/// and a line of hints at the bottom.
 struct BoardView: View {
     @ObservedObject var model: BoardModel
     let store: BoardStore
@@ -93,6 +95,9 @@ struct BoardView: View {
     @State private var lastTarget: Int?
     /// The box being resized, and the size it would take.
     @State private var sizing: Sizing?
+    /// The grid's size, for laying it out from the buttons at the top (colors) and a double-click.
+    @State private var gridSize = CGSize(width: 1000, height: 700)
+    @State private var picking = false
 
     struct Sizing: Equatable {
         let box: Int
@@ -104,22 +109,18 @@ struct BoardView: View {
         let shown = model.board.shown
         VStack(spacing: 0) {
             header(shown)
-            HStack(spacing: 14) {
-                SideArrow(symbol: "chevron.left", help: "Fewer boxes (their text is kept)", enabled: shown > Board.minBoxes) {
-                    withAnimation(.easeInOut(duration: 0.2)) { model.board.fewer() }
-                }
-                GeometryReader { geo in
+            GeometryReader { geo in
+                Group {
                     if let e = model.expanded, model.board.isShown(e) {
                         box(e, count: 1)
                     } else {
                         grid(size: geo.size, origin: geo.frame(in: .global).origin)
                     }
                 }
-                SideArrow(symbol: "chevron.right", help: "More boxes", enabled: shown < Board.maxBoxes) {
-                    withAnimation(.easeInOut(duration: 0.2)) { model.board.more() }
-                }
+                .onAppear { gridSize = geo.size }
+                .onChange(of: geo.size) { _, size in gridSize = size }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 22)
             .frame(maxHeight: .infinity)
             footer
         }
@@ -132,9 +133,22 @@ struct BoardView: View {
 
     private func header(_ shown: Int) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: board.symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
+            Button { picking.toggle() } label: {
+                Image(systemName: board.symbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(picking ? 0.18 : 0.06)))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            .help("\(board.name)'s icon: click to pick another")
+            .popover(isPresented: $picking, arrowEdge: .bottom) {
+                IconPicker(current: board.symbol, board: board, forBoard: true) { picked in
+                    store.setIcon(picked, for: board)
+                    picking = false
+                }
+            }
             Text(board.name)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
@@ -152,15 +166,48 @@ struct BoardView: View {
             MenuBarDockButton(store: store, id: board.id, name: board.name)
             GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
         }
+        .overlay { arrangeBar(shown) }
         .padding(.leading, 22)
         .padding(.trailing, 14)
         .padding(.top, 14)
         .padding(.bottom, 10)
     }
 
+    /// In the middle of the top: fewer, then show every note with text, in 2 rows, colors, then more.
+    private func arrangeBar(_ shown: Int) -> some View {
+        let twoRows = model.board.rows == 2
+        return HStack(spacing: 6) {
+            GlassIcon(symbol: "chevron.left", help: "Fewer boxes (their text is kept)") {
+                withAnimation(.easeInOut(duration: 0.2)) { model.board.fewer() }
+            }
+            .disabled(shown <= Board.minBoxes)
+            GlassIcon(symbol: "text.below.photo", help: "Show every note with text, and hide the empty ones") {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    model.expanded = nil
+                    model.board.showWritten()
+                }
+            }
+            GlassIcon(symbol: twoRows ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
+                      help: twoRows ? "In 2 rows: click to fill the board as it fits best again"
+                                    : "Arrange the notes shown in 2 rows (each one block)") {
+                withAnimation(.easeInOut(duration: 0.25)) { model.board.arrange(rows: twoRows ? nil : 2) }
+            }
+            .background(Circle().fill(.white.opacity(twoRows ? 0.16 : 0)))
+            GlassIcon(symbol: "paintpalette", help: "Color the notes shown, each a different color from the ones beside it") {
+                withAnimation(.easeInOut(duration: 0.25)) { model.board.colorize(width: gridSize.width, height: gridSize.height) }
+            }
+            GlassIcon(symbol: "chevron.right", help: "More boxes") {
+                withAnimation(.easeInOut(duration: 0.2)) { model.board.more() }
+            }
+            .disabled(shown >= Board.maxBoxes)
+        }
+        .padding(.horizontal, 6)
+        .background(Capsule().fill(.black.opacity(0.18)))
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
+            Text("Top middle: fewer, show the notes with text, 2 rows, colors, more. Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, link notes (+), the menu bar, dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -245,7 +292,8 @@ struct BoardView: View {
             },
             reset: {
                 withAnimation(.easeInOut(duration: 0.2)) { model.board.resize(i, across: 1, down: 1) }
-            })
+            },
+            nextTint: { model.board.nextTint(for: i, width: size.width, height: size.height) })
     }
 
     private func box(_ i: Int, count: Int, arrange: BoxArrange? = nil) -> some View {
@@ -271,6 +319,8 @@ struct BoxArrange {
     let resized: () -> Void
     /// Back to one block.
     let reset: () -> Void
+    /// The color a double-click gives it: the next one that none of the boxes around it wear.
+    let nextTint: () -> Int
 }
 
 /// Where a box being resized would reach: a dashed outline with its size in blocks.
@@ -321,32 +371,6 @@ private struct ResizeGrip: View {
             .onChanged { arrange.resize($0.translation) }
             .onEnded { _ in arrange.resized() })
         .help("\(across) × \(down) blocks: drag to make the box span more or fewer (up to \(Board.maxSpan) each way); double-click for one")
-    }
-}
-
-/// The big round arrows either side of the grid.
-private struct SideArrow: View {
-    let symbol: String
-    let help: String
-    let enabled: Bool
-    let action: () -> Void
-    @State private var hover = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(.white.opacity(enabled ? (hover ? 1 : 0.8) : 0.25))
-                .frame(width: 48, height: 48)
-                .background(Circle().fill(.white.opacity(hover && enabled ? 0.18 : 0.08)))
-                .overlay(Circle().stroke(.white.opacity(hover && enabled ? 0.32 : 0.16), lineWidth: 0.5))
-                .contentShape(Circle())
-        }
-        .buttonStyle(PressStyle())
-        .disabled(!enabled)
-        .onHover { hover = $0 }
-        .animation(.easeOut(duration: 0.12), value: hover)
-        .help(help)
     }
 }
 
@@ -408,8 +432,10 @@ struct BoardBox: View {
                     .padding([.horizontal], 4)
                 LinkStrip(text: box.text, roomy: roomy, width: width - 40)
                     .padding(.horizontal, 4)
-                if let openBoard {
-                    OpenBoardButton(board: board, action: openBoard)
+                // The row above the bottom: its board (when it's pinned, or on a tag's board), and
+                // the notes it links to.
+                if openBoard != nil || !box.links.isEmpty {
+                    NoteLinksRow(store: store, board: board, index: index, links: box.links, openBoard: openBoard)
                         .padding(.top, 4)
                 }
                 // Bottom left: To do, Pending, Completed (one at a time); bottom right: the tags.
@@ -425,7 +451,8 @@ struct BoardBox: View {
                 .padding(.horizontal, 3)
                 .padding(.vertical, 3)
             }
-            // Down its right, from the top: copy, open to fill the board, dock, pin.
+            // Down its right, from the top: copy, open to fill the board, link a note, the menu
+            // bar, dock, pin.
             VStack(spacing: 2) {
                 BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
                     Clipboard.copy(box.text)
@@ -437,8 +464,11 @@ struct BoardBox: View {
                 }
                 if let toggleExpand {
                     BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                              help: expanded ? "Back to the grid (Esc)" : "Open to fill the board", action: toggleExpand)
+                              help: expanded ? "Open to fill the board: on. Click to go back to the grid (Esc)" : "Open to fill the board",
+                              tint: expanded ? board.color : nil, lit: expanded, action: toggleExpand)
                 }
+                NoteLinkMenu(store: store, board: board, index: index, links: box.links)
+                NoteMenuBarButton(store: store, board: board, index: index)
                 BoxButton(symbol: "dock.arrow.down.rectangle",
                           help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
                               : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
@@ -485,9 +515,8 @@ struct BoardBox: View {
     }
 
     private func cycle() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            model.board.boxes[index].tint = Board.nextTint(after: model.board.boxes[index].tint)
-        }
+        let tint = arrange?.nextTint() ?? Board.nextTint(after: model.board.boxes[index].tint)
+        withAnimation(.easeInOut(duration: 0.2)) { model.board.boxes[index].tint = tint }
     }
 }
 
@@ -504,6 +533,138 @@ struct PinnedBox: View {
                  openBoard: { store.show(board.id, focus: index) }, floating: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.colorScheme, .light)
+    }
+}
+
+/// The + down a note's right: pick a note from any board to link to (it goes in the row above the
+/// note's bottom, a click away).
+private struct NoteLinkMenu: View {
+    @ObservedObject var store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    /// What it links to now (ticked in the menu).
+    let links: [NoteLink]
+    @State private var hover = false
+
+    var body: some View {
+        let linked = Set(links)
+        let notes = store.linkable(from: board, index)
+        Menu {
+            ForEach(BoardStore.kinds) { kind in
+                let onBoard = notes.filter { $0.board.id == kind.id }
+                if !onBoard.isEmpty {
+                    Menu(kind.name) {
+                        ForEach(onBoard) { note in
+                            let link = NoteLink(board: kind.id, box: note.index)
+                            Button {
+                                if linked.contains(link) { store.removeLink(link, board, index) } else { store.addLink(link, board, index) }
+                            } label: {
+                                Label((linked.contains(link) ? "✓ " : "") + (note.title ?? note.place), systemImage: note.icon)
+                            }
+                        }
+                    }
+                }
+            }
+            if notes.isEmpty { Text("No notes with a title yet") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(hover ? 0.75 : 0.4))
+                .frame(width: 22, height: 18)
+                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(hover ? 0.08 : 0)))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hover = $0 }
+        .help("Link a note from any board: it shows above the note's bottom row, a click away (pick it again to unlink)")
+    }
+}
+
+/// Down a note's right: put the note in the menu bar beside the wrench (a click there opens it by
+/// itself, as if pinned), or take it out.
+private struct NoteMenuBarButton: View {
+    @ObservedObject var store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+
+    var body: some View {
+        let id = BoardStore.dockID(board, index)
+        let on = store.isInMenuBar(id)
+        BoxButton(symbol: on ? "menubar.arrow.up.rectangle" : "menubar.rectangle",
+                  help: on ? "In the menu bar beside the wrench: a click there opens this note by itself. Click to take it out."
+                           : "Put this note in the menu bar beside the wrench: a click there opens it by itself, as if pinned",
+                  tint: on ? board.color : nil) {
+            store.setInMenuBar(!on, id)
+        }
+    }
+}
+
+/// The row above a note's bottom: its board (pinned, or on a tag's board), then the notes it links
+/// to. A click on one opens its board with it opened; right-click to unlink it.
+private struct NoteLinksRow: View {
+    @ObservedObject var store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let links: [NoteLink]
+    let openBoard: (() -> Void)?
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                if let openBoard { OpenBoardButton(board: board, action: openBoard) }
+                ForEach(links, id: \.self) { link in
+                    if let note = store.note(link) {
+                        NoteLinkChip(note: note, open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
+                    } else if let kind = BoardStore.kind(link.board) {
+                        // Linked to a note that's empty now: still a way to it.
+                        NoteLinkChip(note: BoardStore.Note(board: kind, index: link.box, title: nil, icon: kind.symbol, tint: 0,
+                                                           tags: [], docked: false),
+                                     open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
+                    }
+                }
+            }
+            .padding(.horizontal, 3)
+        }
+        .frame(height: 22)
+    }
+}
+
+/// A linked note: its icon on its color, and its title.
+private struct NoteLinkChip: View {
+    let note: BoardStore.Note
+    let open: () -> Void
+    let unlink: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let look = NoteLook.colors(tint: note.tint, board: note.board)
+        Button(action: open) {
+            HStack(spacing: 5) {
+                Image(systemName: note.icon)
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(look.ink)
+                    .frame(width: 15, height: 15)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(look.fill))
+                Text(note.title ?? note.place)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.black.opacity(hover ? 0.8 : 0.6))
+            .padding(.leading, 3)
+            .padding(.trailing, 9)
+            .frame(height: 22)
+            .background(Capsule().fill(Color.black.opacity(hover ? 0.12 : 0.06)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressStyle())
+        .onHover { hover = $0 }
+        .help("\(note.place): click to open it on its board. Right-click to unlink it.")
+        .contextMenu {
+            Button("Open on \(note.board.name)", action: open)
+            Button("Unlink", action: unlink)
+        }
     }
 }
 
@@ -946,21 +1107,23 @@ private struct BoxCountdown: View {
     }
 }
 
-/// A small dark icon button, for the light boxes.
+/// A small dark icon button, for the light boxes. `lit`: on, filled in its tint.
 private struct BoxButton: View {
     let symbol: String
     let help: String
     var tint: Color?
+    var lit = false
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(tint ?? Color.black.opacity(hover ? 0.75 : 0.4))
+                .font(.system(size: 11, weight: lit ? .bold : .medium))
+                .foregroundStyle(lit ? Color.white : tint ?? Color.black.opacity(hover ? 0.75 : 0.4))
                 .frame(width: 22, height: 18)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(hover ? 0.08 : 0)))
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(lit ? AnyShapeStyle(tint ?? Color.black.opacity(0.6)) : AnyShapeStyle(Color.black.opacity(hover ? 0.08 : 0))))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -970,7 +1133,8 @@ private struct BoxButton: View {
 }
 
 /// Text to type in, that says when it's double-clicked (SwiftUI's TextEditor keeps its clicks to
-/// itself), with its first line twice the size of the rest (the note's title) and its web addresses
+/// itself), with its first line twice the size of the rest (the note's title), its second line
+/// halfway between the two, and its web addresses
 /// underlined: a click on one opens it in your browser. Dark on the light boxes; `ink` sets it
 /// (white on the glass cards). With `dragsWindow` (a floating note), a press that moves drags the
 /// window; with `arrange` (a note on a board's grid), it drags the note to another's place. Either
@@ -1104,8 +1268,20 @@ struct BoxEditor: NSViewRepresentable {
         return br.location == NSNotFound ? string.length : br.location
     }
 
-    static func fonts(_ size: CGFloat, _ scale: CGFloat) -> (body: NSFont, title: NSFont) {
-        (.systemFont(ofSize: size), .systemFont(ofSize: (size * scale).rounded(), weight: .semibold))
+    /// The second line: from after the first line's break up to its own (nil when there's no
+    /// second line yet).
+    static func secondLine(_ string: NSString) -> NSRange? {
+        let first = titleLength(string)
+        guard first < string.length else { return nil }
+        let start = first + 1
+        let rest = NSRange(location: start, length: string.length - start)
+        let br = string.rangeOfCharacter(from: .newlines, options: [], range: rest)
+        return NSRange(location: start, length: (br.location == NSNotFound ? string.length : br.location) - start)
+    }
+
+    static func fonts(_ size: CGFloat, _ scale: CGFloat) -> (body: NSFont, title: NSFont, second: NSFont) {
+        (.systemFont(ofSize: size), .systemFont(ofSize: (size * scale).rounded(), weight: .semibold),
+         .systemFont(ofSize: (size * (1 + scale) / 2).rounded(), weight: .medium))
     }
 
     /// The whole text in its look: the first line big, the rest the size of the box, every web
@@ -1118,6 +1294,7 @@ struct BoxEditor: NSViewRepresentable {
         storage.beginEditing()
         storage.setAttributes([.font: f.body, .foregroundColor: ink], range: all)
         if title > 0 { storage.addAttribute(.font, value: f.title, range: NSRange(location: 0, length: title)) }
+        if let second = secondLine(storage.string as NSString), second.length > 0 { storage.addAttribute(.font, value: f.second, range: second) }
         if let detector {
             for match in detector.matches(in: storage.string, range: all) {
                 if let url = match.url { storage.addAttribute(.link, value: url, range: match.range) }
@@ -1130,9 +1307,12 @@ struct BoxEditor: NSViewRepresentable {
     /// What's typed next takes the size of the line the caret is on.
     static func matchTyping(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
         let f = fonts(size, titleScale)
-        let onTitle = tv.selectedRange().location <= titleLength(tv.string as NSString)
+        let at = tv.selectedRange().location
+        let string = tv.string as NSString
+        let onTitle = at <= titleLength(string)
+        let onSecond = secondLine(string).map { at >= $0.location && at <= $0.location + $0.length } ?? false
         var attributes = tv.typingAttributes
-        attributes[.font] = onTitle ? f.title : f.body
+        attributes[.font] = onTitle ? f.title : onSecond ? f.second : f.body
         attributes[.foregroundColor] = ink
         attributes[.link] = nil
         tv.typingAttributes = attributes

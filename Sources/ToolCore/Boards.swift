@@ -37,10 +37,12 @@ public struct Board: Codable, Equatable, Sendable {
         /// How many blocks of the board's grid it spans, across and down (1 to `Board.maxSpan`).
         public var across: Int
         public var down: Int
+        /// The notes it links to (on any board), in the order they were added.
+        public var links: [NoteLink]
 
         public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
                     tags: [NoteTag] = [], docked: Bool = false, repeats: NoteRepeat? = nil, status: NoteStatus? = nil,
-                    statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1) {
+                    statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1, links: [NoteLink] = []) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
@@ -54,10 +56,11 @@ public struct Board: Codable, Equatable, Sendable {
             self.remindedAt = remindedAt
             self.across = across
             self.down = down
+            self.links = links
         }
 
         private enum CodingKeys: String, CodingKey {
-            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down
+            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down, links
         }
 
         // A file from before timers, pins, icons, tags, the dock, repeats, statuses and sizes has none of them.
@@ -76,6 +79,7 @@ public struct Board: Codable, Equatable, Sendable {
             status = (try? c.decodeIfPresent(NoteStatus.self, forKey: .status)) ?? nil
             statusAt = try c.decodeIfPresent(Date.self, forKey: .statusAt)
             remindedAt = try c.decodeIfPresent(Date.self, forKey: .remindedAt)
+            links = (try? c.decodeIfPresent([NoteLink].self, forKey: .links)) ?? []
             across = (try? c.decodeIfPresent(Int.self, forKey: .across)) ?? 1
             down = (try? c.decodeIfPresent(Int.self, forKey: .down)) ?? 1
         }
@@ -155,6 +159,9 @@ public struct Board: Codable, Equatable, Sendable {
     /// The boxes in the order they show on the board (dragged into it): every index of `boxes`
     /// once. The first `shown` of them are on the board.
     public var order: [Int]
+    /// The rows the shown boxes are arranged in, when it's set ("in 2 rows"); nil: as many as
+    /// fill the board best.
+    public var rows: Int?
 
     public init(shown: Int = Board.defaultShown, boxes: [Box] = [], order: [Int] = []) {
         self.shown = shown
@@ -163,7 +170,7 @@ public struct Board: Codable, Equatable, Sendable {
         self = tidied()
     }
 
-    private enum CodingKeys: String, CodingKey { case shown, boxes, order }
+    private enum CodingKeys: String, CodingKey { case shown, boxes, order, rows }
 
     // A file from before the boxes could be ordered has no order: they show as they're kept.
     public init(from decoder: Decoder) throws {
@@ -171,6 +178,7 @@ public struct Board: Codable, Equatable, Sendable {
         shown = try c.decodeIfPresent(Int.self, forKey: .shown) ?? Self.defaultShown
         boxes = try c.decodeIfPresent([Box].self, forKey: .boxes) ?? []
         order = (try? c.decodeIfPresent([Int].self, forKey: .order)) ?? []
+        rows = (try? c.decodeIfPresent(Int.self, forKey: .rows)) ?? nil
     }
 
     /// The boxes on the board, in the order they show.
@@ -255,17 +263,21 @@ public struct Board: Codable, Equatable, Sendable {
 
     /// How many boxes go in each row, top to bottom, to fill a panel of this size: the layout
     /// whose boxes come closest to square, with no row more than one box shorter than the others.
-    public static func rows(for count: Int, width: Double, height: Double) -> [Int] {
+    public static func rows(for count: Int, width: Double, height: Double, fixed: Int? = nil) -> [Int] {
         let n = max(count, 1)
         let w = max(width, 1), h = max(height, 1)
         var best: (rows: Int, score: Double) = (1, .infinity)
-        for rows in 1...n {
-            let columns = Int((Double(n) / Double(rows)).rounded(.up))
-            // A row count that leaves a row empty is the same as fewer rows.
-            if (rows - 1) * columns >= n { continue }
-            let aspect = (w / Double(columns)) / (h / Double(rows))
-            let score = abs(log(aspect))
-            if score < best.score - 1e-9 { best = (rows, score) }
+        if let fixed {
+            best.rows = min(max(fixed, 1), n)
+        } else {
+            for rows in 1...n {
+                let columns = Int((Double(n) / Double(rows)).rounded(.up))
+                // A row count that leaves a row empty is the same as fewer rows.
+                if (rows - 1) * columns >= n { continue }
+                let aspect = (w / Double(columns)) / (h / Double(rows))
+                let score = abs(log(aspect))
+                if score < best.score - 1e-9 { best = (rows, score) }
+            }
         }
         // Spread the boxes over the rows, the longer rows first.
         let base = n / best.rows, extra = n % best.rows
@@ -288,6 +300,16 @@ public struct Board: Codable, Equatable, Sendable {
         public func contains(x px: Double, y py: Double) -> Bool {
             px >= x && px < x + width && py >= y && py < y + height
         }
+
+        /// Beside, above or below the other (sharing some of an edge).
+        public func touches(_ o: Cell) -> Bool {
+            let e = 1e-9
+            let sideBySide = (abs(x + width - o.x) < e || abs(o.x + o.width - x) < e)
+                && y < o.y + o.height - e && o.y < y + height - e
+            let stacked = (abs(y + height - o.y) < e || abs(o.y + o.height - y) < e)
+                && x < o.x + o.width - e && o.x < x + width - e
+            return sideBySide || stacked
+        }
     }
 
     /// Where the shown boxes go on a board this size, and the grid's blocks across and down. When
@@ -299,7 +321,7 @@ public struct Board: Codable, Equatable, Sendable {
         let ids = visible
         let w = max(width, 1), h = max(height, 1)
         if ids.allSatisfy({ boxes[$0].across == 1 && boxes[$0].down == 1 }) {
-            let rows = Self.rows(for: ids.count, width: w, height: h)
+            let rows = Self.rows(for: ids.count, width: w, height: h, fixed: self.rows)
             var cells: [Cell] = []
             var k = 0
             for (r, n) in rows.enumerated() {
@@ -319,7 +341,9 @@ public struct Board: Codable, Equatable, Sendable {
             let (placed, rows) = Self.pack(spans, columns: columns)
             let aspect = (w / Double(columns)) / (h / Double(rows))
             let empty = Double(columns * rows - area) / Double(columns * rows)
-            let score = abs(log(aspect)) + empty
+            // In fixed rows: the fewest blocks across that fit in them (or as near as it gets).
+            let over = self.rows.map { Double(max(0, rows - $0)) * 100 } ?? 0
+            let score = abs(log(aspect)) + empty + over
             if best == nil || score < best!.score - 1e-9 { best = (score, columns, rows, placed) }
         }
         guard let best else { return ([], 1, 1) }
@@ -358,6 +382,52 @@ public struct Board: Codable, Equatable, Sendable {
         return (placed, max(taken.count, 1))
     }
 
+    /// Every box with text on the board (in the order they were, those shown first), and the empty
+    /// ones hidden after them. With none, one box stays shown.
+    public mutating func showWritten() {
+        let written = order.filter { boxes[$0].title != nil }
+        order = written + order.filter { boxes[$0].title == nil }
+        shown = max(written.count, Self.minBoxes)
+    }
+
+    /// The shown boxes in fixed rows (`count`), each one block again; nil: as many rows as fill
+    /// the board best.
+    public mutating func arrange(rows count: Int?) {
+        rows = count
+        guard count != nil else { return }
+        for i in visible { (boxes[i].across, boxes[i].down) = (1, 1) }
+    }
+
+    /// The colors (not plain paper) given to the shown boxes in turn, each one different from the
+    /// boxes beside it, above and below it on the board as it's laid out now.
+    public mutating func colorize(width: Double, height: Double) {
+        let cells = layout(width: width, height: height).cells
+        let colors = Array(1..<Self.tints.count)
+        var given: [Int: Int] = [:]
+        for (k, cell) in cells.enumerated() {
+            let near = Set(cells.filter { $0.box != cell.box && $0.touches(cell) }.compactMap { given[$0.box] })
+            let start = k % colors.count
+            let turn = colors[start...] + colors[..<start]
+            let tint = turn.first { !near.contains($0) } ?? colors[start]
+            given[cell.box] = tint
+            boxes[cell.box].tint = tint
+        }
+    }
+
+    /// The next color for a box (a double-click), skipping the ones the boxes around it wear, so it
+    /// stands apart from them.
+    public func nextTint(for box: Int, width: Double, height: Double) -> Int {
+        let cells = layout(width: width, height: height).cells
+        guard let cell = cells.first(where: { $0.box == box }) else { return Self.nextTint(after: boxes[box].tint) }
+        let near = Set(cells.filter { $0.box != box && $0.touches(cell) }.map { boxes[$0.box].tint })
+        var tint = boxes[box].tint
+        for _ in Self.tints.indices {
+            tint = Self.nextTint(after: tint)
+            if !near.contains(tint) { return tint }
+        }
+        return Self.nextTint(after: boxes[box].tint)
+    }
+
     /// Where a board is kept: ~/Library/Application Support/ToolMacTool/boards/<id>.json.
     public static func url(for id: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         home.appendingPathComponent("Library/Application Support/ToolMacTool/boards/\(id).json")
@@ -375,6 +445,18 @@ public struct Board: Codable, Equatable, Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(self).write(to: url, options: .atomic)
+    }
+}
+
+/// A note on a board, linked to from another: its board's id and its box (its place in `boxes`,
+/// which stays the same however the board is ordered).
+public struct NoteLink: Codable, Hashable, Sendable {
+    public var board: String
+    public var box: Int
+
+    public init(board: String, box: Int) {
+        self.board = board
+        self.box = box
     }
 }
 
