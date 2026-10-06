@@ -642,9 +642,9 @@ there are more. Double-click a note to step it through light colors. **A note's 
 twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
 it in your browser.
 
-**Order the notes by dragging them**: drag a note by the strip along its top (the three lines; the
-pointer becomes a hand) onto another note's place, and it takes that place, the notes between
-moving along one. The order is kept, and the arrows show more or fewer from the end of it (a hidden
+**Order the notes by dragging them**: drag a note from anywhere on it (its text too; the pointer
+becomes a closed hand once it moves) onto another note's place, and it takes that place, the notes
+between moving along one. A click still puts the caret in the text, and ⌥-drag selects text. The order is kept, and the arrows show more or fewer from the end of it (a hidden
 note shown again comes in at the end). Focus goes round the notes in this order too.
 
 **Make a note span more blocks**: drag the corner at its bottom right. A dashed outline shows how
@@ -692,7 +692,7 @@ player window of its own (✕ or ⌘W closes it and stops it).
 - **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
   **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
   color when on.
-- **At its top right**: copy its text, open it to fill the board (Esc or click again to go back),
+- **Down its top right**, one under another: copy its text, open it to fill the board (Esc or click again to go back),
   **dock** it, and **pin** it.
   - **Dock**: the note shows in the **Docked notes** row along the bottom of the panel, across all
     its columns: a small icon on the note's color (its board's, if it's plain), with its title and
