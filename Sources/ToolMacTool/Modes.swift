@@ -125,13 +125,14 @@ enum Confirm {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// A schedule (a job, a chime) turned on or off: what that means, then yes or no.
-    static func schedule(_ job: ScheduledJob, on: Bool, clock24: Bool) -> Bool {
+    /// A schedule (a job, a chime) turned on or off: what that means (`doing`: what its action
+    /// does, from `Scheduler.doing`), then yes or no.
+    static func schedule(_ job: ScheduledJob, doing: String, on: Bool, clock24: Bool) -> Bool {
         let name = job.name.isEmpty ? "Untitled" : job.name
         let when = job.when.describe(clock24: clock24)
         let message: String
         if on {
-            message = "\(when): it will \(doing(job))."
+            message = "\(when): it will \(doing)."
                 + (job.when.kind == .once ? " It runs once, then turns itself off." : " This repeats until you turn it off.")
                 + " Jobs run while Tool Mac Tool is open."
         } else {
@@ -141,17 +142,6 @@ enum Confirm {
                    ok: on ? "Turn on" : "Turn off")
     }
 
-    private static func doing(_ job: ScheduledJob) -> String {
-        switch job.action {
-        case .askModel: return "ask the model its prompt" + (job.showResult ? " and show the answer on a card" : "")
-        case .remind: return "show its reminder on a card that stays until you close it"
-        case .speak: return "say its text out loud"
-        case .tool: return "run the model tool \(job.target.isEmpty ? "it's set to" : job.target)"
-        case .shortcut: return "run the shortcut \(job.target.isEmpty ? "it's set to" : "\u{201C}\(job.target)\u{201D}")"
-        case .webhook: return "call its web address"
-        case .chime: return job.target == "night" ? "ding and show the night watch's warning card, every hour" : "ding and show the day chime's card, every hour"
-        }
-    }
 }
 
 // MARK: - The switch, in the panel's bottom bar

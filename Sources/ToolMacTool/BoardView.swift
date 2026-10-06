@@ -100,9 +100,6 @@ struct BoardView: View {
         var down: Int
     }
 
-    /// The grid's coordinate space, which a box's drag reports the pointer in.
-    static let space = "board-grid"
-
     var body: some View {
         let shown = model.board.shown
         VStack(spacing: 0) {
@@ -115,7 +112,7 @@ struct BoardView: View {
                     if let e = model.expanded, model.board.isShown(e) {
                         box(e, count: 1)
                     } else {
-                        grid(size: geo.size)
+                        grid(size: geo.size, origin: geo.frame(in: .global).origin)
                     }
                 }
                 SideArrow(symbol: "chevron.right", help: "More boxes", enabled: shown < Board.maxBoxes) {
@@ -163,7 +160,7 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Drag its top strip to move it, its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
+            Text("Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -176,8 +173,9 @@ struct BoardView: View {
     }
 
     /// The shown boxes in their order, each in its place (a big one spanning blocks). Drag a box
-    /// by the strip along its top to move it to another's place; drag its corner to resize it.
-    private func grid(size: CGSize) -> some View {
+    /// anywhere (its text too) to move it to another's place; drag its corner to resize it.
+    /// `origin`: where the grid is in the window, as the drags report the pointer there.
+    private func grid(size: CGSize, origin: CGPoint) -> some View {
         let shown = model.board.shown
         let gap = CGFloat(Board.gutter(for: shown)) + 2
         let layout = model.board.layout(width: size.width, height: size.height)
@@ -186,7 +184,7 @@ struct BoardView: View {
             ForEach(layout.cells, id: \.box) { cell in
                 let frame = Self.frame(cell, size: size, gap: gap)
                 let lifted = moving == cell.box || sizing?.box == cell.box
-                box(cell.box, count: shown, arrange: arrange(cell.box, size: size, gap: gap, block: block))
+                box(cell.box, count: shown, arrange: arrange(cell.box, size: size, origin: origin, gap: gap, block: block))
                     .frame(width: frame.width, height: frame.height)
                     .overlay(alignment: .topLeading) {
                         if let s = sizing, s.box == cell.box {
@@ -201,7 +199,6 @@ struct BoardView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .coordinateSpace(name: Self.space)
     }
 
     /// A cell's frame in points, a gutter between it and its neighbours.
@@ -212,11 +209,12 @@ struct BoardView: View {
     }
 
     /// Moving and resizing a box on the grid.
-    private func arrange(_ i: Int, size: CGSize, gap: CGFloat, block: CGSize) -> BoxArrange {
+    private func arrange(_ i: Int, size: CGSize, origin: CGPoint, gap: CGFloat, block: CGSize) -> BoxArrange {
         BoxArrange(
-            move: { point in
+            move: { pointer in
                 moving = i
                 // The board as it is now (it changes as the box takes other places).
+                let point = CGPoint(x: pointer.x - origin.x, y: pointer.y - origin.y)
                 let x = Double((point.x + gap / 2) / (size.width + gap)), y = Double((point.y + gap / 2) / (size.height + gap))
                 guard let target = model.board.layout(width: size.width, height: size.height).cells
                     .first(where: { $0.contains(x: x, y: y) })?.box else { return }
@@ -262,10 +260,10 @@ struct BoardView: View {
     }
 }
 
-/// What a box on the board's grid does when it's dragged by its top strip (to another's place)
-/// or by its corner (to span more or fewer blocks).
+/// What a box on the board's grid does when it's dragged anywhere (to another's place) or by its
+/// corner (to span more or fewer blocks).
 struct BoxArrange {
-    /// The pointer, in the grid's coordinate space (`BoardView.space`).
+    /// The pointer, in the window (SwiftUI's global space).
     let move: (CGPoint) -> Void
     let moved: () -> Void
     /// How far the corner's been dragged.
@@ -354,7 +352,7 @@ private struct SideArrow: View {
 
 /// A box: a thin column down its left (its icon, a click to change it; its timers; its tags at
 /// the bottom), its text (the first line twice the size, as its title), the countdown of the timer
-/// it runs at its top middle, and copy, open (to fill the board), dock and pin at its top right. A
+/// it runs at its top middle, and copy, open (to fill the board), dock and pin down its top right. A
 /// double-click steps it through the light colors. Pinned, it floats in a window of its own (a
 /// drag anywhere on it moves it), with a way back to its board at the bottom.
 struct BoardBox: View {
@@ -370,7 +368,7 @@ struct BoardBox: View {
     var openBoard: (() -> Void)?
     /// Floating in a window of its own: a drag on its text moves the window too.
     var floating = false
-    /// On a board's grid: dragged by its top strip to move it, by its corner to resize it.
+    /// On a board's grid: dragged anywhere to move it, by its corner to resize it.
     var arrange: BoxArrange?
     @State private var copied = false
     @ObservedObject private var focus = FocusCenter.shared
@@ -397,57 +395,16 @@ struct BoardBox: View {
                     // Next to the note's icon: Daily, Mornings, Afternoons, Evenings, Weekly, Monthly (one at a time).
                     RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
                         .padding(.leading, 2)
-                    // The strip above the text: a double-click here steps the color too, and on a
-                    // board's grid, a drag moves the box to another's place.
+                    // The strip above the text: a double-click here steps the color too.
                     Color.clear
                         .contentShape(Rectangle())
-                        .overlay {
-                            if arrange != nil {
-                                Image(systemName: "line.3.horizontal")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(Color.black.opacity(0.22))
-                                    .allowsHitTesting(false)
-                            }
-                        }
                         .onTapGesture(count: 2, perform: cycle)
-                        .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .named(BoardView.space))
-                            .onChanged { arrange?.move($0.location) }
-                            .onEnded { _ in arrange?.moved() })
-                        .onHover { inside in
-                            guard arrange != nil else { return }
-                            if inside { NSCursor.openHand.push() } else { NSCursor.pop() }
-                        }
-                        .help(arrange != nil ? "Drag to move the box to another's place; double-click to change its color" : "")
-                    BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
-                        Clipboard.copy(box.text)
-                        copied = true
-                        Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 1_200_000_000)
-                            copied = false
-                        }
-                    }
-                    if let toggleExpand {
-                        BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                                  help: expanded ? "Back to the grid (Esc)" : "Open to fill the board", action: toggleExpand)
-                    }
-                    BoxButton(symbol: "dock.arrow.down.rectangle",
-                              help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
-                                  : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
-                              tint: box.docked ? board.color : nil) {
-                        store.setDocked(!box.docked, board, index)
-                    }
-                    BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
-                              help: focus.isFocus(board, index) ? "Focus keeps this note pinned while it's the one in focus"
-                                  : box.pinned ? "Unpin: put the floating box away (it stays here)"
-                                  : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
-                              tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
-                        store.setPinned(!box.pinned, board, index)
-                    }
                 }
                 .frame(height: 20)
                 .padding(.horizontal, 3)
                 .padding(.top, 2)
-                BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, onDoubleClick: cycle)
+                BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, arrange: arrange,
+                          onDoubleClick: cycle)
                     .padding([.horizontal], 4)
                 LinkStrip(text: box.text, roomy: roomy, width: width - 40)
                     .padding(.horizontal, 4)
@@ -468,6 +425,36 @@ struct BoardBox: View {
                 .padding(.horizontal, 3)
                 .padding(.vertical, 3)
             }
+            // Down its right, from the top: copy, open to fill the board, dock, pin.
+            VStack(spacing: 2) {
+                BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
+                    Clipboard.copy(box.text)
+                    copied = true
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        copied = false
+                    }
+                }
+                if let toggleExpand {
+                    BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                              help: expanded ? "Back to the grid (Esc)" : "Open to fill the board", action: toggleExpand)
+                }
+                BoxButton(symbol: "dock.arrow.down.rectangle",
+                          help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
+                              : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
+                          tint: box.docked ? board.color : nil) {
+                    store.setDocked(!box.docked, board, index)
+                }
+                BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
+                          help: focus.isFocus(board, index) ? "Focus keeps this note pinned while it's the one in focus"
+                              : box.pinned ? "Unpin: put the floating box away (it stays here)"
+                              : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
+                          tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
+                    store.setPinned(!box.pinned, board, index)
+                }
+            }
+            .padding(.top, 2)
+            .padding(.trailing, 3)
         }
         .overlay(alignment: .top) {
             VStack(spacing: 2) {
@@ -488,6 +475,13 @@ struct BoardBox: View {
         .background(shape.fill(fill))
         .overlay(shape.strokeBorder(Color.black.opacity(0.08)))
         .clipShape(shape)
+        // On a board's grid, a drag anywhere on it (its text too: `BoxEditor`) moves it to
+        // another's place; its buttons and corner keep their own clicks and drags.
+        .contentShape(shape)
+        .gesture(DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                    .onChanged { arrange?.move($0.location) }
+                    .onEnded { _ in arrange?.moved() },
+                 including: arrange == nil ? .subviews : .all)
     }
 
     private func cycle() {
@@ -979,7 +973,8 @@ private struct BoxButton: View {
 /// itself), with its first line twice the size of the rest (the note's title) and its web addresses
 /// underlined: a click on one opens it in your browser. Dark on the light boxes; `ink` sets it
 /// (white on the glass cards). With `dragsWindow` (a floating note), a press that moves drags the
-/// window; a click still puts the caret there, and ⌥-drag selects.
+/// window; with `arrange` (a note on a board's grid), it drags the note to another's place. Either
+/// way a click still puts the caret there, and ⌥-drag selects.
 struct BoxEditor: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat
@@ -988,17 +983,60 @@ struct BoxEditor: NSViewRepresentable {
     /// How much bigger the first line is.
     var titleScale: CGFloat = 2
     var dragsWindow = false
+    var arrange: BoxArrange?
     var onDoubleClick: () -> Void = {}
 
     final class TextView: NSTextView {
         var onDoubleClick: (() -> Void)?
         var dragsWindow = false
+        var arrange: BoxArrange?
+        /// The press became a drag of the note: what follows goes to the board, not the text.
+        private var movingNote = false
 
         override func mouseDown(with event: NSEvent) {
-            if dragsWindow, event.clickCount == 1, !event.modifierFlags.contains(.option), let window,
-               moveWindow(window) { return }
+            let plain = event.clickCount == 1 && !event.modifierFlags.contains(.option)
+            if dragsWindow, plain, let window, moveWindow(window) { return }
+            if arrange != nil, plain, let window, startsNoteDrag(window) { return }
             super.mouseDown(with: event)
             if event.clickCount == 2 { onDoubleClick?() }
+        }
+
+        /// Waits to see whether the press is a drag (the note's: true, and the drag goes on in
+        /// `mouseDragged`, so the board redraws as it goes) or a click (false, as usual).
+        private func startsNoteDrag(_ window: NSWindow) -> Bool {
+            let start = NSEvent.mouseLocation
+            while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+                if next.type == .leftMouseUp {
+                    window.postEvent(next, atStart: true)
+                    return false
+                }
+                let now = NSEvent.mouseLocation
+                if hypot(now.x - start.x, now.y - start.y) > 4 {
+                    movingNote = true
+                    NSCursor.closedHand.push()
+                    arrange?.move(Self.global(next, in: window))
+                    return true
+                }
+            }
+            return false
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard movingNote, let window else { return super.mouseDragged(with: event) }
+            arrange?.move(Self.global(event, in: window))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            guard movingNote else { return super.mouseUp(with: event) }
+            movingNote = false
+            NSCursor.pop()
+            arrange?.moved()
+        }
+
+        /// The pointer in SwiftUI's global space: the window's content, from its top left.
+        static func global(_ event: NSEvent, in window: NSWindow) -> CGPoint {
+            let p = event.locationInWindow
+            return CGPoint(x: p.x, y: (window.contentView?.bounds.height ?? 0) - p.y)
         }
 
         /// Waits to see whether the press is a drag (it moves the window: true) or a click (the
@@ -1134,6 +1172,7 @@ struct BoxEditor: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.onDoubleClick = onDoubleClick
         tv.dragsWindow = dragsWindow
+        tv.arrange = arrange
         scroll.documentView = tv
         context.coordinator.fontSize = fontSize
         Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink)
@@ -1145,6 +1184,7 @@ struct BoxEditor: NSViewRepresentable {
         guard let tv = scroll.documentView as? TextView else { return }
         tv.onDoubleClick = onDoubleClick
         tv.dragsWindow = dragsWindow
+        tv.arrange = arrange
         var restyle = false
         if tv.string != text {
             tv.string = text

@@ -4,11 +4,12 @@ import ToolCore
 
 // The scheduler: jobs that run at the times you set, or when something happens (an alarm goes
 // off, the battery reaches a level, a day's count goes over a limit, the month starts, the Mac
-// wakes), while the app is open. Each takes its text and asks the model (which can call the model
-// tools and your shortcuts), shows it as a reminder, says it, hands it to a model tool or a
-// shortcut, calls a web address with it, or chimes. Results go on a card and into the history.
-// The day chime and the night watch are its built-in jobs; the timer log's old thresholds and
-// signals were turned into jobs the first time this version ran.
+// wakes), while the app is open. Each runs an action (made in Actions, kept here too) with the
+// arguments it gives: the action's steps ask the model (which can call the model tools and your
+// shortcuts), remind, say it, run a model tool or a shortcut, call a web address, chime, or run
+// other actions. Results go on a card and into the history. The day chime and the night watch are
+// its built-in jobs; the timer log's old thresholds and signals were turned into jobs the first
+// time that version ran, and jobs from before actions became an action each and a job running it.
 
 @MainActor
 final class Scheduler: ObservableObject {
@@ -22,13 +23,26 @@ final class Scheduler: ObservableObject {
     @Published private(set) var problem: String?
     /// The models Ollama has, for the picker.
     @Published private(set) var models: [String] = []
+    /// The actions the jobs run (the Actions window edits them).
+    @Published var actions: ActionBook {
+        didSet {
+            if actions != oldValue { scheduleActionsSave() }
+        }
+    }
+    /// The actions running by hand now (by id), and how each last went.
+    @Published private(set) var runningActions: Set<String> = []
+    @Published private(set) var actionResults: [String: Outcome] = [:]
 
     let prefs = Preferences.shared
     let url = ScheduleBook.defaultURL()
+    let actionsURL = ActionBook.defaultURL()
     /// Says things for jobs that speak (its own, so it doesn't cut into Read aloud).
     let speaker = Speaker()
     private var ticker: Timer?
     private var saveTask: Task<Void, Never>?
+    private var actionsSaveTask: Task<Void, Never>?
+    /// Jobs from before actions were made into actions on loading: saved once it's started.
+    private var separated = false
     private var waking: NSObjectProtocol?
     /// What the jobs reach into: the log (events, counts), the battery and the chimes, the boards' alarms.
     private weak var activity: ActivityStore?
@@ -44,8 +58,13 @@ final class Scheduler: ObservableObject {
     static let lateness: TimeInterval = 60 * 60
 
     init() {
+        let saved = ActionBook.load(from: actionsURL)
+        var actions = saved ?? ActionBook(actions: ActionBook.examples)
+        actions.ensureBuiltins()
         var book = ScheduleBook.load(from: url) ?? ScheduleBook(jobs: ScheduleBook.examples)
+        separated = book.separate(into: &actions) || saved == nil
         book.ensureBuiltins()
+        self.actions = actions
         self.book = book
     }
 
@@ -59,15 +78,25 @@ final class Scheduler: ObservableObject {
         if !UserDefaults.standard.bool(forKey: Self.migratedKey) {
             UserDefaults.standard.set(true, forKey: Self.migratedKey)
             let now = AppClock.now()
+            var b = book
             for var job in ScheduleBook.fromSignals(activity.settings) {
                 job.plan(from: now)
-                book.jobs.append(job)
+                b.jobs.append(job)
             }
+            b.separate(into: &actions)
+            book = b
         }
     }
 
     /// Starts checking every few seconds (and as soon as the Mac wakes).
     func start() {
+        // Made into actions on loading: the actions are written first, so no job points at one
+        // that isn't saved.
+        if separated {
+            separated = false
+            saveActionsNow()
+            saveNow()
+        }
         let now = AppClock.now()
         for i in book.jobs.indices {
             let job = book.jobs[i]
@@ -105,7 +134,7 @@ final class Scheduler: ObservableObject {
         let now = AppClock.now()
         for job in book.jobs where job.isDue(now) && !running.contains(job.id) {
             // A chime missed by more than a few minutes (the Mac was asleep) waits for the next hour.
-            if job.action == .chime, let next = job.next, now.timeIntervalSince(next) > TimerSpec.chimeGrace {
+            if isChime(job), let next = job.next, now.timeIntervalSince(next) > TimerSpec.chimeGrace {
                 if let i = book.jobs.firstIndex(where: { $0.id == job.id }) { book.jobs[i].plan(from: now) }
                 continue
             }
@@ -183,8 +212,7 @@ final class Scheduler: ObservableObject {
         if old.isBuiltin {
             job.builtin = old.builtin
             job.name = old.name
-            job.action = old.action
-            job.target = old.target
+            job.actionID = old.actionID
         }
         if job.when != old.when || job.enabled != old.enabled { job.plan(from: AppClock.now()) }
         book.jobs[i] = job
@@ -209,12 +237,18 @@ final class Scheduler: ObservableObject {
         book.jobs[i] = job
     }
 
+    /// A new job (first in the list). One made doing something itself (a threshold or signal from
+    /// the timer log) gets an action of its own for that.
     @discardableResult
-    func add(_ job: ScheduledJob = ScheduledJob(name: "New schedule", action: .remind,
-                                                when: Schedule(kind: .daily, hour: 9, minute: 0))) -> String {
+    func add(_ job: ScheduledJob = ScheduledJob(name: "New schedule", when: Schedule(kind: .daily, hour: 9, minute: 0)),
+             action: String? = nil) -> String {
         var job = job
+        if let action, actions.action(action) != nil { job.actionID = action }
         job.plan(from: AppClock.now())
-        book.jobs.insert(job, at: 0)
+        var b = book
+        b.jobs.insert(job, at: 0)
+        b.separate(into: &actions)
+        book = b
         return job.id
     }
 
@@ -264,7 +298,7 @@ final class Scheduler: ObservableObject {
     private func finished(_ job: ScheduledJob, at now: Date, outcome: Outcome, byHand: Bool, context: Context) {
         running.remove(job.id)
         // A chime goes into the timer log, not the history (every hour, it would crowd out the rest).
-        if job.action != .chime {
+        if !isChime(job) {
             book.record(JobRun(job: job.id, name: job.name, at: now, ok: outcome.ok, output: outcome.output, tools: outcome.tools))
         }
         if let i = book.jobs.firstIndex(where: { $0.id == job.id }) {
@@ -280,71 +314,182 @@ final class Scheduler: ObservableObject {
             ResultCard.shared.show(job: job, text: outcome.output, ok: false, scheduler: self)
             return
         }
-        switch job.action {
-        case .remind:
-            // A count gone over its limit comes up big, in the middle of the screen.
-            if let crossing = context.crossing {
-                ThresholdCard.show(title: job.name, metric: job.when.metric, count: crossing, limit: job.when.limit, text: outcome.output)
-            } else {
-                ResultCard.shared.show(job: job, text: outcome.output, ok: true, scheduler: self)
-            }
-        case .askModel, .shortcut, .webhook:
+        // A reminder or a spoken line was shown or said as its step ran; an answer wasn't yet.
+        if outcome.fresh {
             if job.showResult { ResultCard.shared.show(job: job, text: outcome.output, ok: true, scheduler: self) }
             if job.speakResult { speaker.say(outcome.output) }
-        case .speak, .tool, .chime:
-            break
         }
     }
 
-    struct Outcome {
-        var ok: Bool
-        var output: String
-        var tools: [String] = []
+    typealias Outcome = ActionRunner.Outcome
+
+    /// Who an action runs for: a job (or, run by hand from Actions, one standing in for it), what
+    /// set it off, and what a card's "open" button opens.
+    struct Caller {
+        let job: ScheduledJob
+        let context: Context
+        let open: () -> Void
     }
 
+    /// The job's action, with the job's arguments (their {{…}} filled in first).
     private func perform(_ job: ScheduledJob, now: Date, context: Context) async -> Outcome {
+        guard !job.actionID.isEmpty else { return .failed("Pick the action it runs.") }
+        let known = values(for: job, context: context, now: now)
+        let given = job.arguments.map { ActionArgument(name: $0.name, value: fill($0.value, last: job.lastResult, values: known, now: now)) }
+        let caller = Caller(job: job, context: context, open: { [weak self] in
+            guard let self else { return }
+            SchedulerWindow.show(self, select: job.id)
+        })
+        return await runSteps(job.actionID, arguments: given, context: known, last: job.lastResult, caller: caller, now: now)
+    }
+
+    private func runSteps(_ id: String, arguments: [ActionArgument], context: [String: String], last: String?,
+                          caller: Caller, now: Date) async -> Outcome {
+        await ActionRunner.run(id, arguments: arguments, context: context, last: last, book: actions,
+                               fill: { [unowned self] text, last, values in self.fill(text, last: last, values: values, now: now) },
+                               step: { [unowned self] step, text, _ in await self.perform(step, text: text, caller: caller, now: now) })
+    }
+
+    /// A text with its placeholders filled in.
+    private func fill(_ text: String, last: String?, values: [String: String], now: Date) -> String {
         let s = prefs.settings
-        let text = JobText.fill(job.text, now: now, last: job.lastResult,
-                                clipboard: NSPasteboard.general.string(forType: .string) ?? "",
-                                calendar: Self.calendar(s), clock24: s.clock24, values: values(for: job, context: context, now: now))
-        switch job.action {
+        return JobText.fill(text, now: now, last: last, clipboard: NSPasteboard.general.string(forType: .string) ?? "",
+                            calendar: Self.calendar(s), clock24: s.clock24, values: values)
+    }
+
+    /// One step, with its text filled in. (Running another action is the runner's.)
+    private func perform(_ step: ActionStep, text: String, caller: Caller, now: Date) async -> Outcome {
+        let s = prefs.settings
+        let job = caller.job
+        switch step.kind {
         case .chime:
-            let at = context.at ?? now
+            let at = caller.context.at ?? now
             let hour = Calendar.current.dateInterval(of: .hour, for: at)?.start ?? at
-            timers?.chime(night: job.target == "night", at: hour, key: job.builtin ?? "job-\(job.id)", name: job.name)
+            timers?.chime(night: step.target == "night", at: hour, key: job.builtin ?? "job-\(job.id)", name: job.name)
             return Outcome(ok: true, output: "Chimed for \(TimerText.hourLabel(Calendar.current.component(.hour, from: hour)))")
         case .webhook:
-            let target = job.target.trimmingCharacters(in: .whitespacesAndNewlines)
+            let target = step.target.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let url = URL(string: target), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
                   url.host?.isEmpty == false else {
-                return Outcome(ok: false, output: "Write the web address it calls (starting https:// or http://).")
+                return .failed("Write the web address it calls (starting https:// or http://).")
             }
-            let body = WebCall.body(text: text, job: job, entry: context.entry, crossing: context.crossing, now: now,
+            let body = WebCall.body(text: text, job: job, entry: caller.context.entry, crossing: caller.context.crossing, now: now,
                                     calendar: Self.calendar(s), device: ActivityStore.device)
-            return await Self.call(url, body: body.data, contentType: body.contentType, secret: job.secret)
+            var outcome = await Self.call(url, body: body.data, contentType: body.contentType, secret: step.secret)
+            outcome.fresh = true
+            return outcome
         case .remind:
-            return Outcome(ok: true, output: text.isEmpty ? job.name : text)
+            let shown = text.isEmpty ? job.name : text
+            // A count gone over its limit comes up big, in the middle of the screen.
+            if let crossing = caller.context.crossing {
+                ThresholdCard.show(title: job.name, metric: job.when.metric, count: crossing, limit: job.when.limit, text: shown)
+            } else {
+                ResultCard.shared.show(title: job.name, symbol: step.kind.symbol, text: shown, ok: true, scheduler: self, open: caller.open)
+            }
+            return Outcome(ok: true, output: shown)
         case .speak:
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Outcome(ok: false, output: "Nothing to say: write what to say.") }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .failed("Nothing to say: write what to say.") }
             speaker.say(text)
             return Outcome(ok: true, output: text)
         case .tool:
-            guard let tool = s.builtins.first(where: { $0.name == job.target }) else {
-                return Outcome(ok: false, output: "Pick which model tool it runs.")
+            guard let tool = s.builtins.first(where: { $0.name == step.target }) else {
+                return .failed("Pick which model tool it runs.")
             }
             let (result, shown) = ModelTools.shared.run(tool, call: ToolCall(name: tool.name, arguments: ["input": text]))
             return Outcome(ok: !result.hasPrefix("Nothing") && !result.hasPrefix("That isn't"), output: result, tools: [shown])
         case .shortcut:
-            guard !job.target.isEmpty else { return Outcome(ok: false, output: "Pick which shortcut it runs.") }
-            let returnsText = s.shortcuts.first { $0.shortcut == job.target }?.returnsText ?? true
+            guard !step.target.isEmpty else { return .failed("Pick which shortcut it runs.") }
+            let returnsText = s.shortcuts.first { $0.shortcut == step.target }?.returnsText ?? true
             do {
-                let out = try await ShortcutRunner.run(job.target, input: text, returnsText: returnsText)
-                return Outcome(ok: true, output: out.isEmpty ? "\(job.target) ran." : out, tools: [job.target])
+                let out = try await ShortcutRunner.run(step.target, input: text, returnsText: returnsText)
+                return Outcome(ok: true, output: out.isEmpty ? "\(step.target) ran." : out, tools: [step.target], fresh: true)
             } catch {
-                return Outcome(ok: false, output: "\(job.target) failed: \(error.localizedDescription)", tools: [job.target])
+                return Outcome(ok: false, output: "\(step.target) failed: \(error.localizedDescription)", tools: [step.target])
             }
         case .askModel:
-            return await ask(job, prompt: text, now: now)
+            var outcome = await ask(model: step.target, useTools: step.useTools, prompt: text, job: job, now: now)
+            outcome.fresh = true
+            return outcome
+        case .runAction:
+            return .failed("Run an action is the runner's to do.")
+        }
+    }
+
+    // MARK: Actions
+
+    func action(_ id: String?) -> SavedAction? { actions.action(id) }
+
+    /// The job's action is only a chime.
+    func isChime(_ job: ScheduledJob) -> Bool { actions.action(job.actionID)?.isChime ?? false }
+
+    /// The job's icon: its action's.
+    func symbol(for job: ScheduledJob) -> String { actions.action(job.actionID)?.symbol ?? "questionmark.circle" }
+
+    /// What the job does, in words, for a confirmation.
+    func doing(_ job: ScheduledJob) -> String {
+        guard let a = actions.action(job.actionID) else { return "run its action (none is picked yet)" }
+        let steps = a.steps.map { $0.doing { [actions] id in actions.action(id)?.name } }
+        let what = steps.isEmpty ? "do nothing yet (it has no steps)" : steps.joined(separator: ", then ")
+        return "run \u{201C}\(a.name)\u{201D}: \(what)"
+    }
+
+    /// A binding to an action for its editor. A built-in one stays as it is.
+    func actionBinding(_ id: String) -> Binding<SavedAction>? {
+        guard actions.action(id) != nil else { return nil }
+        return Binding(get: { [weak self] in self?.actions.action(id) ?? SavedAction() },
+                       set: { [weak self] new in self?.updateAction(new) })
+    }
+
+    func updateAction(_ new: SavedAction) {
+        guard let i = actions.actions.firstIndex(where: { $0.id == new.id }), !actions.actions[i].isBuiltin else { return }
+        actions.actions[i] = new
+    }
+
+    @discardableResult
+    func addAction(_ action: SavedAction = SavedAction(name: "New action", steps: [ActionStep(kind: .remind)])) -> String {
+        let firstMine = actions.actions.firstIndex { !$0.isBuiltin } ?? actions.actions.count
+        actions.actions.insert(action, at: firstMine)
+        return action.id
+    }
+
+    func duplicateAction(_ id: String) -> String? {
+        guard var copy = actions.action(id) else { return nil }
+        copy.id = UUID().uuidString
+        copy.builtin = nil
+        copy.name += " (copy)"
+        copy.steps = copy.steps.map { var s = $0; s.id = UUID().uuidString; return s }
+        return addAction(copy)
+    }
+
+    /// Gone, unless it's built in. Jobs and steps that ran it say so when they next run.
+    func deleteAction(_ id: String) {
+        actions.actions.removeAll { $0.id == id && !$0.isBuiltin }
+        actionResults[id] = nil
+    }
+
+    /// Runs an action by hand, with these arguments: as a job would, but for nobody's schedule. Its
+    /// result (or what went wrong) comes up on a card.
+    func runAction(_ id: String, arguments: [ActionArgument]) {
+        guard let action = actions.action(id), !runningActions.contains(id) else { return }
+        runningActions.insert(id)
+        let now = AppClock.now()
+        let job = ScheduledJob(id: "action-\(id)", name: action.name, showResult: true)
+        let open: () -> Void = { [weak self] in
+            guard let self else { return }
+            ActionsWindow.show(self, select: id)
+        }
+        Task {
+            let known = values(for: job, context: Context(), now: now)
+            let last = actionResults[id]?.output
+            let given = arguments.map { ActionArgument(name: $0.name, value: fill($0.value, last: last, values: known, now: now)) }
+            let outcome = await runSteps(id, arguments: given, context: known, last: last,
+                                         caller: Caller(job: job, context: Context(), open: open), now: now)
+            runningActions.remove(id)
+            actionResults[id] = outcome
+            if !outcome.ok || outcome.fresh {
+                ResultCard.shared.show(title: action.name, symbol: action.symbol, text: outcome.output, ok: outcome.ok,
+                                       scheduler: self, open: open)
+            }
         }
     }
 
@@ -426,21 +571,21 @@ final class Scheduler: ObservableObject {
         }
     }
 
-    /// The model's model for a job: its own, else the chat's.
-    func model(for job: ScheduledJob) -> String {
-        job.target.isEmpty ? prefs.settings.model : job.target
+    /// The model a step asks: its own, else the chat's.
+    func modelName(_ target: String) -> String {
+        target.isEmpty ? prefs.settings.model : target
     }
 
     /// How many rounds of tool calls a job's model may make before it has to answer.
     static let toolRounds = 4
 
-    private func ask(_ job: ScheduledJob, prompt: String, now: Date) async -> Outcome {
+    private func ask(model target: String, useTools: Bool, prompt: String, job: ScheduledJob, now: Date) async -> Outcome {
         let s = prefs.settings
-        let model = model(for: job)
+        let model = modelName(target)
         guard !model.isEmpty else { return Outcome(ok: false, output: "Pick a model in Settings first (Ollama needs at least one: ollama pull llama3.2)") }
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Outcome(ok: false, output: "Write the prompt first.") }
         var tools: [(name: String, action: ToolAction)] = []
-        if job.useTools && s.toolsOn {
+        if useTools && s.toolsOn {
             // Closing the chat makes no sense for a job.
             let builtins = s.builtins.filter { $0.enabled && $0.kind != .closeWindow }
             let shortcuts = ShortcutTool.callable(s.shortcuts, reserved: Set(builtins.map(\.name)))
@@ -527,12 +672,34 @@ final class Scheduler: ObservableObject {
         saveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled, let self else { return }
-            do {
-                try self.book.save(to: self.url)
-                self.problem = nil
-            } catch {
-                self.problem = "Couldn't save the schedules: \(error.localizedDescription)"
-            }
+            self.saveNow()
+        }
+    }
+
+    private func saveNow() {
+        do {
+            try book.save(to: url)
+            problem = nil
+        } catch {
+            problem = "Couldn't save the schedules: \(error.localizedDescription)"
+        }
+    }
+
+    private func scheduleActionsSave() {
+        actionsSaveTask?.cancel()
+        actionsSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.saveActionsNow()
+        }
+    }
+
+    private func saveActionsNow() {
+        do {
+            try actions.save(to: actionsURL)
+            problem = nil
+        } catch {
+            problem = "Couldn't save the actions: \(error.localizedDescription)"
         }
     }
 }
@@ -545,21 +712,27 @@ final class Scheduler: ObservableObject {
 final class ResultCard {
     static let shared = ResultCard()
 
+    /// A job's result: its open button opens the job in the Scheduler.
     func show(job: ScheduledJob, text: String, ok: Bool, scheduler: Scheduler) {
-        let at = AppClock.now()
-        if ModeCenter.shared.hold("result-\(UUID().uuidString)", { [weak self] in
-            self?.show(job: job, text: text, ok: ok, scheduler: scheduler, at: at)
-        }) { return }
-        show(job: job, text: text, ok: ok, scheduler: scheduler, at: at)
+        show(title: job.name, symbol: scheduler.symbol(for: job), text: text, ok: ok, scheduler: scheduler,
+             open: { SchedulerWindow.show(scheduler, select: job.id) })
     }
 
-    private func show(job: ScheduledJob, text: String, ok: Bool, scheduler: Scheduler, at: Date) {
+    func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void) {
+        let at = AppClock.now()
+        if ModeCenter.shared.hold("result-\(UUID().uuidString)", { [weak self] in
+            self?.show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, at: at)
+        }) { return }
+        show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, at: at)
+    }
+
+    private func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void, at: Date) {
         StackedCards.shared.show(.topRight, level: .floating) { close in
-            ResultCardView(title: job.name, symbol: job.action.symbol, text: text, ok: ok, at: at,
+            ResultCardView(title: title, symbol: symbol, text: text, ok: ok, at: at,
                            say: { scheduler.speaker.say(text) },
                            open: {
                                close()
-                               SchedulerWindow.show(scheduler, select: job.id)
+                               open()
                            },
                            close: close)
         }

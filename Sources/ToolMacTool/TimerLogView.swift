@@ -509,7 +509,9 @@ private struct SignalsPane: View {
     /// The jobs that do what thresholds and signals did: wait for a day's count to go over a
     /// limit, or call a web address.
     private var thresholds: [ScheduledJob] { scheduler.book.jobs.filter { $0.when.kind == .event && $0.when.event == .countOver } }
-    private var signals: [ScheduledJob] { scheduler.book.jobs.filter { $0.action == .webhook } }
+    private var signals: [ScheduledJob] {
+        scheduler.book.jobs.filter { job in scheduler.action(job.actionID)?.steps.contains { $0.kind == .webhook } ?? false }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
@@ -571,11 +573,11 @@ private struct JobLine: View {
     var body: some View {
         HStack(spacing: 12) {
             Toggle("", isOn: Binding(get: { job.enabled }, set: { on in
-                guard Confirm.schedule(job, on: on, clock24: scheduler.prefs.settings.clock24) else { return }
+                guard Confirm.schedule(job, doing: scheduler.doing(job), on: on, clock24: scheduler.prefs.settings.clock24) else { return }
                 scheduler.setEnabled(job.id, on)
             }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
-            Image(systemName: job.action.symbol).foregroundStyle(.white.opacity(0.6)).frame(width: 18)
+            Image(systemName: scheduler.symbol(for: job)).foregroundStyle(.white.opacity(0.6)).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.name).font(.system(size: 12.5, weight: .semibold))
                 Text(detail)
@@ -594,8 +596,9 @@ private struct JobLine: View {
 
     /// When it runs and what it does ("When an alarm goes off · Call a web address · worker.dev").
     private var detail: String {
-        var parts = [job.when.describe(clock24: scheduler.prefs.settings.clock24), job.action.title]
-        if job.action == .webhook { parts.append(URL(string: job.target)?.host ?? "no address yet") }
+        let action = scheduler.action(job.actionID)
+        var parts = [job.when.describe(clock24: scheduler.prefs.settings.clock24), action?.name ?? "No action picked"]
+        if let hook = action?.steps.first(where: { $0.kind == .webhook }) { parts.append(URL(string: hook.target)?.host ?? "no address yet") }
         return parts.joined(separator: " · ")
     }
 }

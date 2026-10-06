@@ -54,9 +54,10 @@ enum Tools {
     /// while it runs), and the tags' boards, each gathering the notes with that tag.
     static let columns: [[ToolSection]] = [
         [
-            // Things done for you at the times you set, or when something happens; the log that
-            // charts the timers; and the chimes (built-in schedules: a click turns one on or off).
-            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, timerLog],
+            // Things done for you at the times you set, or when something happens; what they do;
+            // the log that charts the timers; and the chimes (built-in schedules: a click turns one
+            // on or off).
+            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, actions, timerLog],
                         extra: .chimes),
             ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
             ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
@@ -229,9 +230,17 @@ enum Tools {
         id: "scheduler",
         name: "Scheduler",
         title: "Scheduler: things done at the times you set",
-        subtitle: "Once, every so often, at a time of day, every hour, or when something happens (an alarm, the battery, a day's count over a limit, the month starting): ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, run a model tool or a shortcut, call a web address, or chime. The day chime and the night watch are built in. Runs while the app is open.",
+        subtitle: "Once, every so often, at a time of day, every hour, or when something happens (an alarm, the battery, a day's count over a limit, the month starting): run one of your actions, with the values its arguments need. The day chime and the night watch are built in. Runs while the app is open.",
         symbol: "calendar.badge.clock",
         open: { model in SchedulerWindow.show(model.scheduler) })
+
+    static let actions = Tool(
+        id: "actions",
+        name: "Actions",
+        title: "Actions: what schedules do",
+        subtitle: "Steps done in turn: ask the model (it can use the model tools and your shortcuts), show a reminder, say something, run a model tool or a shortcut, call a web address, chime, or run other actions. Give an action arguments to use as {{name}} in its steps ({{last}} is what the step before gave back); schedules, and steps of other actions, give their values. Run one by hand here.",
+        symbol: "square.stack.3d.down.right",
+        open: { model in ActionsWindow.show(model.scheduler) })
 
     static let timerLog = Tool(
         id: "timer-log",
@@ -269,7 +278,7 @@ enum Tools {
         Tool(id: "board-\(kind.id)",
              name: kind.name,
              title: "\(kind.name): a board of notes",
-             subtitle: "A big glass panel of notes to type into, the first line of each its title. The arrows either side show more or fewer (hidden ones keep their text). Double-click a note to change its color. Drag a note by its top strip to put it in another's place, and by its bottom right corner to make it span more blocks. Down its left: its icon (click to pick another), and a timer or a due date (one at a time; the note shows in the panel's Timers column while it runs). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly, for a reminder every hour from 8 AM until it's done; each day, week or month begins at 8 AM the day before. Bottom left: To do, Pending, Completed; bottom right: its tags (Important, Urgent, Delegate, Think). At its top right: copy, open it to fill the board, dock it along the bottom of this panel, and pin it to float on your screen. Paste a web address to see its page's icon and title (a YouTube video plays in the note). Right-click the tile to dock the board in the menu bar.",
+             subtitle: "A big glass panel of notes to type into, the first line of each its title. The arrows either side show more or fewer (hidden ones keep their text). Double-click a note to change its color. Drag a note anywhere on it to put it in another's place, and by its bottom right corner to make it span more blocks. Down its left: its icon (click to pick another), and a timer or a due date (one at a time; the note shows in the panel's Timers column while it runs). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly, for a reminder every hour from 8 AM until it's done; each day, week or month begins at 8 AM the day before. Bottom left: To do, Pending, Completed; bottom right: its tags (Important, Urgent, Delegate, Think). Down its top right: copy, open it to fill the board, dock it along the bottom of this panel, and pin it to float on your screen. Paste a web address to see its page's icon and title (a YouTube video plays in the note). Right-click the tile to dock the board in the menu bar.",
              symbol: kind.symbol,
              open: { model in model.boards.show(kind.id) })
     }

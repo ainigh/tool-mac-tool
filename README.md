@@ -257,21 +257,31 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   transcript, show it in Finder or move it (with its transcript) to the Trash. The buttons along
   the bottom start a new recording.
 
-### Scheduler, Timer log, Day chime, Night watch (Automate)
+### Scheduler, Actions, Timer log, Day chime, Night watch (Automate)
 
-The first section of the first column. The Scheduler and the Timer log open their windows; the
-two chimes are built-in schedules: click one to turn it on or off (right-click to open it in the
-Scheduler and change its hours).
+The first section of the first column. The Scheduler, Actions and the Timer log open their windows;
+the two chimes are built-in schedules: click one to turn it on or off (right-click to open it in
+the Scheduler and change its hours).
 
-#### The Scheduler
+**What happens and when it happens are kept apart.** An **action** is what's done: one or more
+steps, made in **Actions**. A **schedule** is when: it picks an action to run, and gives the
+values the action's arguments need. One action can be run by many schedules, and by other actions.
 
-Things done for you at the times you set, or when something happens, while the app is open (it
-starts at login). The tile opens a glass panel as big as the diagram's: your schedules down the
-left (each with what it does, when, a countdown to its next run or what it waits for, how the
-last one went, and a switch), and the one you pick on the right. **New schedule** (⌘N) adds one.
-Each schedule has:
+#### Actions
 
-- **What it does**, with its **text**:
+A glass panel like the Scheduler's: your actions down the left (each with its steps in a few
+words, its arguments and how many schedules run it), and the one you pick on the right. **New
+action** (⌘N) adds one. Each action has:
+
+- **A name.**
+- **Arguments** (none to start with): names for values it's given each time it runs, like
+  `message` or `who`, each with a value it has **when none is given**. Use them in the steps as
+  `{{message}}`. That's all there is to passing arguments: a schedule, or a step of another
+  action, fills them in (or leaves one empty for its own value).
+- **Its steps, done in turn** (↑ and ↓ move one, the bin takes it away, **Add a step** adds one at
+  the end). Each step's text can hold the action's arguments, **`{{last}}`** (what the step before
+  gave back; for the first step, what the action gave back the last time, or what the step before
+  gave when another action runs it), and every placeholder below (**More…**). A step:
   - **Ask the model**: the text is a prompt. The model (the chat's, or another you pick) answers
     it and, if you let it, can call the model tools and your shortcuts while it does, up to four
     rounds. It's told it's a scheduled job with nobody at the keyboard, plus the date, time and
@@ -289,8 +299,42 @@ Each schedule has:
     log's signals had (below), so a worker written for those keeps working. What the address
     answers is the result (a 2xx is a success).
   - **Chime**: a ding and a card, the day chime's or the night watch's.
+  - **Run an action**: another action runs, given values for its arguments (which can hold
+    `{{…}}` too: pass `{{last}}` to hand on what the step before gave back, or one of this action's
+    own arguments). What it gives back is this step's. **An action can run several others**, one
+    step each. A called action sees only what it's given, not the caller's arguments.
+- What it gives back is its last step's. The first step that fails stops it, and says which step.
+  An action that would come round to itself (A runs B, which runs A) is flagged in red and stops
+  with an error when it gets there; so do actions running each other more than 8 deep.
+- **Run it now**, with values for its arguments: what it gives back (or what went wrong) comes up
+  on a card, and shows beside the button.
+- **Used by**: the schedules that run it (a click opens one) and the actions that run it.
+  **Schedule it…** makes a schedule for it (off, at 9:00 every day, to set up). **Duplicate**, and
+  **Delete** (it says first what runs it: those fail until they're given another).
 
-- **Insert**: the placeholders the text can hold, filled in when it runs, in groups:
+**Built in**: the **Day chime** and **Night watch** actions, what the built-in schedules run, with
+a lock: other schedules can run them too, but they can't be changed or deleted.
+
+Two examples come with it: **Remind and say** (an argument, `message`: it reminds you, then says
+it) and **Drink some water** (one step: it runs Remind and say, giving it the message "Drink some
+water ({{time}})."). Actions are kept in `~/Library/Application Support/ToolMacTool/actions.json`.
+
+**Schedules from before actions** were each made into an action of their own the first time this
+version ran (named after the schedule, doing what it did), and the schedule runs it: nothing to
+redo.
+
+#### The Scheduler
+
+Things done for you at the times you set, or when something happens, while the app is open (it
+starts at login). The tile opens a glass panel as big as the diagram's: your schedules down the
+left (each with its action's icon, when and which action, a countdown to its next run or what it
+waits for, how the last one went, and a switch), and the one you pick on the right. **New
+schedule** (⌘N) adds one, and **Actions** opens Actions. Each schedule has:
+
+- **The action it runs**: pick one of your actions, or **New action…** to make one for it (it
+  opens in Actions); **Open in Actions** to see or change it.
+- **Its arguments**: a field for each of the action's arguments (empty: the action's own value).
+  The values can hold the placeholders, filled in when it runs, in groups:
   - *Time*: `{{date}}`, `{{time}}`, `{{weekday}}`, `{{month}}`, `{{day_of_month}}`,
     `{{days_left_in_month}}`.
   - *This job*: `{{last}}` (what it gave back the last time), `{{clipboard}}`, `{{job}}` (its
@@ -301,6 +345,7 @@ Each schedule has:
   - *Timer log*: `{{alarms_today}}`, `{{snoozes_today}}`, `{{sets_today}}`, `{{stops_today}}`,
     `{{chimes_today}}`, `{{alarms_week}}`, `{{snoozes_week}}`, `{{last_alarm}}`, `{{next_alarm}}`
     (the next one coming up in the notes), `{{battery}}` (its level now) and `{{battery_empty}}`.
+  The steps of the action it runs can use them too.
 - **When**:
   - **Once** (a date and time; it turns itself off after);
   - **Every** so many minutes, hours or days (from when you set it);
@@ -314,23 +359,25 @@ Each schedule has:
     once a day at most, and it's logged as a threshold crossed); any threshold is crossed.
     **Calendar**: the start or end of the week (Monday, Sunday) or of the month (the 1st, the last
     day), at a time you pick. **This Mac**: the app starts, or the Mac wakes from sleep.
-- **With the result** (the model's answer, a shortcut's output, what a web address answered):
-  show it on a card, say it out loud, or both. Cards come up at the top right with **Copy**,
+- **With the result**, when the action ends with an answer (the model's, a shortcut's output, what
+  a web address answered; a reminder or a spoken step was already shown or said): show it on a
+  card, say it out loud, or both. Cards come up at the top right with **Copy**,
   **Say it** and **Scheduler**; a failure always gets a card.
 - **Run now**, **Duplicate**, **Delete**, and a **history** of every run: when, whether it worked,
   the tools it used and what it gave back.
 
 **Built in**: the **Day chime** and the **Night watch** (below) are schedules that come on, at
 the top of the list with a lock. They can be turned off and their hours changed (**Reset** puts
-them back), but not deleted or made to do something else; **Duplicate** makes an ordinary copy.
+them back), but not deleted or given another action; **Duplicate** makes an ordinary copy.
 Their runs go into the timer log rather than the history.
 
 A job missed by more than an hour (the Mac was asleep, or the app closed) waits for its next time
 instead of running late; one missed by less runs straight away (a chime, by more than five
 minutes, waits for the next hour). A job set off by an event isn't set off again within a second,
 so one can't keep setting itself off. Schedules and the last 300 runs are kept in
-`~/Library/Application Support/ToolMacTool/schedules.json`. Two examples come with it, turned
-off: a reminder to stretch every hour and a spoken morning briefing on weekdays.
+`~/Library/Application Support/ToolMacTool/schedules.json` (their actions in `actions.json`). Two
+examples come with it, turned off: a reminder to stretch every hour and a spoken morning briefing
+on weekdays.
 
 ### Chat (Glass)
 
@@ -642,9 +689,9 @@ there are more. Double-click a note to step it through light colors. **A note's 
 twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
 it in your browser.
 
-**Order the notes by dragging them**: drag a note by the strip along its top (the three lines; the
-pointer becomes a hand) onto another note's place, and it takes that place, the notes between
-moving along one. The order is kept, and the arrows show more or fewer from the end of it (a hidden
+**Order the notes by dragging them**: drag a note from anywhere on it (its text too; the pointer
+becomes a closed hand once it moves) onto another note's place, and it takes that place, the notes
+between moving along one. A click still puts the caret in the text, and ⌥-drag selects text. The order is kept, and the arrows show more or fewer from the end of it (a hidden
 note shown again comes in at the end). Focus goes round the notes in this order too.
 
 **Make a note span more blocks**: drag the corner at its bottom right. A dashed outline shows how
@@ -692,7 +739,7 @@ player window of its own (✕ or ⌘W closes it and stops it).
 - **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
   **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
   color when on.
-- **At its top right**: copy its text, open it to fill the board (Esc or click again to go back),
+- **Down its top right**, one under another: copy its text, open it to fill the board (Esc or click again to go back),
   **dock** it, and **pin** it.
   - **Dock**: the note shows in the **Docked notes** row along the bottom of the panel, across all
     its columns: a small icon on the note's color (its board's, if it's plain), with its title and
@@ -744,7 +791,8 @@ Sources/ToolCore/             the tools' logic: redaction (the map, the model's 
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
-                              their text and placeholders, events, web calls, built-in chimes, history), timers (what's due when,
+                              their placeholders, events, web calls, built-in chimes, history), actions (steps, arguments, running
+                              them in turn and one another, separating old jobs into actions), timers (what's due when,
                               reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery
                               and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, Daily/Weekly/Monthly
                               and To do/Pending/Completed, the grid), updates
@@ -759,7 +807,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
-                              times or on events, the built-in chimes, the result card, the Scheduler's window),
+                              times or on events running actions, the built-in chimes, the result card, the
+                              Scheduler's window), ActionsView (the Actions window: arguments, steps),
                               Timers (the battery, the sounds, the chimes' cards), BigCards (the quarter-screen cards),
                               ActivityStore (the log, and who hears of each entry), TimerLogView (the report, the
                               thresholds and signals as schedules),
