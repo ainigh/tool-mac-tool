@@ -82,12 +82,12 @@ final class TimerBoard: ObservableObject {
         sounds.play(look.tone, for: key, maxSeconds: nil)
         if night {
             let text = TimerText.night(hour, calendar: calendar)
-            cards.show(key, at: look.spot, hideAfter: 10 * 60, onEscape: ok) { size in
+            cards.show(key, at: look.spot, onEscape: ok) { size in
                 NightChimeCard(size: size, look: look, name: name, text: text, ok: ok)
             }
         } else {
             let text = TimerText.day(hour, calendar: calendar)
-            cards.show(key, at: look.spot, hideAfter: 30, onEscape: ok) { size in
+            cards.show(key, at: look.spot, onEscape: ok) { size in
                 DayChimeCard(size: size, look: look, name: name, text: text, ok: ok)
             }
         }
@@ -102,10 +102,10 @@ final class TimerBoard: ObservableObject {
     // MARK: The battery
 
     /// A click on the battery: the next level (100, 80 … 0), draining from now.
-    func tapBattery() { setBattery(Battery.cycled(battery, now: Date())) }
+    func tapBattery() { setBattery(Battery.cycled(battery, now: AppClock.now())) }
 
     func chooseBattery(_ choice: Int) {
-        setBattery(BatteryState(choice: choice, level: Battery.levels[choice], start: Date()))
+        setBattery(BatteryState(choice: choice, level: Battery.levels[choice], start: AppClock.now()))
     }
 
     private func setBattery(_ new: BatteryState) {
@@ -120,8 +120,16 @@ final class TimerBoard: ObservableObject {
 
     // MARK: Running
 
+    /// Test mode ended: a battery set on the fast clock (its start is still ahead of the real
+    /// time) drains from now instead, from the level it was set to.
+    func leftTestClock(now: Date = Date()) {
+        guard let start = battery.start, start > now else { return }
+        battery = BatteryState(choice: battery.choice, level: battery.level, start: now)
+        saveBattery()
+    }
+
     private func tick() {
-        let now = Date()
+        let now = AppClock.now()
         guard let due = Battery.due(battery, now: now) else { return }
         battery = due.state
         saveBattery()
@@ -178,6 +186,8 @@ final class TonePlayer {
 
     func play(_ buffer: AVAudioPCMBuffer, loops: Bool, volume: Float, for id: String, maxSeconds: TimeInterval?) {
         stop(id)
+        // Quiet mode: the timers make no sound (their cards wait for it to end).
+        if ModeCenter.shared.mode == .quiet { return }
         let turn = (turns[id] ?? 0) + 1
         turns[id] = turn
         let wait = quietUntil.timeIntervalSinceNow

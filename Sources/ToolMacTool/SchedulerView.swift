@@ -127,6 +127,8 @@ struct SchedulerView: View {
                     JobRow(job: job, selected: focus.selected == job.id, running: scheduler.running.contains(job.id),
                            clock24: scheduler.prefs.settings.clock24,
                            toggle: { on in
+                               // Asks first, saying what turning it on or off means.
+                               guard Confirm.schedule(job, on: on, clock24: scheduler.prefs.settings.clock24) else { return }
                                var j = job
                                j.enabled = on
                                scheduler.update(j)
@@ -196,7 +198,9 @@ struct JobRow: View {
                         Text("Running…")
                     } else if job.enabled, let next = job.next {
                         Image(systemName: "clock")
-                        Text("Next ") + Text(next, style: .relative)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text("Next in " + TimerText.left(next.timeIntervalSince(AppClock.time(at: context.date))))
+                        }
                     } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
                         Image(systemName: job.when.event.symbol)
                         Text("Waiting for it")
@@ -549,7 +553,10 @@ struct JobEditor: View {
             Spacer()
             Group {
                 if job.enabled, let next = job.next {
-                    Text("Next: ") + Text(next, style: .relative) + Text(" · ") + Text(next, style: .time)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let now = AppClock.time(at: context.date)
+                        Text("Next: in " + TimerText.left(next.timeIntervalSince(now)) + " · " + AlarmTime.short(next, now: now))
+                    }
                 } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
                     Text("Waiting: " + job.when.describe(clock24: settings.clock24))
                 } else {
@@ -668,14 +675,14 @@ struct WhenEditor: View {
                     PillButton(title: k.title, prominent: when.kind == k) {
                         guard when.kind != k else { return }
                         when.kind = k
-                        if k == .every { when.start = Date() }
-                        if k == .once, when.at < Date() { when.at = Date().addingTimeInterval(3600) }
+                        if k == .every { when.start = AppClock.now() }
+                        if k == .once, when.at < AppClock.now() { when.at = AppClock.now().addingTimeInterval(3600) }
                     }
                 }
             }
             switch when.kind {
             case .once:
-                DatePicker("On", selection: $when.at, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                DatePicker("On", selection: $when.at, in: AppClock.now()..., displayedComponents: [.date, .hourAndMinute])
                     .datePickerStyle(.compact)
                     .fixedSize()
             case .every:
@@ -684,7 +691,7 @@ struct WhenEditor: View {
                     TextField("", value: Binding(get: { max(1, when.minutes / unit.size) },
                                                  set: { n in
                                                      when.minutes = max(1, n) * unit.size
-                                                     when.start = Date()
+                                                     when.start = AppClock.now()
                                                  }),
                               format: .number)
                         .textFieldStyle(.roundedBorder)
@@ -693,7 +700,7 @@ struct WhenEditor: View {
                              items: Unit.allCases.map { u in
                                  (u.rawValue, u == unit, {
                                      when.minutes = max(1, when.minutes / unit.size) * u.size
-                                     when.start = Date()
+                                     when.start = AppClock.now()
                                  })
                              })
                     Text("starting from now")
@@ -833,7 +840,7 @@ struct WhenEditor: View {
     /// The hour and minute as a date today, for the time picker.
     var timeOfDay: Binding<Date> {
         Binding(get: {
-            Calendar.current.date(bySettingHour: when.hour, minute: when.minute, second: 0, of: Date()) ?? Date()
+            Calendar.current.date(bySettingHour: when.hour, minute: when.minute, second: 0, of: AppClock.now()) ?? AppClock.now()
         }, set: { date in
             let c = Calendar.current.dateComponents([.hour, .minute], from: date)
             when.hour = c.hour ?? 9

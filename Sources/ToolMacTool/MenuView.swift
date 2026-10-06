@@ -32,7 +32,7 @@ struct MenuView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BoardsRow(store: model.boards)
+            BoardsRow(store: model.boards, groups: model.groups)
                 .padding(.horizontal, 14)
                 .padding(.top, 12)
                 .padding(.bottom, 10)
@@ -52,6 +52,19 @@ struct MenuView: View {
             BottomBar(model: model, updater: updater)
         }
         .frame(width: Self.width)
+        .background(WindowReader { MenuPanel.window = $0 })
+    }
+}
+
+/// The panel that drops down from the menu bar icon, so a button that opens something elsewhere
+/// can put it away (it would otherwise sit over what was opened).
+@MainActor
+enum MenuPanel {
+    static weak var window: NSWindow?
+
+    static func close() {
+        guard let window, window.isVisible else { return }
+        window.close()
     }
 }
 
@@ -68,7 +81,7 @@ struct ToolGrid: View {
                         if section.id != column.first?.id {
                             Divider().padding(.vertical, 8)
                         }
-                        SectionGrid(section: section, model: model)
+                        SectionGrid(section: section, model: model, groups: model.groups)
                     }
                 }
                 .frame(width: MenuView.width(of: column), alignment: .leading)
@@ -81,10 +94,12 @@ struct ToolGrid: View {
 struct SectionGrid: View {
     let section: ToolSection
     @ObservedObject var model: AppModel
+    /// For the pin at the right of its title.
+    var groups: PinnedGroups?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: section.title, color: section.color)
+            SectionHeader(title: section.title, color: section.color, groups: groups, pinID: section.id)
             if section.extra == .timedNotes {
                 TimedNotesColumn(store: model.boards, color: section.color)
             } else if section.extra == .tagBoards {
@@ -117,6 +132,9 @@ struct SectionGrid: View {
 struct SectionHeader: View {
     let title: String
     let color: Color
+    /// With both: a pin at the right, to float the group on the screen.
+    var groups: PinnedGroups? = nil
+    var pinID: String? = nil
 
     var body: some View {
         HStack(spacing: 5) {
@@ -125,6 +143,11 @@ struct SectionHeader: View {
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.6)
                 .foregroundStyle(color)
+                .lineLimit(1)
+            if let groups, let pinID {
+                Spacer(minLength: 2)
+                GroupPinButton(groups: groups, id: pinID, color: color)
+            }
         }
         .padding(.leading, 2)
         .padding(.bottom, 6)
@@ -209,7 +232,10 @@ struct BottomBar: View {
         HStack(spacing: 4) {
             update
             Spacer(minLength: 8)
+            ModeSwitch(modes: ModeCenter.shared)
+            Spacer(minLength: 8)
             IconButton(symbol: "hammer", help: "Build tools: check and install what building updates here needs") {
+                MenuPanel.close()
                 BuildToolsWindow.show()
             }
             IconButton(symbol: model.openAtLogin ? "sunrise.fill" : "sunrise",
@@ -252,7 +278,10 @@ struct BottomBar: View {
             IconButton(symbol: "doc.on.doc", help: "Copy the error (with the build log, if it built)") {
                 Clipboard.copy(Updater.report(why))
             }
-            Button("Fix…") { BuildToolsWindow.show() }
+            Button("Fix…") {
+                MenuPanel.close()
+                BuildToolsWindow.show()
+            }
                 .controlSize(.small)
                 .help("Check and install what building updates here needs")
         case .upToDate, .idle:

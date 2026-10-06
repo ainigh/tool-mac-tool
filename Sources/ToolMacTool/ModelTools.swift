@@ -69,8 +69,15 @@ final class Alarm: ObservableObject {
         showCard()
         stopTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
-            if !Task.isCancelled { self?.stop() }
+            if !Task.isCancelled { self?.finish() }
         }
+    }
+
+    /// Its time is up: quiet, but the card stays until it's put away.
+    private func finish() {
+        stopTask = nil
+        sounds.stop("alarm")
+        sounding = false
     }
 
     func stop() {
@@ -119,10 +126,12 @@ struct AlarmCard: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = alarm.endsAt.map { max(0, Int($0.timeIntervalSince(context.date).rounded())) } ?? 0
             BigCard(size: size, symbol: "alarm.fill", accent: Color(red: 1, green: 0.55, blue: 0.5), name: "Alarm",
-                    headline: "ALARM", line: "\(left) s left", mood: .error, close: { alarm.stop() }) {
+                    headline: "ALARM", line: alarm.sounding ? "\(left) s left" : "Finished: click OK", mood: .error,
+                    close: { alarm.stop() }) {
                 HStack {
                     Spacer()
-                    BigButton(title: "Stop", symbol: "stop.fill", prominent: true, height: max(36, size.height * 0.1)) { alarm.stop() }
+                    BigButton(title: alarm.sounding ? "Stop" : "OK", symbol: alarm.sounding ? "stop.fill" : nil, prominent: true,
+                              height: max(36, size.height * 0.1)) { alarm.stop() }
                 }
             }
         }

@@ -11,14 +11,18 @@ import ToolCore
 
 struct BoardsRow: View {
     @ObservedObject var store: BoardStore
+    var groups: PinnedGroups?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: "Boards", color: Tools.boardsColor)
+            SectionHeader(title: "Boards", color: Tools.boardsColor, groups: groups, pinID: PinnedGroups.boardsID)
             HStack(spacing: MenuView.gap) {
                 ForEach(BoardStore.kinds) { kind in
                     BoardTile(kind: kind, inMenuBar: store.isInMenuBar(kind.id),
-                              open: { store.show(kind.id) },
+                              open: {
+                                  MenuPanel.close()
+                                  store.show(kind.id)
+                              },
                               dock: { store.setInMenuBar($0, kind.id) })
                 }
             }
@@ -87,7 +91,7 @@ struct ChimeTile: View {
         let job = scheduler.builtin(builtin)
         let on = job?.enabled == true
         Button {
-            if let job { scheduler.setEnabled(job.id, !on) }
+            flip(job, on: on)
         } label: {
             VStack(spacing: 4) {
                 ZStack {
@@ -117,9 +121,18 @@ struct ChimeTile: View {
         .onHover { hover = $0 }
         .help(help(job, on: on))
         .contextMenu {
-            Button(on ? "Turn off" : "Turn on") { if let job { scheduler.setEnabled(job.id, !on) } }
-            Button("Open in the Scheduler…") { SchedulerWindow.show(scheduler, select: job?.id) }
+            Button(on ? "Turn off…" : "Turn on…") { flip(job, on: on) }
+            Button("Open in the Scheduler…") {
+                MenuPanel.close()
+                SchedulerWindow.show(scheduler, select: job?.id)
+            }
         }
+    }
+
+    /// On or off, after saying what that means.
+    private func flip(_ job: ScheduledJob?, on: Bool) {
+        guard let job, Confirm.schedule(job, on: !on, clock24: scheduler.prefs.settings.clock24) else { return }
+        scheduler.setEnabled(job.id, !on)
     }
 
     private func status(_ job: ScheduledJob?) -> String {
@@ -133,7 +146,7 @@ struct ChimeTile: View {
             ? "A ding and a card every hour through the day, with hours since 6 AM and to 10 PM."
             : "A ding and a warning card every hour through the night, with the hours left before 6 AM."
         let when = job.map { $0.when.describe(clock24: scheduler.prefs.settings.clock24) } ?? ""
-        return "\(job?.name ?? "") (a built-in schedule: \(when))\n\n\(what)\n\n\(on ? "On: click to turn it off." : "Off: click to turn it on.") Right-click to change its hours in the Scheduler."
+        return "\(job?.name ?? "") (a built-in schedule: \(when))\n\n\(what)\n\n\(on ? "On: click to turn it off (it asks first)." : "Off: click to turn it on (it asks first).") Right-click to change its hours in the Scheduler."
     }
 }
 
@@ -163,7 +176,10 @@ struct TimedNotesColumn: View {
                 .padding(.vertical, 12)
             } else {
                 ForEach(store.upcoming.prefix(Self.most)) { u in
-                    TimedNoteTile(u: u, now: store.now) { store.show(u.board.id, focus: u.index) }
+                    TimedNoteTile(u: u, now: store.now) {
+                        MenuPanel.close()
+                        store.show(u.board.id, focus: u.index)
+                    }
                 }
                 if store.upcoming.count > Self.most {
                     Text("+\(store.upcoming.count - Self.most) more")
@@ -242,7 +258,10 @@ struct TagBoardsColumn: View {
         VStack(spacing: MenuView.gap) {
             ForEach(NoteTag.allCases, id: \.self) { tag in
                 TagBoardTile(tag: tag, count: store.tagged(tag).count, inMenuBar: store.isInMenuBar(BoardStore.dockID(tag)),
-                             open: { store.show(tag) },
+                             open: {
+                                 MenuPanel.close()
+                                 store.show(tag)
+                             },
                              dock: { store.setInMenuBar($0, BoardStore.dockID(tag)) })
             }
         }
@@ -315,8 +334,14 @@ struct DockRow: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 66, maximum: 80), spacing: 6)], alignment: .leading, spacing: 6) {
                         ForEach(notes) { note in
                             DockedNoteTile(note: note, timer: store.upcoming.first { $0.id == note.id }?.spec,
-                                           open: { store.show(note.board.id, focus: note.index) },
-                                           pin: { store.setPinned(!store.isPinned(note.board, note.index), note.board, note.index) },
+                                           open: {
+                                               MenuPanel.close()
+                                               store.show(note.board.id, focus: note.index)
+                                           },
+                                           pin: {
+                                               MenuPanel.close()
+                                               store.setPinned(!store.isPinned(note.board, note.index), note.board, note.index)
+                                           },
                                            undock: { store.setDocked(false, note.board, note.index) })
                         }
                     }

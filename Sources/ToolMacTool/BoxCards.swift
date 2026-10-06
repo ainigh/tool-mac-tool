@@ -40,8 +40,8 @@ struct BoxAlarmCard: View {
     var body: some View {
         let h = max(34, size.height * 0.09)
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            BigCard(size: size, symbol: symbol, accent: box.look.accent, name: name, headline: headline(context.date),
-                    line: line(context.date), mood: mood, close: box.ok) {
+            BigCard(size: size, symbol: symbol, accent: box.look.accent, name: name, headline: headline(AppClock.time(at: context.date)),
+                    line: line(AppClock.time(at: context.date)), mood: mood, close: box.ok) {
                 VStack(spacing: size.height * 0.025) {
                     BoxNote(text: $model.board.boxes[box.index].text, height: size.height * 0.24,
                             fontSize: max(13, size.height * 0.034))
@@ -180,5 +180,60 @@ struct BoxNote: View {
                         .allowsHitTesting(false)
                 }
             }
+    }
+}
+
+// MARK: - A note that comes round
+
+/// The Note reminder a daily, weekly or monthly note puts up on the hour (6 AM to 10 PM) until
+/// it's completed: its title big, its text to read and edit, and Pending (put away until the next
+/// hour) or Completed (until the next day, week or month). It stays until one is clicked.
+struct NoteReminderCard: View {
+    let size: NSSize
+    @ObservedObject var model: BoardModel
+    let board: BoardStore.Kind
+    let index: Int
+    let hour: Date
+    let pending: () -> Void
+    let completed: () -> Void
+    let open: () -> Void
+    let close: () -> Void
+
+    var body: some View {
+        let box = model.board.boxes[index]
+        let h = max(34, size.height * 0.09)
+        let repeats = box.repeats ?? .daily
+        let accent = Color(red: 0.45, green: 0.85, blue: 0.6)
+        BigCard(size: size, symbol: "bell.badge.fill", accent: accent,
+                name: "Note reminder · \(repeats.title) · \(board.name) · box \(index + 1)",
+                headline: box.title ?? "\(board.name) \(index + 1)",
+                line: "\(hour.formatted(date: .omitted, time: .shortened)) · \(Self.line(repeats, status: box.status))",
+                close: close) {
+            VStack(spacing: size.height * 0.025) {
+                BoxNote(text: $model.board.boxes[index].text, height: size.height * 0.2, fontSize: max(13, size.height * 0.032))
+                HStack(spacing: 10) {
+                    Button(action: open) {
+                        Label("Open \(board.name)", systemImage: "square.grid.2x2")
+                            .font(.system(size: max(11, h * 0.3), weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open the board this note is on")
+                    Spacer()
+                    BigButton(title: "Pending", symbol: "clock", height: h, action: pending)
+                        .help("Not done yet: put this away, and it comes up again next hour")
+                    BigButton(title: "Completed", symbol: "checkmark", prominent: true, height: h, action: completed)
+                        .help("Done: no more reminders until \(repeats.until)")
+                }
+            }
+        }
+    }
+
+    static func line(_ repeats: NoteRepeat, status: NoteStatus?) -> String {
+        let period = repeats == .daily ? "today" : repeats == .weekly ? "this week" : "this month"
+        switch status {
+        case .pending: return "pending · not completed \(period)"
+        default: return "not completed \(period)"
+        }
     }
 }

@@ -69,7 +69,7 @@ final class ScreenRecorder: ObservableObject {
 
     /// Screen Recording is allowed; if not, macOS is asked (the first time it shows its own
     /// prompt) and its settings page is opened.
-    private static func mayCapture() -> Bool {
+    static func mayCapture() -> Bool {
         if CGPreflightScreenCaptureAccess() { return true }
         if !CGRequestScreenCaptureAccess() {
             HUD.shared.show(title: "Screen Recording is off",
@@ -296,8 +296,12 @@ final class RegionPicker {
     private var windows: [NSWindow] = []
     private let done: ((rect: CGRect, screen: NSScreen)?) -> Void
     private var finished = false
+    /// What it says before a box is dragged.
+    private let hint: String
 
-    init(done: @escaping ((rect: CGRect, screen: NSScreen)?) -> Void) {
+    init(hint: String = "Drag a box around what to record  ·  click for the whole screen  ·  Esc to cancel",
+         done: @escaping ((rect: CGRect, screen: NSScreen)?) -> Void) {
+        self.hint = hint
         self.done = done
     }
 
@@ -313,6 +317,7 @@ final class RegionPicker {
             w.isReleasedWhenClosed = false
             w.acceptsMouseMovedEvents = true
             let view = PickerView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            view.hint = hint
             view.picked = { [weak self, weak w] local in
                 guard let self, let w else { return }
                 self.finish((rect: w.convertToScreen(local), screen: screen))
@@ -348,6 +353,7 @@ private final class PickerWindow: NSWindow {
 private final class PickerView: NSView {
     var picked: ((NSRect) -> Void)?
     var cancelled: (() -> Void)?
+    var hint = ""
     private var start: NSPoint?
     private var box: NSRect?
 
@@ -404,7 +410,6 @@ private final class PickerView: NSView {
             let size = "\(Int(box.width)) × \(Int(box.height))"
             draw(size, at: NSPoint(x: box.minX, y: box.minY - 24), small: true)
         } else {
-            let hint = "Drag a box around what to record  ·  click for the whole screen  ·  Esc to cancel"
             draw(hint, centeredAt: NSPoint(x: bounds.midX, y: bounds.midY))
         }
     }

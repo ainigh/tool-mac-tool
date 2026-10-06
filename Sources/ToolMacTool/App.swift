@@ -45,6 +45,10 @@ final class AppModel: ObservableObject {
         r.onSaved = { [weak self] _ in self?.recordings.reload() }
         return r
     }()
+    /// The panel's groups pinned to float on the screen.
+    lazy var groups = PinnedGroups(app: self)
+    /// The screenshot tool.
+    lazy var screenshots = Screenshots()
     lazy var audioRecorder: AudioRecorder = {
         let r = AudioRecorder()
         r.onSaved = { [weak self] _ in self?.recordings.reload() }
@@ -58,9 +62,23 @@ final class AppModel: ObservableObject {
         // The scheduler hears of what goes into the timer log (its event jobs), runs the chimes
         // (its built-in jobs), and reads the battery and the boards' alarms for its placeholders.
         scheduler.attach(activity: activity, timers: timers, boards: boards)
+        // Test mode's fast clock coming or going: the schedules are planned again from the new
+        // time; leaving it, what was set on the fast clock is cleared up.
+        ModeCenter.shared.onClockChange = { [weak self] leftTest in
+            guard let self else { return }
+            if leftTest {
+                let now = Date()
+                self.boards.leftTestClock(now: now)
+                self.timers.leftTestClock(now: now)
+                self.activity.dropFuture(after: now)
+            }
+            self.scheduler.replanAll()
+        }
+        ModeCenter.shared.start()
         scheduler.start()
         timers.start()
         boards.start()
+        groups.restore()
         // Start at login from the first launch; the panel has a switch to turn it off.
         let key = "didSetUpOpenAtLogin"
         if !UserDefaults.standard.bool(forKey: key), Bundle.main.bundleURL.pathExtension == "app" {
@@ -69,7 +87,9 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// A tile: the panel goes away (it would sit over what the tool opens), then the tool opens.
     func open(_ tool: Tool) {
+        MenuPanel.close()
         tool.open(self)
     }
 

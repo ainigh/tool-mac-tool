@@ -146,7 +146,7 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Down its left: its icon, a timer or a due date (one per box), and its tags. At its top right: dock it in the panel, or pin it to float on your screen. Click a web address to open it.")
+            Text("Double-click a box to change its color. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily, Weekly or Monthly (a reminder every hour until it's done). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -233,15 +233,27 @@ struct BoardBox: View {
     @State private var copied = false
 
     var body: some View {
+        GeometryReader { g in
+            content(wide: g.size.width >= 340, roomy: g.size.width >= 300 && g.size.height >= 330, width: g.size.width)
+                .frame(width: g.size.width, height: g.size.height)
+        }
+    }
+
+    /// `wide`: room for the buttons' words (else their first letters or icons); `roomy`: room to
+    /// play a YouTube video in the box.
+    private func content(wide: Bool, roomy: Bool, width: CGFloat) -> some View {
         let box = model.board.boxes[index]
         let t = Board.tints[box.tint]
         let fill = Color(red: t.red, green: t.green, blue: t.blue)
         let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-        HStack(alignment: .top, spacing: 0) {
+        return HStack(alignment: .top, spacing: 0) {
             NoteSideColumn(store: store, board: board, index: index, box: box)
                 .padding(.leading, 3)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
+                    // Next to the note's icon: Daily, Weekly, Monthly (one at a time).
+                    RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
+                        .padding(.leading, 2)
                     // The strip above the text: a double-click here steps the color too.
                     Color.clear
                         .contentShape(Rectangle())
@@ -275,17 +287,30 @@ struct BoardBox: View {
                 .padding(.horizontal, 3)
                 .padding(.top, 2)
                 BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, onDoubleClick: cycle)
-                    .padding([.horizontal, .bottom], 4)
+                    .padding([.horizontal], 4)
+                LinkStrip(text: box.text, roomy: roomy, width: width - 40)
+                    .padding(.horizontal, 4)
                 if let openBoard {
                     OpenBoardButton(board: board, action: openBoard)
-                        .padding(.bottom, 8)
+                        .padding(.top, 4)
                 }
+                // Bottom left: To do, Pending, Completed (one at a time); bottom right: the tags.
+                HStack(spacing: 4) {
+                    StatusButtons(store: store, board: board, index: index, on: box.status, short: !wide)
+                    Spacer(minLength: 4)
+                    ForEach(NoteTag.allCases, id: \.self) { tag in
+                        TagButton(tag: tag, on: box.has(tag), height: 18) { store.toggle(tag, board, index) }
+                    }
+                }
+                .frame(height: 20)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 3)
             }
         }
         .overlay(alignment: .top) {
             if let alarm = box.alarm, let spec = alarm.timer {
                 BoxCountdown(alarm: alarm, spec: spec) {
-                    if spec.isOneOff, spec.phase(alarm.state, now: Date()) == .finished {
+                    if spec.isOneOff, spec.phase(alarm.state, now: AppClock.now()) == .finished {
                         store.dismiss(board, index)
                     } else {
                         store.stop(board, index)
@@ -349,8 +374,8 @@ struct OpenBoardButton: View {
 
 /// The thin column down a box's left: its icon at the top (a click picks another), then its five
 /// timers (two countdowns, two repeating ones and a due date; the one it runs is filled in, a click
-/// opens its choices), and its four tags at the bottom (a click turns one on or off). The buttons
-/// shrink to fit a small box.
+/// opens its choices). The buttons shrink to fit a small box. (Its tags are along the bottom, at
+/// the right.)
 private struct NoteSideColumn: View {
     let store: BoardStore
     let board: BoardStore.Kind
@@ -359,17 +384,13 @@ private struct NoteSideColumn: View {
 
     var body: some View {
         GeometryReader { g in
-            let count = CGFloat(1 + TimerSpec.forBoxes.count + NoteTag.allCases.count)
+            let count = CGFloat(1 + TimerSpec.forBoxes.count)
             let h = max(9, min(19, (g.size.height - 10 - 2 * count) / count))
             VStack(spacing: 2) {
                 NoteIconButton(store: store, board: board, index: index, symbol: box.icon ?? board.symbol, height: h)
                     .padding(.bottom, 2)
                 ForEach(TimerSpec.forBoxes) { spec in
                     AlarmButton(spec: spec, store: store, board: board, index: index, alarm: box.alarm, height: h)
-                }
-                Spacer(minLength: 2)
-                ForEach(NoteTag.allCases, id: \.self) { tag in
-                    TagButton(tag: tag, on: box.has(tag), height: h) { store.toggle(tag, board, index) }
                 }
             }
             .padding(.vertical, 3)
@@ -410,7 +431,93 @@ private struct NoteIconButton: View {
     }
 }
 
-/// A tag at the bottom of a note's column: lit in its color when the note has it.
+/// Daily, Weekly, Monthly, at the top left of a note: the one on comes round with a Note
+/// reminder every hour of its day from 6 AM until it's completed. A click asks first.
+private struct RepeatButtons: View {
+    let store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let on: NoteRepeat?
+    let short: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(NoteRepeat.allCases, id: \.self) { r in
+                NotePill(title: short ? String(r.title.prefix(1)) : r.title, symbol: nil, on: on == r,
+                         color: Color(red: 0.16, green: 0.55, blue: 0.42),
+                         help: on == r
+                            ? "\(r.title): on. A Note reminder pops up every hour (6 AM to 10 PM) until it's marked completed, then not again until \(r.until). Click to turn it off."
+                            : "\(r.title): a Note reminder every hour of the day from 6 AM until it's completed, then not again until \(r.until). Click to turn it on (it asks first).") {
+                    store.chooseRepeat(r, board, index)
+                }
+            }
+        }
+        .fixedSize()
+    }
+}
+
+/// To do, Pending, Completed, at the bottom left of a note: at most one is on (a click on the one
+/// on takes it off). A daily, weekly or monthly note uses them: its reminder's Pending and
+/// Completed set them, and a new day, week or month sets it back to To do.
+private struct StatusButtons: View {
+    let store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let on: NoteStatus?
+    let short: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(NoteStatus.allCases, id: \.self) { st in
+                NotePill(title: short ? nil : st.title, symbol: st.symbol, on: on == st, color: Self.color(st),
+                         help: on == st ? "\(st.title): on. Click to take it off." : "Mark it \(st.title) (one at a time)") {
+                    store.toggle(st, board, index)
+                }
+            }
+        }
+        .fixedSize()
+    }
+
+    static func color(_ s: NoteStatus) -> Color {
+        switch s {
+        case .todo: return Color(red: 0.25, green: 0.45, blue: 0.85)
+        case .pending: return Color(red: 0.88, green: 0.55, blue: 0.08)
+        case .completed: return Color(red: 0.18, green: 0.62, blue: 0.32)
+        }
+    }
+}
+
+/// A small capsule on a light note: a word (or an icon, or both), filled in its color when on.
+private struct NotePill: View {
+    let title: String?
+    let symbol: String?
+    let on: Bool
+    let color: Color
+    let help: String
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 9, weight: .bold)) }
+                if let title { Text(title).font(.system(size: 10, weight: on ? .bold : .semibold, design: .rounded)) }
+            }
+            .lineLimit(1)
+            .foregroundStyle(on ? Color.white : Color.black.opacity(hover ? 0.7 : 0.42))
+            .padding(.horizontal, title == nil ? 4 : 6)
+            .frame(minWidth: 18)
+            .frame(height: 17)
+            .background(Capsule().fill(on ? AnyShapeStyle(color) : AnyShapeStyle(Color.black.opacity(hover ? 0.1 : 0.05))))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(help)
+    }
+}
+
+/// A tag at the bottom right of a note: lit in its color when the note has it.
 private struct TagButton: View {
     let tag: NoteTag
     let on: Bool
@@ -561,7 +668,7 @@ private struct DuePicker: View {
 
     /// 9 AM tomorrow: a first guess.
     static func tomorrowMorning(_ calendar: Calendar = .current) -> Date {
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: Date()) ?? Date().addingTimeInterval(86_400)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: AppClock.now()) ?? AppClock.now().addingTimeInterval(86_400)
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
 
@@ -573,7 +680,7 @@ private struct DuePicker: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            DatePicker("", selection: $date, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+            DatePicker("", selection: $date, in: AppClock.now()..., displayedComponents: [.date, .hourAndMinute])
                 .datePickerStyle(.graphical)
                 .labelsHidden()
             HStack(spacing: 5) {
@@ -584,7 +691,7 @@ private struct DuePicker: View {
                 quick("1 year", .year, 1)
             }
             .controlSize(.small)
-            Text(date > Date() ? "In \(TimerText.span(date.timeIntervalSinceNow)) · \(date.formatted(date: .complete, time: .shortened))"
+            Text(date > AppClock.now() ? "In \(TimerText.span(date.timeIntervalSince(AppClock.now()))) · \(date.formatted(date: .complete, time: .shortened))"
                                : "Pick a time that's still ahead")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -606,7 +713,7 @@ private struct DuePicker: View {
                     done()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(date <= Date())
+                .disabled(date <= AppClock.now())
             }
         }
         .padding(14)
@@ -616,7 +723,7 @@ private struct DuePicker: View {
     /// "1 week": that long from now.
     private func quick(_ title: String, _ unit: Calendar.Component, _ n: Int) -> some View {
         Button(title) {
-            if let d = Calendar.current.date(byAdding: unit, value: n, to: Date()) { date = d }
+            if let d = Calendar.current.date(byAdding: unit, value: n, to: AppClock.now()) { date = d }
         }
         .help("Due \(title) from now")
     }
@@ -631,7 +738,7 @@ private struct BoxCountdown: View {
     var body: some View {
         let look = TimerLook.of(spec)
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let phase = spec.phase(alarm.state, now: context.date)
+            let phase = spec.phase(alarm.state, now: AppClock.time(at: context.date))
             let ringing = phase == .finished
             HStack(spacing: 5) {
                 Image(systemName: look.symbol)
@@ -750,8 +857,12 @@ struct BoxEditor: NSViewRepresentable {
             return dragging
         }
 
-        // Only plain text comes in: the look is the note's own.
-        override func paste(_ sender: Any?) { pasteAsPlainText(sender) }
+        // Only plain text comes in: the look is the note's own. A web address pasted has its
+        // page's icon and title fetched straight away (shown under the text).
+        override func paste(_ sender: Any?) {
+            if let pasted = NSPasteboard.general.string(forType: .string) { LinkPreviews.shared.pasted(pasted) }
+            pasteAsPlainText(sender)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

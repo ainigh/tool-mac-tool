@@ -24,9 +24,19 @@ public struct Board: Codable, Equatable, Sendable {
         public var tags: [NoteTag]
         /// Docked in the row along the bottom of the menu bar panel.
         public var docked: Bool
+        /// Daily, weekly or monthly: a note reminder pops up every hour of its day from 6 AM until
+        /// it's marked completed (nil: none).
+        public var repeats: NoteRepeat?
+        /// To do, pending or completed (at most one; nil: none of them).
+        public var status: NoteStatus?
+        /// When the status was last set.
+        public var statusAt: Date?
+        /// The last hour a note reminder came up for (or when the repeat was turned on).
+        public var remindedAt: Date?
 
         public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
-                    tags: [NoteTag] = [], docked: Bool = false) {
+                    tags: [NoteTag] = [], docked: Bool = false, repeats: NoteRepeat? = nil, status: NoteStatus? = nil,
+                    statusAt: Date? = nil, remindedAt: Date? = nil) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
@@ -34,11 +44,17 @@ public struct Board: Codable, Equatable, Sendable {
             self.icon = icon
             self.tags = tags
             self.docked = docked
+            self.repeats = repeats
+            self.status = status
+            self.statusAt = statusAt
+            self.remindedAt = remindedAt
         }
 
-        private enum CodingKeys: String, CodingKey { case text, tint, alarm, pinned, icon, tags, docked }
+        private enum CodingKeys: String, CodingKey {
+            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt
+        }
 
-        // A file from before timers, pins, icons, tags and the dock has none of them.
+        // A file from before timers, pins, icons, tags, the dock, repeats and statuses has none of them.
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -50,6 +66,54 @@ public struct Board: Codable, Equatable, Sendable {
             let names = (try? c.decodeIfPresent([String].self, forKey: .tags)) ?? nil
             tags = NoteTag.allCases.filter { (names ?? []).contains($0.rawValue) }
             docked = try c.decodeIfPresent(Bool.self, forKey: .docked) ?? false
+            repeats = (try? c.decodeIfPresent(NoteRepeat.self, forKey: .repeats)) ?? nil
+            status = (try? c.decodeIfPresent(NoteStatus.self, forKey: .status)) ?? nil
+            statusAt = try c.decodeIfPresent(Date.self, forKey: .statusAt)
+            remindedAt = try c.decodeIfPresent(Date.self, forKey: .remindedAt)
+        }
+
+        /// The status set (or, when it's the one already on, taken off: at most one is on).
+        public mutating func toggle(_ new: NoteStatus, now: Date) {
+            status = status == new ? nil : new
+            statusAt = now
+        }
+
+        /// The repeat turned on (it's To do from now; whatever repeat it had goes) or off.
+        public mutating func setRepeat(_ new: NoteRepeat?, now: Date) {
+            repeats = new
+            remindedAt = new == nil ? nil : now
+            if new != nil {
+                status = .todo
+                statusAt = now
+            }
+        }
+
+        /// Completed in the period `now` is in (the day, the week from Monday, the month).
+        public func isDone(now: Date, calendar: Calendar) -> Bool {
+            guard let repeats, status == .completed, let statusAt,
+                  let period = repeats.period(containing: now, calendar: calendar) else { return false }
+            return period.contains(statusAt)
+        }
+
+        /// A new period has begun since the status was set: it goes back to To do. Returns
+        /// whether it changed anything.
+        public mutating func rollOver(now: Date, calendar: Calendar) -> Bool {
+            guard let repeats, let period = repeats.period(containing: now, calendar: calendar) else { return false }
+            guard status != .todo, statusAt.map({ $0 < period.start }) ?? true else { return false }
+            status = .todo
+            statusAt = period.start
+            return true
+        }
+
+        /// The hour a note reminder is due for at `now`, if one is: on the hour, 6 AM to 10 PM,
+        /// later than the last one (and than when the repeat was turned on), while it isn't
+        /// completed for this period. Hours missed (asleep) aren't made up: only the latest comes.
+        public func reminderDue(now: Date, calendar: Calendar) -> Date? {
+            guard repeats != nil, !isDone(now: now, calendar: calendar),
+                  let hour = calendar.dateInterval(of: .hour, for: now)?.start,
+                  NoteRepeat.hours.contains(calendar.component(.hour, from: hour)) else { return nil }
+            if let remindedAt, remindedAt >= hour { return nil }
+            return hour
         }
 
         public func has(_ tag: NoteTag) -> Bool { tags.contains(tag) }
@@ -179,6 +243,79 @@ public enum NoteTag: String, Codable, CaseIterable, Sendable {
         case .urgent: return "flame.fill"
         case .delegate: return "arrowshape.turn.up.right.fill"
         case .think: return "brain.head.profile"
+        }
+    }
+}
+
+/// How often a note comes round: every day, every week (from Monday) or every month (from the 1st).
+public enum NoteRepeat: String, Codable, CaseIterable, Sendable {
+    case daily, weekly, monthly
+
+    public var title: String {
+        switch self {
+        case .daily: return "Daily"
+        case .weekly: return "Weekly"
+        case .monthly: return "Monthly"
+        }
+    }
+
+    /// The hours of the day a reminder comes on the hour: 6 AM to 10 PM.
+    public static let hours = Array(6...22)
+
+    /// The day, the week (Monday to Sunday) or the month `date` is in.
+    public func period(containing date: Date, calendar: Calendar) -> DateInterval? {
+        switch self {
+        case .daily: return calendar.dateInterval(of: .day, for: date)
+        case .weekly:
+            var c = calendar
+            c.firstWeekday = 2
+            return c.dateInterval(of: .weekOfYear, for: date)
+        case .monthly: return calendar.dateInterval(of: .month, for: date)
+        }
+    }
+
+    /// When completing it lasts until, in words.
+    public var until: String {
+        switch self {
+        case .daily: return "tomorrow"
+        case .weekly: return "next Monday"
+        case .monthly: return "the 1st of next month"
+        }
+    }
+
+    /// What turning it on means, in a few sentences (the confirmation says it).
+    public func meaning(note: String) -> String {
+        let days: String
+        switch self {
+        case .daily: days = "Every day"
+        case .weekly: days = "Every week, from Monday"
+        case .monthly: days = "Every month, from the 1st"
+        }
+        return "\(days), a Note reminder for \u{201C}\(note)\u{201D} pops up every hour on the hour, 6 AM to 10 PM. "
+            + "Pending puts it away until the next hour. Completed puts it away until \(until), and marks the note Completed. "
+            + "At the start of each \(self == .daily ? "day" : self == .weekly ? "week" : "month") the note goes back to To do. "
+            + "This repeats until you turn \(title) off."
+    }
+}
+
+/// Where a note's got to: at most one is on.
+public enum NoteStatus: String, Codable, CaseIterable, Sendable {
+    case todo, pending, completed
+
+    public var title: String {
+        switch self {
+        case .todo: return "To do"
+        case .pending: return "Pending"
+        case .completed: return "Completed"
+        }
+    }
+
+    /// An SF Symbol name.
+    public var symbol: String {
+        switch self {
+        case .todo: return "circle"
+        case .pending: return "clock"
+        case .completed: return "checkmark.circle.fill"
         }
     }
 }
