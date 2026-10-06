@@ -1,73 +1,37 @@
 import Foundation
 
 /// The scheduler's jobs: at the times you set (or when something happens: an alarm goes off, the
-/// battery gets low, a day's count goes over a limit), each does one thing with its text: asks the
-/// model (which can use the model tools and your shortcuts), shows it as a reminder, says it out
-/// loud, runs one of the model tools or a shortcut, calls a web address, or chimes. The day chime
-/// and the night watch are built-in jobs: on from the start, and they can't be deleted.
+/// battery gets low, a day's count goes over a limit), each runs an action (`SavedAction`, made in
+/// Actions) with the arguments it gives. The day chime and the night watch are built-in jobs: on
+/// from the start, and they can't be deleted.
 public struct ScheduledJob: Codable, Equatable, Identifiable {
-    /// What a job does with its text.
-    public enum Action: String, Codable, CaseIterable {
-        /// The text is a prompt: the model answers it, and may call tools while it does.
-        case askModel
-        /// The text is shown on a card that stays until you close it.
-        case remind
-        /// The text is read out in the voice from Read aloud.
-        case speak
-        /// The text is what one of the model tools is given (`target`: its name, e.g. sound_alarm).
-        case tool
-        /// The text is a shortcut's input (`target`: the shortcut's name).
-        case shortcut
-        /// The text is POSTed to a web address (`target`); empty, the event goes as JSON (the
-        /// shape the timer log's signals had).
-        case webhook
-        /// A chime and its card (`target`: "day" for the day chime's, "night" for the night watch's).
-        case chime
-
-        public var title: String {
-            switch self {
-            case .askModel: return "Ask the model"
-            case .remind: return "Remind me"
-            case .speak: return "Say it"
-            case .tool: return "Model tool"
-            case .shortcut: return "Shortcut"
-            case .webhook: return "Call a web address"
-            case .chime: return "Chime"
-            }
-        }
-
-        public var symbol: String {
-            switch self {
-            case .askModel: return "sparkles"
-            case .remind: return "bell"
-            case .speak: return "speaker.wave.2"
-            case .tool: return "wrench.and.screwdriver"
-            case .shortcut: return "bolt.horizontal.circle"
-            case .webhook: return "paperplane"
-            case .chime: return "bell.and.waves.left.and.right"
-            }
-        }
-
-        /// It gives back text worth showing or saying (a reminder is already shown, a spoken line said).
-        public var hasResult: Bool { self == .askModel || self == .shortcut || self == .webhook }
-    }
+    /// What a step does (what a job did, before actions were their own).
+    public typealias Action = ActionStep.Kind
 
     /// The built-in jobs' ids: on from the start, kept (they can be turned off, not deleted).
     public enum Builtin: String, CaseIterable, Sendable {
         case dayChime = "day-chime"
         case nightWatch = "night-chime"
 
+        /// The built-in action it runs.
+        public var action: SavedAction.Builtin {
+            switch self {
+            case .dayChime: return .dayChime
+            case .nightWatch: return .nightWatch
+            }
+        }
+
         /// The job as it comes: a chime every hour, through the day or through the night.
         public var job: ScheduledJob {
             switch self {
             case .dayChime:
-                return ScheduledJob(id: "builtin-\(rawValue)", name: "Day chime", enabled: true, action: .chime, target: "day",
+                return ScheduledJob(id: "builtin-\(rawValue)", name: "Day chime", enabled: true,
                                     when: Schedule(kind: .hourly, minute: 0, hours: Schedule.dayHours), showResult: false,
-                                    builtin: rawValue)
+                                    builtin: rawValue, actionID: action.id)
             case .nightWatch:
-                return ScheduledJob(id: "builtin-\(rawValue)", name: "Night watch", enabled: true, action: .chime, target: "night",
+                return ScheduledJob(id: "builtin-\(rawValue)", name: "Night watch", enabled: true,
                                     when: Schedule(kind: .hourly, minute: 0, hours: Schedule.nightHours), showResult: false,
-                                    builtin: rawValue)
+                                    builtin: rawValue, actionID: action.id)
             }
         }
     }
@@ -75,15 +39,15 @@ public struct ScheduledJob: Codable, Equatable, Identifiable {
     public var id: String
     public var name: String
     public var enabled: Bool
-    public var action: Action
-    /// The model tool's name or the shortcut's name; for Ask the model, a model ("" is the chat's).
-    public var target: String
-    /// The prompt, the reminder, or what the tool or shortcut is given. {{date}}, {{time}},
-    /// {{last}} (the previous result) and {{clipboard}} are filled in when it runs.
-    public var text: String
+    /// The action it runs (an id in the `ActionBook`; "" when none is picked yet).
+    public var actionID: String
+    /// The values it gives the action's arguments. {{date}}, {{time}}, {{last}} (the previous
+    /// result), {{clipboard}} and the rest are filled in when it runs.
+    public var arguments: [ActionArgument]
+    /// What it did itself, before actions were their own (an older file, or a job made with one):
+    /// made into an action of its own (`ScheduleBook.separate`), and then nil.
+    public var inline: ActionStep?
     public var when: Schedule
-    /// Ask the model: it may call the model tools and your shortcuts.
-    public var useTools: Bool
     /// What happens with a result: a card on screen, read out loud.
     public var showResult: Bool
     public var speakResult: Bool
@@ -92,34 +56,34 @@ public struct ScheduledJob: Codable, Equatable, Identifiable {
     public var lastRun: Date?
     public var lastResult: String?
     public var lastOK: Bool?
-    /// Call a web address: sent as "Authorization: Bearer <secret>" when it isn't empty.
-    public var secret: String
     /// Which built-in job this is (`Builtin`), if it's one: it can't be deleted.
     public var builtin: String?
 
     public var isBuiltin: Bool { builtin != nil }
 
+    /// A job running `actionID`; or, given `action`, one that does that itself until it's separated
+    /// into an action of its own (with `target`, `text`, `useTools` and `secret`).
     public init(id: String = UUID().uuidString, name: String = "New schedule", enabled: Bool = true,
-                action: Action = .remind, target: String = "", text: String = "", when: Schedule = Schedule(),
+                action: Action? = nil, target: String = "", text: String = "", when: Schedule = Schedule(),
                 useTools: Bool = true, showResult: Bool = true, speakResult: Bool = false, secret: String = "",
-                builtin: String? = nil) {
+                builtin: String? = nil, actionID: String = "", arguments: [ActionArgument] = []) {
         self.id = id
         self.name = name
         self.enabled = enabled
-        self.action = action
-        self.target = target
-        self.text = text
+        self.actionID = actionID
+        self.arguments = arguments
+        self.inline = action.map { ActionStep(kind: $0, target: target, text: text, useTools: useTools, secret: secret) }
         self.when = when
-        self.useTools = useTools
         self.showResult = showResult
         self.speakResult = speakResult
-        self.secret = secret
         self.builtin = builtin
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, enabled, action, target, text, when, useTools, showResult, speakResult, next, lastRun,
-             lastResult, lastOK, secret, builtin
+        case id, name, enabled, actionID, arguments, inline, when, showResult, speakResult, next, lastRun,
+             lastResult, lastOK, builtin
+        // What a job did itself, before actions.
+        case action, target, text, useTools, secret
     }
 
     public init(from decoder: Decoder) throws {
@@ -127,19 +91,43 @@ public struct ScheduledJob: Codable, Equatable, Identifiable {
         id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "Schedule"
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        action = (try? c.decodeIfPresent(Action.self, forKey: .action)) ?? .remind
-        target = try c.decodeIfPresent(String.self, forKey: .target) ?? ""
-        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        actionID = try c.decodeIfPresent(String.self, forKey: .actionID) ?? ""
+        arguments = (try? c.decodeIfPresent([ActionArgument].self, forKey: .arguments)) ?? []
+        inline = try? c.decodeIfPresent(ActionStep.self, forKey: .inline)
+        if inline == nil, actionID.isEmpty, c.contains(.action) {
+            // A file from before actions: what the job did becomes its action when it's separated.
+            inline = ActionStep(kind: (try? c.decodeIfPresent(Action.self, forKey: .action)) ?? .remind,
+                                target: try c.decodeIfPresent(String.self, forKey: .target) ?? "",
+                                text: try c.decodeIfPresent(String.self, forKey: .text) ?? "",
+                                useTools: try c.decodeIfPresent(Bool.self, forKey: .useTools) ?? true,
+                                secret: try c.decodeIfPresent(String.self, forKey: .secret) ?? "")
+        }
         when = (try? c.decodeIfPresent(Schedule.self, forKey: .when)) ?? Schedule()
-        useTools = try c.decodeIfPresent(Bool.self, forKey: .useTools) ?? true
         showResult = try c.decodeIfPresent(Bool.self, forKey: .showResult) ?? true
         speakResult = try c.decodeIfPresent(Bool.self, forKey: .speakResult) ?? false
         next = try c.decodeIfPresent(Date.self, forKey: .next)
         lastRun = try c.decodeIfPresent(Date.self, forKey: .lastRun)
         lastResult = try c.decodeIfPresent(String.self, forKey: .lastResult)
         lastOK = try c.decodeIfPresent(Bool.self, forKey: .lastOK)
-        secret = try c.decodeIfPresent(String.self, forKey: .secret) ?? ""
         builtin = try c.decodeIfPresent(String.self, forKey: .builtin)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(actionID, forKey: .actionID)
+        try c.encode(arguments, forKey: .arguments)
+        try c.encodeIfPresent(inline, forKey: .inline)
+        try c.encode(when, forKey: .when)
+        try c.encode(showResult, forKey: .showResult)
+        try c.encode(speakResult, forKey: .speakResult)
+        try c.encodeIfPresent(next, forKey: .next)
+        try c.encodeIfPresent(lastRun, forKey: .lastRun)
+        try c.encodeIfPresent(lastResult, forKey: .lastResult)
+        try c.encodeIfPresent(lastOK, forKey: .lastOK)
+        try c.encodeIfPresent(builtin, forKey: .builtin)
     }
 
     /// Sets `next` from `now`: the first time the schedule gives after it (nil when it's off, or a
@@ -742,12 +730,42 @@ public struct ScheduleBook: Codable, Equatable {
         try encoder.encode(self).write(to: url, options: .atomic)
     }
 
-    /// The built-in jobs are all there (one that's missing is added, on); they go first.
+    /// The built-in jobs are all there (one that's missing is added, on); they go first, each
+    /// running its built-in action.
     public mutating func ensureBuiltins() {
         for b in ScheduledJob.Builtin.allCases.reversed() where !jobs.contains(where: { $0.builtin == b.rawValue }) {
             jobs.insert(b.job, at: 0)
         }
+        for i in jobs.indices {
+            if let b = jobs[i].builtin.flatMap(ScheduledJob.Builtin.init(rawValue:)) {
+                jobs[i].actionID = b.action.id
+                jobs[i].inline = nil
+            }
+        }
     }
+
+    /// Each job that still does something itself (from before actions) gets an action of its own,
+    /// named after it, doing that; the job runs it from then on. Returns whether anything changed.
+    @discardableResult
+    public mutating func separate(into book: inout ActionBook) -> Bool {
+        var changed = false
+        for i in jobs.indices {
+            guard let step = jobs[i].inline else { continue }
+            if let b = jobs[i].builtin.flatMap(ScheduledJob.Builtin.init(rawValue:)) {
+                jobs[i].actionID = b.action.id
+            } else {
+                let action = SavedAction(name: jobs[i].name.isEmpty ? "Action" : jobs[i].name, steps: [step])
+                book.actions.append(action)
+                jobs[i].actionID = action.id
+            }
+            jobs[i].inline = nil
+            changed = true
+        }
+        return changed
+    }
+
+    /// The jobs that run an action (by its id).
+    public func jobs(running id: String) -> [ScheduledJob] { jobs.filter { $0.actionID == id } }
 
     /// The timer log's thresholds and signals, as schedules: each threshold waits for its count to
     /// go over the limit and puts up a card; each kind of signal that was sent becomes a job that

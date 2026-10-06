@@ -131,7 +131,7 @@ struct ChimeTile: View {
 
     /// On or off, after saying what that means.
     private func flip(_ job: ScheduledJob?, on: Bool) {
-        guard let job, Confirm.schedule(job, on: !on, clock24: scheduler.prefs.settings.clock24) else { return }
+        guard let job, Confirm.schedule(job, doing: scheduler.doing(job), on: !on, clock24: scheduler.prefs.settings.clock24) else { return }
         scheduler.setEnabled(job.id, !on)
     }
 

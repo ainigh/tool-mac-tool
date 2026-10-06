@@ -3,9 +3,9 @@ import SwiftUI
 import ToolCore
 
 // The Scheduler's window: a glass panel as big as the diagram's, its jobs down the left (the
-// built-in chimes first) and the one you pick on the right: what it does, its text (with the
-// placeholders to insert), when it runs (or what it waits for), what happens with the result, and
-// what happened each time it ran.
+// built-in chimes first) and the one you pick on the right: the action it runs (made in Actions)
+// and the values it gives that action's arguments, when it runs (or what it waits for), what
+// happens with the result, and what happened each time it ran.
 
 @MainActor
 enum SchedulerWindow {
@@ -73,6 +73,8 @@ struct SchedulerView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 28)
                     .help("Drag to move")
+                PillButton(title: "Actions") { ActionsWindow.show(scheduler) }
+                    .help("What schedules run: make and change actions there")
                 PillButton(title: "New schedule", prominent: true) { focus.selected = scheduler.add() }
                     .help("A new schedule (⌘N)")
                 GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
@@ -124,11 +126,11 @@ struct SchedulerView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 ForEach(scheduler.book.jobs) { job in
-                    JobRow(job: job, selected: focus.selected == job.id, running: scheduler.running.contains(job.id),
-                           clock24: scheduler.prefs.settings.clock24,
+                    JobRow(job: job, action: scheduler.action(job.actionID), selected: focus.selected == job.id,
+                           running: scheduler.running.contains(job.id), clock24: scheduler.prefs.settings.clock24,
                            toggle: { on in
                                // Asks first, saying what turning it on or off means.
-                               guard Confirm.schedule(job, on: on, clock24: scheduler.prefs.settings.clock24) else { return }
+                               guard Confirm.schedule(job, doing: scheduler.doing(job), on: on, clock24: scheduler.prefs.settings.clock24) else { return }
                                var j = job
                                j.enabled = on
                                scheduler.update(j)
@@ -148,7 +150,7 @@ struct SchedulerView: View {
             Text(scheduler.book.jobs.isEmpty ? "Nothing scheduled yet" : "Pick a schedule")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(Ink.reply(ink))
-            Text("A schedule takes some text and, at the times you set or when something happens (an alarm, the battery, a day's count over a limit, the month starting), asks the model with it (the model can use the model tools and your shortcuts), shows it as a reminder, says it, hands it to a model tool or a shortcut, calls a web address with it, or chimes.")
+            Text("A schedule runs an action (made in Actions) at the times you set or when something happens (an alarm, the battery, a day's count over a limit, the month starting), giving it the values its arguments need.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -159,9 +161,10 @@ struct SchedulerView: View {
     }
 }
 
-/// A job in the list: what it does, when, when it runs next (or what it waits for), and its switch.
+/// A job in the list: its action's icon, when, when it runs next (or what it waits for), and its switch.
 struct JobRow: View {
     let job: ScheduledJob
+    let action: SavedAction?
     let selected: Bool
     let running: Bool
     let clock24: Bool
@@ -170,11 +173,11 @@ struct JobRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: job.action.symbol)
+            Image(systemName: action?.symbol ?? "questionmark")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
-                .background(Circle().fill(JobRow.color(job.action).opacity(job.enabled ? 0.85 : 0.3)))
+                .background(Circle().fill(JobRow.color(action?.steps.first?.kind ?? .remind).opacity(job.enabled && action != nil ? 0.85 : 0.3)))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Text(job.name.isEmpty ? "Untitled" : job.name)
@@ -188,7 +191,7 @@ struct JobRow: View {
                             .help("Built in: it can be turned off and its hours changed, not deleted")
                     }
                 }
-                Text(job.when.describe(clock24: clock24))
+                Text(job.when.describe(clock24: clock24) + " · " + (action?.name ?? "no action picked"))
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)
@@ -241,6 +244,7 @@ struct JobRow: View {
         case .shortcut: return Color(red: 0.93, green: 0.3, blue: 0.45)
         case .webhook: return Color(red: 0.2, green: 0.62, blue: 0.62)
         case .chime: return Color(red: 0.9, green: 0.3, blue: 0.62)
+        case .runAction: return Color(red: 0.45, green: 0.5, blue: 0.95)
         }
     }
 }
@@ -283,18 +287,19 @@ struct FlowLayout: Layout {
     }
 }
 
-/// One job, to edit: its name, what it does and with which text, when, what happens with the
-/// result, and its history. A built-in job's name and what it does stay as they are.
+/// One job, to edit: its name, the action it runs and the values it gives that action's
+/// arguments, when, what happens with the result, and its history. A built-in job's name and
+/// action stay as they are.
 struct JobEditor: View {
     @Binding var job: ScheduledJob
     @ObservedObject var scheduler: Scheduler
     let ink: Double
     let select: (String?) -> Void
-    @State private var shortcuts: [String] = []
 
     var settings: AppSettings { scheduler.prefs.settings }
     var runs: [JobRun] { scheduler.book.runs(of: job.id) }
     var running: Bool { scheduler.running.contains(job.id) }
+    var action: SavedAction? { scheduler.action(job.actionID) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
@@ -316,29 +321,33 @@ struct JobEditor: View {
                                 .help("Built in: on from the start. Turn it off or change its hours; it can't be deleted.")
                         }
                     }
-                    section("What it does") { whatRow }
-                    if job.action != .chime {
-                        section(textTitle) {
+                    section("The action it runs") { actionRow }
+                    if let action, !action.parameters.filter({ !$0.name.isEmpty }).isEmpty {
+                        section("Its arguments") {
                             VStack(alignment: .leading, spacing: 8) {
-                                GlassEditor(text: $job.text, hint: textHint, ink: ink)
-                                    .frame(minHeight: 130, maxHeight: 220)
-                                    .padding(10)
-                                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.black.opacity(0.18)))
-                                insertRow
+                                ArgumentFields(parameters: action.parameters, given: $job.arguments)
+                                Text("Empty: the action's own value. They can hold {{…}}: {{date}}, {{time}}, {{last}} (what it gave back last time), {{event}} and the rest of the Scheduler's placeholders.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.45))
                             }
                         }
                     }
                     section("When") { WhenEditor(when: $job.when, clock24: settings.clock24) }
-                    if job.action.hasResult {
+                    if !scheduler.isChime(job) {
                         section("With the result") {
-                            HStack(spacing: 18) {
-                                Toggle("Show it on a card", isOn: $job.showResult)
-                                Toggle("Say it out loud", isOn: $job.speakResult)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 18) {
+                                    Toggle("Show it on a card", isOn: $job.showResult)
+                                    Toggle("Say it out loud", isOn: $job.speakResult)
+                                }
+                                .toggleStyle(.switch)
+                                .controlSize(.small)
+                                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.8))
+                                Text("When the action ends with an answer (the model's, a shortcut's, a web address's): a reminder or a spoken step has already been shown or said.")
+                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(0.45))
                             }
-                            .toggleStyle(.switch)
-                            .controlSize(.small)
-                            .font(.system(size: 12.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.8))
                         }
                     }
                     actions
@@ -350,185 +359,51 @@ struct JobEditor: View {
             history
                 .frame(width: 340)
         }
-        .task(id: job.action) {
-            if job.action == .shortcut, shortcuts.isEmpty {
-                shortcuts = (try? await ShortcutRunner.list()) ?? []
-            }
-        }
     }
 
-    // MARK: Insert
+    // MARK: The action
 
-    /// The placeholders, in their groups: a click adds one to the end of the text.
-    var insertRow: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            ForEach(JobText.groups.indices, id: \.self) { i in
-                let group = JobText.groups[i]
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(group.title)
-                        .frame(width: 92, alignment: .trailing)
-                        .foregroundStyle(.white.opacity(group.title == "What happened" && job.when.kind != .event ? 0.3 : 0.5))
-                    FlowLayout(spacing: 5, lineSpacing: 5) {
-                        ForEach(group.items, id: \.token) { p in
-                            ActionChip(title: p.token, symbol: "plus", help: p.help) {
-                                job.text += (job.text.isEmpty || job.text.hasSuffix(" ") || job.text.hasSuffix("\n") ? "" : " ") + p.token
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .font(.system(size: 11, weight: .medium, design: .rounded))
-    }
-
-    // MARK: What it does
-
-    var whatRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if job.isBuiltin {
-                HStack(spacing: 8) {
-                    PillButton(title: job.action.title, prominent: true) {}
-                    Text("The \(job.target == "night" ? "night watch's" : "day chime's") sound and card.")
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-            } else {
-                FlowLayout(spacing: 6, lineSpacing: 6) {
-                    ForEach(ScheduledJob.Action.allCases, id: \.self) { a in
-                        PillButton(title: a.title, prominent: job.action == a) {
-                            guard job.action != a else { return }
-                            job.action = a
-                            job.target = Self.defaultTarget(a, settings: settings)
-                        }
-                        .help(Self.actionHelp(a))
-                    }
-                }
-            }
+    var actionRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                switch job.action {
-                case .askModel:
-                    MenuPill(title: job.target.isEmpty ? "Chat's model (\(ModelMenu.shortName(settings.model.isEmpty ? "none" : settings.model)))"
-                                                       : ModelMenu.shortName(job.target),
-                             help: "The model that answers",
-                             items: modelItems)
-                    Toggle("Can use the model tools and your shortcuts", isOn: $job.useTools)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .disabled(!settings.toolsOn)
-                        .help(settings.toolsOn ? "It may call the tools turned on in Model tools and Shortcuts (not close the chat; a shortcut set to ask first isn't run)"
-                                               : "Tools are turned off in Model tools")
-                case .tool:
-                    MenuPill(title: modelTools.first { $0.name == job.target }?.kind.title ?? "Pick a tool",
-                             help: "The model tool it runs, with the text",
-                             items: modelTools.map { t -> (String, Bool, () -> Void) in
-                                 (t.kind.title, job.target == t.name, { job.target = t.name })
+                if job.isBuiltin {
+                    PillButton(title: action?.name ?? "Chime", prominent: true) {}
+                } else {
+                    MenuPill(title: action?.name ?? (job.actionID.isEmpty ? "Pick an action" : "Its action is gone: pick another"),
+                             help: "The action it runs (make and change them in Actions)",
+                             items: scheduler.actions.actions.map { a -> (String, Bool, () -> Void) in
+                                 (a.name, job.actionID == a.id, {
+                                     job.actionID = a.id
+                                     job.arguments = a.arguments(keeping: job.arguments)
+                                 })
                              })
-                case .shortcut:
-                    MenuPill(title: job.target.isEmpty ? "Pick a shortcut" : job.target,
-                             help: "The shortcut it runs, with the text as its input",
-                             items: shortcutNames.map { n -> (String, Bool, () -> Void) in
-                                 (n, job.target == n, { job.target = n })
-                             })
-                    if shortcutNames.isEmpty { Text("No shortcuts found yet").foregroundStyle(.white.opacity(0.5)) }
-                case .webhook:
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text("Address").frame(width: 56, alignment: .trailing)
-                            TextField("https://your-worker.your-name.workers.dev/signal", text: $job.target)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        HStack(spacing: 8) {
-                            Text("Secret").frame(width: 56, alignment: .trailing)
-                            SecureField("Optional: sent as Authorization: Bearer …", text: $job.secret)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                        if !job.target.trimmingCharacters(in: .whitespaces).isEmpty, !Self.isWebAddress(job.target) {
-                            Label("That isn't an http(s) address", systemImage: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                        }
+                    PillButton(title: "New action…") {
+                        let id = scheduler.addAction(SavedAction(name: job.name.isEmpty ? "New action" : job.name,
+                                                                 steps: [ActionStep(kind: .remind)]))
+                        job.actionID = id
+                        job.arguments = []
+                        ActionsWindow.show(scheduler, select: id)
                     }
-                    .frame(maxWidth: 560)
-                case .chime:
-                    if !job.isBuiltin {
-                        PillButton(title: "Day chime's card", prominent: job.target != "night") { job.target = "day" }
-                            .help("A ding, and a card with the hour, hours since 6 AM and to 10 PM")
-                        PillButton(title: "Night watch's card", prominent: job.target == "night") { job.target = "night" }
-                            .help("A ding, and a warning card with the hours left before 6 AM")
-                    }
-                case .remind, .speak:
-                    EmptyView()
+                    .help("A new action for this schedule to run, opened in Actions")
+                }
+                if let action {
+                    PillButton(title: "Open in Actions") { ActionsWindow.show(scheduler, select: action.id) }
+                        .help("See or change what it does")
                 }
             }
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundStyle(.white.opacity(0.8))
+            if let action {
+                Text(action.summary + (scheduler.book.jobs(running: action.id).count > 1 ? " · other schedules run it too" : ""))
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
         }
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        .foregroundStyle(.white.opacity(0.8))
     }
-
-    var modelItems: [(String, Bool, () -> Void)] {
-        let chat: (String, Bool, () -> Void) = ("The chat's model" + (settings.model.isEmpty ? "" : " (\(settings.model))"),
-                                                job.target.isEmpty, { job.target = "" })
-        return [chat] + scheduler.models.map { m -> (String, Bool, () -> Void) in (m, job.target == m, { job.target = m }) }
-    }
-
-    /// The model tools a job can run (not closing the chat).
-    var modelTools: [BuiltinTool] { settings.builtins.filter { $0.kind != .closeWindow } }
-
-    /// Your shortcuts: the ones the Shortcuts app has, and the ones set up for the model.
-    var shortcutNames: [String] { Array(Set(shortcuts + settings.shortcuts.map(\.shortcut))).sorted() }
 
     static func isWebAddress(_ text: String) -> Bool {
         guard let u = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), let scheme = u.scheme?.lowercased() else { return false }
         return (scheme == "https" || scheme == "http") && u.host?.isEmpty == false
-    }
-
-    static func defaultTarget(_ action: ScheduledJob.Action, settings: AppSettings) -> String {
-        switch action {
-        case .tool: return BuiltinTool.Kind.soundAlarm.rawValue
-        case .shortcut: return settings.shortcuts.first?.shortcut ?? ""
-        case .chime: return "day"
-        default: return ""
-        }
-    }
-
-    static func actionHelp(_ a: ScheduledJob.Action) -> String {
-        switch a {
-        case .askModel: return "The text is a prompt for the model, which may call tools. Its answer goes on a card or is read out."
-        case .remind: return "The text comes up on a card that stays until you close it (big, in the middle, for a count gone over its limit)."
-        case .speak: return "The text is read out in the voice from Read aloud."
-        case .tool: return "One of the model tools (alarm, open a link, copy, draw a diagram) runs with the text."
-        case .shortcut: return "One of your Apple Shortcuts runs with the text as its input; what it gives back can go on a card or be read out."
-        case .webhook: return "The text is POSTed to a web address (a Cloudflare worker, say). Leave it empty to send what happened as JSON, as the timer log's signals did."
-        case .chime: return "A ding and a card, like the day chime's or the night watch's."
-        }
-    }
-
-    var textTitle: String {
-        switch job.action {
-        case .askModel: return "The prompt"
-        case .remind: return "The reminder"
-        case .speak: return "What to say"
-        case .tool, .shortcut: return "What it's given"
-        case .webhook: return "What it sends"
-        case .chime: return "Text"
-        }
-    }
-
-    var textHint: String {
-        switch job.action {
-        case .askModel: return "What should the model do? e.g. Look up tomorrow's weather and tell me whether to take an umbrella."
-        case .remind: return "e.g. Drink some water."
-        case .speak: return "e.g. Time for the stand-up."
-        case .tool:
-            switch BuiltinTool.Kind(rawValue: job.target) {
-            case .soundAlarm: return "How many seconds the alarm sounds, e.g. 10"
-            case .openURL: return "The web address, e.g. https://news.ycombinator.com"
-            case .drawDiagram: return "What to draw"
-            case .copyText: return "The text to put on the clipboard"
-            default: return "What the tool is given"
-            }
-        case .shortcut: return "The shortcut's input (it can be empty)"
-        case .webhook: return "Empty: what happened, as JSON. Or write your own, e.g. {\"text\": \"{{event}}\", \"battery\": \"{{battery}}\"}"
-        case .chime: return ""
-        }
     }
 
     // MARK: Run, copy, delete

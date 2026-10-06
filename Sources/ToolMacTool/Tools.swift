@@ -54,9 +54,10 @@ enum Tools {
     /// while it runs), and the tags' boards, each gathering the notes with that tag.
     static let columns: [[ToolSection]] = [
         [
-            // Things done for you at the times you set, or when something happens; the log that
-            // charts the timers; and the chimes (built-in schedules: a click turns one on or off).
-            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, timerLog],
+            // Things done for you at the times you set, or when something happens; what they do;
+            // the log that charts the timers; and the chimes (built-in schedules: a click turns one
+            // on or off).
+            ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, actions, timerLog],
                         extra: .chimes),
             ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
             ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
@@ -229,9 +230,17 @@ enum Tools {
         id: "scheduler",
         name: "Scheduler",
         title: "Scheduler: things done at the times you set",
-        subtitle: "Once, every so often, at a time of day, every hour, or when something happens (an alarm, the battery, a day's count over a limit, the month starting): ask the model a prompt (it can use the model tools and your shortcuts), show a reminder, say something, run a model tool or a shortcut, call a web address, or chime. The day chime and the night watch are built in. Runs while the app is open.",
+        subtitle: "Once, every so often, at a time of day, every hour, or when something happens (an alarm, the battery, a day's count over a limit, the month starting): run one of your actions, with the values its arguments need. The day chime and the night watch are built in. Runs while the app is open.",
         symbol: "calendar.badge.clock",
         open: { model in SchedulerWindow.show(model.scheduler) })
+
+    static let actions = Tool(
+        id: "actions",
+        name: "Actions",
+        title: "Actions: what schedules do",
+        subtitle: "Steps done in turn: ask the model (it can use the model tools and your shortcuts), show a reminder, say something, run a model tool or a shortcut, call a web address, chime, or run other actions. Give an action arguments to use as {{name}} in its steps ({{last}} is what the step before gave back); schedules, and steps of other actions, give their values. Run one by hand here.",
+        symbol: "square.stack.3d.down.right",
+        open: { model in ActionsWindow.show(model.scheduler) })
 
     static let timerLog = Tool(
         id: "timer-log",

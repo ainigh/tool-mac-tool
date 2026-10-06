@@ -101,7 +101,8 @@ final class SchedulesTests: XCTestCase {
         let json = #"{"jobs":[{"name":"Old","action":"somethingNew","text":"x"}],"runs":[]}"#
         let book = try JSONDecoder().decode(ScheduleBook.self, from: Data(json.utf8))
         XCTAssertEqual(book.jobs.first?.name, "Old")
-        XCTAssertEqual(book.jobs.first?.action, .remind)
+        XCTAssertEqual(book.jobs.first?.inline?.kind, .remind)
+        XCTAssertEqual(book.jobs.first?.inline?.text, "x")
         XCTAssertEqual(book.jobs.first?.when.kind, .daily)
     }
 
@@ -227,14 +228,15 @@ final class SchedulesTests: XCTestCase {
         let jobs = ScheduleBook.fromSignals(s)
         XCTAssertEqual(jobs.map(\.when.event), [.countOver, .thresholdCrossed, .batteryChange, .alarmRang, .alarmSnoozed])
         XCTAssertEqual(jobs[0].when.limit, 6)
-        XCTAssertEqual(jobs[0].action, .remind)
-        XCTAssertTrue(jobs.dropFirst().allSatisfy { $0.action == .webhook && $0.target == s.url && $0.secret == "shh" })
+        XCTAssertEqual(jobs[0].inline?.kind, .remind)
+        XCTAssertTrue(jobs.dropFirst().allSatisfy { $0.inline?.kind == .webhook && $0.inline?.target == s.url && $0.inline?.secret == "shh" })
     }
 
     func testOldJobsReadWithoutTheNewFields() throws {
         let json = #"{"jobs":[{"id":"a","name":"Old","action":"remind","text":"x"}],"runs":[]}"#
         let book = try JSONDecoder().decode(ScheduleBook.self, from: Data(json.utf8))
-        XCTAssertEqual(book.jobs.first?.secret, "")
+        XCTAssertEqual(book.jobs.first?.inline?.secret, "")
+        XCTAssertEqual(book.jobs.first?.actionID, "")
         XCTAssertNil(book.jobs.first?.builtin)
     }
 }
