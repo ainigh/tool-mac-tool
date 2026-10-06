@@ -226,6 +226,16 @@ public struct Board: Codable, Equatable, Sendable {
         (0.92, 0.88, 1.00),   // lavender
         (1.00, 0.91, 0.80),   // peach
         (0.84, 0.96, 0.95),   // aqua
+        (1.00, 0.84, 0.94),   // pink
+        (0.93, 0.97, 0.80),   // lime
+        (0.80, 0.90, 0.98),   // ice
+        (0.98, 0.93, 0.86),   // sand
+        (0.90, 0.92, 0.95),   // fog
+        (0.96, 0.86, 1.00),   // lilac
+        (1.00, 0.86, 0.78),   // apricot
+        (0.82, 0.94, 0.88),   // sage
+        (1.00, 0.97, 0.88),   // cream
+        (0.86, 0.88, 1.00),   // periwinkle
     ]
 
     public static func nextTint(after tint: Int) -> Int { (tint + 1) % tints.count }
@@ -385,9 +395,16 @@ public struct Board: Codable, Equatable, Sendable {
     /// Every box with text on the board (in the order they were, those shown first), and the empty
     /// ones hidden after them. With none, one box stays shown.
     public mutating func showWritten() {
-        let written = order.filter { boxes[$0].title != nil }
-        order = written + order.filter { boxes[$0].title == nil }
-        shown = max(written.count, Self.minBoxes)
+        let written = Set(boxes.indices.filter { boxes[$0].title != nil })
+        showOnly { written.contains($0) }
+    }
+
+    /// Every box that `keep`s on the board (in the order they were, those shown first), and the
+    /// rest hidden after them. With none, one box stays shown.
+    public mutating func showOnly(_ keep: (Int) -> Bool) {
+        let kept = order.filter(keep)
+        order = kept + order.filter { !keep($0) }
+        shown = max(kept.count, Self.minBoxes)
     }
 
     /// The shown boxes in fixed rows (`count`), each one block again; nil: as many rows as fill

@@ -8,51 +8,62 @@ import ToolCore
 // pinned boxes float on the screen in windows of their own, and come back after a relaunch. It
 // also keeps a summary of every note for the panel: the ones docked along its bottom, and the
 // ones each tag's board gathers (Important, Urgent, Delegate, Think). A board can be docked in
-// the menu bar too, its icon beside the wrench: a click opens it, another closes it.
+// the menu bar too, its icon beside the wrench: a click opens it, another closes it. The boards
+// themselves (their names, icons and descriptions) are kept in the catalog: the ten the app comes
+// with, blank ones to name on the Boards grid, and the Daily plan, which opens itself at 6 AM,
+// 9 AM and noon.
 
 @MainActor
 final class BoardStore: ObservableObject {
-    struct Kind: Identifiable, Equatable, Sendable {
+    /// A board, by its id: what it's called, its icon and color come from the catalog (so a
+    /// change there shows everywhere at once).
+    struct Kind: Identifiable, Hashable, Sendable {
         let id: String
-        let name: String
-        /// The icon it comes with.
-        let defaultSymbol: String
-        /// Its own color in the panel, a darker shade (red, green and blue from 0 to 1).
-        let red: Double
-        let green: Double
-        let blue: Double
 
-        init(id: String, name: String, symbol: String, red: Double, green: Double, blue: Double) {
-            self.id = id
-            self.name = name
-            self.defaultSymbol = symbol
-            self.red = red
-            self.green = green
-            self.blue = blue
+        private var info: BoardInfo {
+            BoardStore.catalog.info(id) ?? BoardInfo(id: id, name: "Boards", symbol: "square.grid.2x2",
+                                                     red: 0.36, green: 0.40, blue: 0.92)
         }
 
-        var color: Color { Color(red: red, green: green, blue: blue) }
+        /// Its name ("Board 12" while it has none).
+        var name: String { isGrid ? "Boards" : BoardStore.catalog.title(id) }
+        /// The line under its name.
+        var detail: String { info.detail }
+        /// Its icon: the one picked for it, else the one it comes with.
+        var symbol: String { info.symbol }
+        /// The icon it comes with.
+        var defaultSymbol: String { info.defaultSymbol }
+        /// Its own color in the panel, a darker shade.
+        var color: Color { Color(red: info.red, green: info.green, blue: info.blue) }
 
-        /// Its icon: the one picked for it (a click on the icon at the top of the board), else
-        /// the one it comes with.
-        var symbol: String { UserDefaults.standard.string(forKey: Self.iconKey(id)) ?? defaultSymbol }
-
-        static func iconKey(_ id: String) -> String { "boardIcon.\(id)" }
+        /// The Daily plan: a board like the others, never on the Boards grid.
+        var isDailyPlan: Bool { id == BoardCatalog.dailyPlanID }
+        /// The Boards grid itself: every board as a card.
+        var isGrid: Bool { id == BoardCatalog.gridID }
+        /// Its place on the Boards grid (nil: the Daily plan, or the grid).
+        var slot: Int? { BoardStore.catalog.slot(id) }
     }
 
-    nonisolated static let kinds: [Kind] = [
-        Kind(id: "goals", name: "Goals", symbol: "target", red: 0.72, green: 0.16, blue: 0.22),
-        Kind(id: "strategies", name: "Strategies", symbol: "map", red: 0.80, green: 0.38, blue: 0.08),
-        Kind(id: "entities", name: "Entities", symbol: "circle.hexagongrid", red: 0.62, green: 0.50, blue: 0.05),
-        Kind(id: "notes", name: "Notes", symbol: "note.text", red: 0.14, green: 0.52, blue: 0.24),
-        Kind(id: "people", name: "People", symbol: "person.2.fill", red: 0.04, green: 0.48, blue: 0.50),
-        Kind(id: "ideas", name: "Ideas", symbol: "lightbulb.fill", red: 0.13, green: 0.33, blue: 0.76),
-        Kind(id: "dreams", name: "Dreams", symbol: "moon.stars.fill", red: 0.34, green: 0.22, blue: 0.70),
-        Kind(id: "projects", name: "Projects", symbol: "hammer.fill", red: 0.55, green: 0.17, blue: 0.62),
-        Kind(id: "health", name: "Health", symbol: "heart.fill", red: 0.74, green: 0.14, blue: 0.46),
-        Kind(id: "communication", name: "Communication", symbol: "bubble.left.and.bubble.right.fill",
-             red: 0.42, green: 0.31, blue: 0.22),
-    ]
+    /// Every board's name, icon, description and color (read from anywhere a board is drawn;
+    /// changed only on the main thread, through the store).
+    nonisolated(unsafe) static var catalog = BoardCatalog.load(from: BoardCatalog.url(), icons: BoardStore.legacyIcons())
+
+    /// The icons picked for the boards before they were kept in the catalog.
+    nonisolated private static func legacyIcons() -> [String: String] {
+        var out: [String: String] = [:]
+        for b in BoardCatalog.defaults {
+            if let s = UserDefaults.standard.string(forKey: "boardIcon.\(b.id)") { out[b.id] = s }
+        }
+        return out
+    }
+
+    nonisolated static let dailyPlan = Kind(id: BoardCatalog.dailyPlanID)
+    nonisolated static let grid = Kind(id: BoardCatalog.gridID)
+
+    /// Every board of notes: the Daily plan, then the Boards grid's in their places.
+    nonisolated static var kinds: [Kind] { catalog.all.map { Kind(id: $0.id) } }
+    /// The boards on the Boards grid, in their places.
+    nonisolated static var gridKinds: [Kind] { catalog.boards.map { Kind(id: $0.id) } }
 
     /// A note in a box, summed up for the panel and the tags' boards.
     struct Note: Identifiable, Equatable {
@@ -98,6 +109,8 @@ final class BoardStore: ObservableObject {
     @Published private(set) var now = AppClock.now()
 
     private(set) var models: [String: BoardModel] = [:]
+    /// The Boards grid: where each board's card is, its size and color.
+    let gridModel: BoardModel
     private let sounds: TonePlayer
     private let activity: ActivityStore
     private let cards = BigCards.shared
@@ -115,17 +128,31 @@ final class BoardStore: ObservableObject {
     init(sounds: TonePlayer, activity: ActivityStore) {
         self.sounds = sounds
         self.activity = activity
+        gridModel = BoardModel(id: BoardCatalog.gridID, fresh: Board(shown: BoardCatalog.defaults.count))
         for kind in Self.kinds {
             let m = BoardModel(id: kind.id)
             m.onChange = { [weak self] in self?.queueNotes() }
             models[kind.id] = m
         }
+        // A card's size or color on the Boards grid.
+        gridModel.onChange = { [weak self] in self?.objectWillChange.send() }
         refreshNotes()
     }
 
-    func model(_ board: Kind) -> BoardModel { models[board.id]! }
+    func model(_ board: Kind) -> BoardModel {
+        if board.isGrid { return gridModel }
+        if let m = models[board.id] { return m }
+        // A board the catalog has but that wasn't loaded (it can't happen: there are always as many).
+        let m = BoardModel(id: board.id)
+        m.onChange = { [weak self] in self?.queueNotes() }
+        models[board.id] = m
+        return m
+    }
 
-    nonisolated static func kind(_ id: String) -> Kind? { kinds.first { $0.id == id } }
+    /// The board with this id (the Boards grid too), if there is one.
+    nonisolated static func kind(_ id: String) -> Kind? {
+        id == BoardCatalog.gridID || catalog.info(id) != nil ? Kind(id: id) : nil
+    }
 
     var calendar: Calendar { Scheduler.calendar(Preferences.shared.settings) }
 
@@ -146,13 +173,20 @@ final class BoardStore: ObservableObject {
         }
     }
 
-    /// Opens a board; `focus` opens that box to fill it (showing it if it was hidden).
-    func show(_ id: String, focus: Int? = nil) {
+    /// Opens a board; `focus` opens that box to fill it (showing it if it was hidden), `grid`
+    /// shows its grid (putting back a box that was opened to fill it).
+    func show(_ id: String, focus: Int? = nil, grid: Bool = false) {
         guard let board = Self.kind(id) else { return }
-        opened[id] = Date()
-        UserDefaults.standard.set(opened.mapValues(\.timeIntervalSince1970), forKey: Self.openedKey)
+        if !board.isGrid {
+            opened[id] = Date()
+            UserDefaults.standard.set(opened.mapValues(\.timeIntervalSince1970), forKey: Self.openedKey)
+        }
+        if grid, focus == nil { model(board).expanded = nil }
         BoardWindow.show(self, board, focus: focus)
     }
+
+    /// Opens the Boards grid: every board as a card.
+    func showGrid() { show(BoardCatalog.gridID) }
 
     // MARK: The boards, the latest opened first
 
@@ -161,29 +195,84 @@ final class BoardStore: ObservableObject {
         ((UserDefaults.standard.dictionary(forKey: BoardStore.openedKey) as? [String: Double]) ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
     nonisolated static let openedKey = "boardsOpened"
 
-    /// The boards, the one opened most lately first (those never opened after, as they come).
+    /// The boards on the Boards grid that have notes, the one opened most lately first (those
+    /// never opened after, in their places): beside the Boards button at the top of the panel.
     var recent: [Kind] {
-        Self.kinds.enumerated().sorted { a, b in
+        let written = Set(notes.lazy.filter { $0.title != nil }.map(\.board.id))
+        return Self.gridKinds.enumerated().filter { written.contains($0.element.id) }.sorted { a, b in
             let x = opened[a.element.id] ?? .distantPast, y = opened[b.element.id] ?? .distantPast
             return x != y ? x > y : a.offset < b.offset
         }.map(\.element)
     }
 
+    /// The notes with a title on a board, in the order they show on it (those shown first).
+    func written(_ board: Kind) -> [Note] {
+        let b = model(board).board
+        let mine = Dictionary(notes.filter { $0.board == board && $0.title != nil }.map { ($0.index, $0) }) { a, _ in a }
+        return b.order.compactMap { mine[$0] }
+    }
+
+    /// A board on the Boards grid with nothing on it: no notes with a title, and no name of its own.
+    func isBlank(_ board: Kind) -> Bool {
+        guard let info = Self.catalog.info(board.id) else { return true }
+        return !info.builtin && info.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && written(board).isEmpty
+    }
+
+    // MARK: A board's name, icon and description
+
+    func info(_ board: Kind) -> BoardInfo? { Self.catalog.info(board.id) }
+
+    /// A board's name (the first line of its card on the Boards grid).
+    func rename(_ board: Kind, _ name: String) {
+        edit(board) { $0.name = name }
+    }
+
+    /// The line under a board's name (the second line of its card on the Boards grid).
+    func setDetail(_ board: Kind, _ detail: String) {
+        edit(board) { $0.detail = detail }
+    }
+
     /// A different icon for a board (nil: the one it comes with): on its tile, at its top, in the
     /// menu bar, and on its notes that wear their board's.
     func setIcon(_ symbol: String?, for board: Kind) {
-        if let symbol, symbol != board.defaultSymbol {
-            UserDefaults.standard.set(symbol, forKey: Kind.iconKey(board.id))
+        edit(board) { $0.symbol = symbol ?? $0.defaultSymbol }
+    }
+
+    private func edit(_ board: Kind, _ change: (inout BoardInfo) -> Void) {
+        var c = Self.catalog
+        if board.isDailyPlan {
+            change(&c.dailyPlan)
+        } else if let i = c.slot(board.id) {
+            change(&c.boards[i])
         } else {
-            UserDefaults.standard.removeObject(forKey: Kind.iconKey(board.id))
+            return
         }
+        guard c != Self.catalog else { return }
+        Self.catalog = c
         objectWillChange.send()
         model(board).objectWillChange.send()
-        if let button = statusItems[board.id]?.button {
-            button.image = NSImage(systemSymbolName: board.symbol, accessibilityDescription: board.name)
-            button.image?.isTemplate = true
-        }
+        gridModel.objectWillChange.send()
         refreshNotes()
+        updateStatusItems()
+        saveCatalog()
+    }
+
+    private var catalogSave: Task<Void, Never>?
+    /// Problem saving the catalog, if there was one.
+    @Published private(set) var catalogProblem: String?
+
+    private func saveCatalog() {
+        catalogSave?.cancel()
+        catalogSave = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled, let self else { return }
+            do {
+                try Self.catalog.save(to: BoardCatalog.url())
+                self.catalogProblem = nil
+            } catch {
+                self.catalogProblem = "Couldn't save the boards: \(error.localizedDescription)"
+            }
+        }
     }
 
     // MARK: Linked notes
@@ -261,12 +350,17 @@ final class BoardStore: ObservableObject {
             }
         }
         if out != notes { notes = out }
-        // A note in the menu bar wears its icon, and says its title.
-        for (id, item) in statusItems where Self.note(fromDock: id) != nil {
+        updateStatusItems()
+    }
+
+    /// What's in the menu bar wears its icon, and says its name (a note's title, a board's name).
+    private func updateStatusItems() {
+        for (id, item) in statusItems {
             guard let label = label(forDock: id), let button = item.button else { continue }
-            if button.toolTip?.hasPrefix(label.name + ":") != true {
-                button.toolTip = "\(label.name): open or close the note (right-click to take it out of the menu bar)"
-            }
+            let tip = Self.note(fromDock: id) != nil
+                ? "\(label.name): open or close the note (right-click to take it out of the menu bar)"
+                : "\(label.name): open or close the board (right-click to take it out of the menu bar)"
+            if button.toolTip != tip { button.toolTip = tip }
             button.image = NSImage(systemSymbolName: label.symbol, accessibilityDescription: label.name)
             button.image?.isTemplate = true
         }
@@ -285,7 +379,7 @@ final class BoardStore: ObservableObject {
         guard id.hasPrefix("note-") else { return nil }
         let rest = id.dropFirst(5)
         guard let dash = rest.lastIndex(of: "-"), let box = Int(rest[rest.index(after: dash)...]),
-              let kind = kind(String(rest[..<dash])), (0..<Board.maxBoxes).contains(box) else { return nil }
+              let kind = kind(String(rest[..<dash])), !kind.isGrid, (0..<Board.maxBoxes).contains(box) else { return nil }
         return (kind, box)
     }
 
@@ -494,7 +588,27 @@ final class BoardStore: ObservableObject {
             }
         }
         routines(now, calendar: cal)
+        openDailyPlan(now, calendar: cal)
         refresh(now)
+    }
+
+    // MARK: The Daily plan, opening by itself
+
+    nonisolated static let dailyPlanKey = "dailyPlanOpened"
+
+    /// At 6 AM, 9 AM and noon (up to an hour late, when the Mac was asleep), the Daily plan opens
+    /// by itself, once each time. In quiet mode it waits until quiet mode ends.
+    private func openDailyPlan(_ now: Date, calendar cal: Calendar) {
+        let last = (UserDefaults.standard.object(forKey: Self.dailyPlanKey) as? Double).map(Date.init(timeIntervalSince1970:))
+        guard DailyPlan.due(now: now, last: last, calendar: cal) != nil, !NSScreen.screens.isEmpty else { return }
+        UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.dailyPlanKey)
+        let open = { [weak self] in
+            guard let self else { return }
+            self.show(BoardCatalog.dailyPlanID, grid: true)
+            self.sounds.play(.ding, for: "daily-plan", maxSeconds: nil)
+        }
+        if ModeCenter.shared.hold("daily-plan", open) { return }
+        open()
     }
 
     private func refresh(_ now: Date) {
@@ -676,6 +790,9 @@ final class BoardStore: ObservableObject {
                 }
                 if box != m.board.boxes[i] { m.board.boxes[i] = box }
             }
+        }
+        if let last = UserDefaults.standard.object(forKey: Self.dailyPlanKey) as? Double, last > ahead.timeIntervalSince1970 {
+            UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.dailyPlanKey)
         }
         refresh(now)
     }

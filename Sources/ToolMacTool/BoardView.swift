@@ -2,9 +2,10 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-/// The boards (Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health,
-/// Communication): each a big glass panel of boxes (notes) to type into, kept in
-/// ~/Library/Application Support/ToolMacTool/boards/<id>.json.
+/// The boards (the Daily plan, the ten the app comes with and the ones named on the Boards grid):
+/// each a big glass panel of boxes (notes) to type into, kept in
+/// ~/Library/Application Support/ToolMacTool/boards/<id>.json. The Boards grid is one too, its
+/// boxes the boards themselves (`BoardCard`).
 @MainActor
 enum BoardWindow {
     static func id(_ board: String) -> String { "board-\(board)" }
@@ -59,9 +60,10 @@ final class BoardModel: ObservableObject {
     private let url: URL
     private var saveTask: Task<Void, Never>?
 
-    init(id: String) {
+    /// `fresh`: the board it starts as when there's no file yet.
+    init(id: String, fresh: Board = Board()) {
         url = Board.url(for: id)
-        board = Board.load(from: url)
+        board = FileManager.default.fileExists(atPath: url.path) ? Board.load(from: url) : fresh
     }
 
     private func scheduleSave() {
@@ -133,36 +135,29 @@ struct BoardView: View {
 
     private func header(_ shown: Int) -> some View {
         HStack(spacing: 10) {
-            Button { picking.toggle() } label: {
+            if board.isGrid {
                 Image(systemName: board.symbol)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(width: 28, height: 28)
-                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(picking ? 0.18 : 0.06)))
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(PressStyle())
-            .help("\(board.name)'s icon: click to pick another")
-            .popover(isPresented: $picking, arrowEdge: .bottom) {
-                IconPicker(current: board.symbol, board: board, forBoard: true) { picked in
-                    store.setIcon(picked, for: board)
-                    picking = false
-                }
+                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(0.06)))
+            } else {
+                boardIcon
             }
             Text(board.name)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-            Text(shown == 1 ? "1 box" : "\(shown) boxes")
+            Text(board.isGrid ? (shown == 1 ? "1 board" : "\(shown) boards") : shown == 1 ? "1 box" : "\(shown) boxes")
                 .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.5))
-            if let problem = model.problem {
+            if let problem = model.problem ?? (board.isGrid ? store.catalogProblem : nil) {
                 Text(problem).font(.caption).foregroundStyle(Color(red: 1, green: 0.45, blue: 0.5)).lineLimit(1).help(problem)
             }
             WindowDragArea()
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
                 .help("Drag to move")
-            FocusButton(focus: FocusCenter.shared, board: board)
+            if !board.isGrid { FocusButton(focus: FocusCenter.shared, board: board) }
             MenuBarDockButton(store: store, id: board.id, name: board.name)
             GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
         }
@@ -173,31 +168,60 @@ struct BoardView: View {
         .padding(.bottom, 10)
     }
 
-    /// In the middle of the top: fewer, then show every note with text, in 2 rows, colors, then more.
+    /// The board's icon, top left: a click picks another.
+    private var boardIcon: some View {
+        Button { picking.toggle() } label: {
+            Image(systemName: board.symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(.white.opacity(picking ? 0.18 : 0.06)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help("\(board.name)'s icon: click to pick another")
+        .popover(isPresented: $picking, arrowEdge: .bottom) {
+            IconPicker(current: board.symbol, board: board, forBoard: true) { picked in
+                store.setIcon(picked, for: board)
+                picking = false
+            }
+        }
+    }
+
+    /// In the middle of the top: fewer, then show every note with text, in 2 rows, colors, then
+    /// more. Each puts back a box opened to fill the board first, to show the grid it changes.
     private func arrangeBar(_ shown: Int) -> some View {
         let twoRows = model.board.rows == 2
+        let what = board.isGrid ? "boards" : "notes"
         return HStack(spacing: 6) {
-            GlassIcon(symbol: "chevron.left", help: "Fewer boxes (their text is kept)") {
-                withAnimation(.easeInOut(duration: 0.2)) { model.board.fewer() }
+            GlassIcon(symbol: "chevron.left", help: board.isGrid ? "Fewer boards (their notes are kept)" : "Fewer boxes (their text is kept)") {
+                arranging { model.board.fewer() }
             }
             .disabled(shown <= Board.minBoxes)
-            GlassIcon(symbol: "text.below.photo", help: "Show every note with text, and hide the empty ones") {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    model.expanded = nil
-                    model.board.showWritten()
+            GlassIcon(symbol: "text.below.photo",
+                      help: board.isGrid ? "Show every board with notes or a name, and hide the blank ones"
+                                         : "Show every note with text, and hide the empty ones") {
+                arranging {
+                    if board.isGrid {
+                        let kinds = BoardStore.gridKinds
+                        let kept = Set(kinds.indices.filter { !store.isBlank(kinds[$0]) })
+                        model.board.showOnly { kept.contains($0) }
+                    } else {
+                        model.board.showWritten()
+                    }
                 }
             }
             GlassIcon(symbol: twoRows ? "rectangle.split.2x1.fill" : "rectangle.split.2x1",
                       help: twoRows ? "In 2 rows: click to fill the board as it fits best again"
-                                    : "Arrange the notes shown in 2 rows (each one block)") {
-                withAnimation(.easeInOut(duration: 0.25)) { model.board.arrange(rows: twoRows ? nil : 2) }
+                                    : "Arrange the \(what) shown in 2 rows (each one block)") {
+                arranging { model.board.arrange(rows: twoRows ? nil : 2) }
             }
             .background(Circle().fill(.white.opacity(twoRows ? 0.16 : 0)))
-            GlassIcon(symbol: "paintpalette", help: "Color the notes shown, each a different color from the ones beside it") {
-                withAnimation(.easeInOut(duration: 0.25)) { model.board.colorize(width: gridSize.width, height: gridSize.height) }
+            GlassIcon(symbol: "paintpalette", help: "Color the \(what) shown, each a different color from the ones beside it") {
+                arranging { model.board.colorize(width: gridSize.width, height: gridSize.height) }
             }
-            GlassIcon(symbol: "chevron.right", help: "More boxes") {
-                withAnimation(.easeInOut(duration: 0.2)) { model.board.more() }
+            GlassIcon(symbol: "chevron.right", help: board.isGrid ? "More boards (a blank one comes next, to name)" : "More boxes") {
+                arranging { model.board.more() }
             }
             .disabled(shown >= Board.maxBoxes)
         }
@@ -205,10 +229,22 @@ struct BoardView: View {
         .background(Capsule().fill(.black.opacity(0.18)))
     }
 
+    /// A change to the grid from the top: a box opened to fill the board goes back first.
+    private func arranging(_ change: () -> Void) {
+        withAnimation(.easeInOut(duration: 0.22)) {
+            model.expanded = nil
+            change()
+        }
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Top middle: fewer, show the notes with text, 2 rows, colors, more. Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, link notes (+), the menu bar, dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
-                .lineLimit(1)
+            if board.isGrid {
+                Text("Every board, as a card. Type its name (first line) and what it's for (second line); click its icon to pick another. The notes listed under them are the board's own (a click opens one). The board's button at the bottom opens it. Top middle: fewer, show the boards with notes, 2 rows, colors, more (a blank board to name). Double-click a card to change its color; drag it to move it, its corner to resize it. Boards with notes show at the top of the panel, the one opened last first.")
+                    .lineLimit(1)
+            } else {
+                notesHint
+            }
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
             KeyHint(key: "⌘W", does: "close")
@@ -217,6 +253,11 @@ struct BoardView: View {
         .foregroundStyle(.white.opacity(0.5))
         .padding(.horizontal, 26)
         .padding(.vertical, 10)
+    }
+
+    private var notesHint: some View {
+        Text("Top middle: fewer, show the notes with text, 2 rows, colors, more. Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, the menu bar, dock it in the panel, or pin it to float on your screen. Above its bottom: its board, the notes it links to, and + to link another. Paste a web address to see its page (a YouTube video plays here).")
+            .lineLimit(1)
     }
 
     /// The shown boxes in their order, each in its place (a big one spanning blocks). Drag a box
@@ -296,15 +337,30 @@ struct BoardView: View {
             nextTint: { model.board.nextTint(for: i, width: size.width, height: size.height) })
     }
 
+    @ViewBuilder
     private func box(_ i: Int, count: Int, arrange: BoxArrange? = nil) -> some View {
         let open = model.expanded == i
-        return BoardBox(model: model, store: store, board: board, index: i,
-                        fontSize: open ? 18 : count <= 4 ? 16 : count <= 9 ? 15 : count <= 16 ? 14 : 13,
-                        expanded: open, toggleExpand: {
-                            withAnimation(.easeInOut(duration: 0.2)) { model.expanded = open ? nil : i }
-                        }, arrange: arrange)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+        let fontSize: CGFloat = open ? 18 : count <= 4 ? 16 : count <= 9 ? 15 : count <= 16 ? 14 : 13
+        let toggle = { withAnimation(.easeInOut(duration: 0.2)) { model.expanded = open ? nil : i } }
+        Group {
+            if board.isGrid {
+                let kinds = BoardStore.gridKinds
+                if kinds.indices.contains(i) {
+                    BoardCard(store: store, grid: model, board: kinds[i], index: i, fontSize: fontSize, expanded: open,
+                              toggleExpand: toggle, arrange: arrange)
+                } else {
+                    Color.clear
+                }
+            } else {
+                // Its board's button at the bottom puts it back in the grid when it's opened.
+                BoardBox(model: model, store: store, board: board, index: i, fontSize: fontSize,
+                         expanded: open, toggleExpand: toggle,
+                         openBoard: { withAnimation(.easeInOut(duration: 0.2)) { model.expanded = nil } },
+                         onOwnBoard: true, arrange: arrange)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
     }
 }
 
@@ -346,7 +402,7 @@ private struct SizeOutline: View {
 
 /// The corner of a box on the board's grid: drag it to span more or fewer blocks, across and
 /// down; a double-click puts it back to one.
-private struct ResizeGrip: View {
+struct ResizeGrip: View {
     let arrange: BoxArrange
     let across: Int
     let down: Int
@@ -377,8 +433,9 @@ private struct ResizeGrip: View {
 /// A box: a thin column down its left (its icon, a click to change it; its timers; its tags at
 /// the bottom), its text (the first line twice the size, as its title), the countdown of the timer
 /// it runs at its top middle, and copy, open (to fill the board), dock and pin down its top right. A
-/// double-click steps it through the light colors. Pinned, it floats in a window of its own (a
-/// drag anywhere on it moves it), with a way back to its board at the bottom.
+/// double-click steps it through the light colors. Above its bottom: its board's button (always,
+/// on its board's grid too), the notes it links to and + to link another. Pinned, it floats in a
+/// window of its own (a drag anywhere on it moves it).
 struct BoardBox: View {
     @ObservedObject var model: BoardModel
     let store: BoardStore
@@ -388,8 +445,11 @@ struct BoardBox: View {
     var expanded = false
     /// Opens it to fill the board, or puts it back (nil: no such button, as when pinned).
     var toggleExpand: (() -> Void)?
-    /// Opens its board (shown at the bottom when it's pinned, or on a tag's board).
+    /// Opens its board (its button at the bottom: on its own board, it goes back to the grid;
+    /// nil: its board, with it opened to fill it).
     var openBoard: (() -> Void)?
+    /// On its own board's grid (its board's button there shows the grid).
+    var onOwnBoard = false
     /// Floating in a window of its own: a drag on its text moves the window too.
     var floating = false
     /// On a board's grid: dragged anywhere to move it, by its corner to resize it.
@@ -432,12 +492,11 @@ struct BoardBox: View {
                     .padding([.horizontal], 4)
                 LinkStrip(text: box.text, roomy: roomy, width: width - 40)
                     .padding(.horizontal, 4)
-                // The row above the bottom: its board (when it's pinned, or on a tag's board), and
-                // the notes it links to.
-                if openBoard != nil || !box.links.isEmpty {
-                    NoteLinksRow(store: store, board: board, index: index, links: box.links, openBoard: openBoard)
-                        .padding(.top, 4)
-                }
+                // The row above the bottom: its board (a click opens it), the notes it links to,
+                // and + to link another.
+                NoteLinksRow(store: store, board: board, index: index, links: box.links, onOwnBoard: onOwnBoard,
+                             openBoard: openBoard ?? { store.show(board.id, focus: index) })
+                    .padding(.top, 4)
                 // Bottom left: To do, Pending, Completed (one at a time); bottom right: the tags.
                 HStack(spacing: 4) {
                     StatusButtons(store: store, board: board, index: index, on: box.status, short: !wide)
@@ -451,8 +510,7 @@ struct BoardBox: View {
                 .padding(.horizontal, 3)
                 .padding(.vertical, 3)
             }
-            // Down its right, from the top: copy, open to fill the board, link a note, the menu
-            // bar, dock, pin.
+            // Down its right, from the top: copy, open to fill the board, the menu bar, dock, pin.
             VStack(spacing: 2) {
                 BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
                     Clipboard.copy(box.text)
@@ -467,7 +525,6 @@ struct BoardBox: View {
                               help: expanded ? "Open to fill the board: on. Click to go back to the grid (Esc)" : "Open to fill the board",
                               tint: expanded ? board.color : nil, lit: expanded, action: toggleExpand)
                 }
-                NoteLinkMenu(store: store, board: board, index: index, links: box.links)
                 NoteMenuBarButton(store: store, board: board, index: index)
                 BoxButton(symbol: "dock.arrow.down.rectangle",
                           help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
@@ -536,9 +593,9 @@ struct PinnedBox: View {
     }
 }
 
-/// The + down a note's right: pick a note from any board to link to (it goes in the row above the
-/// note's bottom, a click away).
-private struct NoteLinkMenu: View {
+/// The + at the end of the row above a note's bottom: pick a note from any board to link to (it
+/// goes in that row, a click away).
+struct NoteLinkMenu: View {
     @ObservedObject var store: BoardStore
     let board: BoardStore.Kind
     let index: Int
@@ -550,7 +607,7 @@ private struct NoteLinkMenu: View {
         let linked = Set(links)
         let notes = store.linkable(from: board, index)
         Menu {
-            ForEach(BoardStore.kinds) { kind in
+            ForEach(BoardStore.kinds.filter { k in notes.contains { $0.board == k } }) { kind in
                 let onBoard = notes.filter { $0.board.id == kind.id }
                 if !onBoard.isEmpty {
                     Menu(kind.name) {
@@ -578,7 +635,7 @@ private struct NoteLinkMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .onHover { hover = $0 }
-        .help("Link a note from any board: it shows above the note's bottom row, a click away (pick it again to unlink)")
+        .help("Link a note from any board: it shows here, beside the notes it links to, a click away (pick it again to unlink)")
     }
 }
 
@@ -601,32 +658,39 @@ private struct NoteMenuBarButton: View {
     }
 }
 
-/// The row above a note's bottom: its board (pinned, or on a tag's board), then the notes it links
-/// to. A click on one opens its board with it opened; right-click to unlink it.
+/// The row above a note's bottom: its board's button (always there), then the notes it links to,
+/// and + at the end to link another. A click on a linked note opens its board with it opened;
+/// right-click to unlink it.
 private struct NoteLinksRow: View {
     @ObservedObject var store: BoardStore
     let board: BoardStore.Kind
     let index: Int
     let links: [NoteLink]
-    let openBoard: (() -> Void)?
+    let onOwnBoard: Bool
+    let openBoard: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 5) {
-                if let openBoard { OpenBoardButton(board: board, action: openBoard) }
-                ForEach(links, id: \.self) { link in
-                    if let note = store.note(link) {
-                        NoteLinkChip(note: note, open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
-                    } else if let kind = BoardStore.kind(link.board) {
-                        // Linked to a note that's empty now: still a way to it.
-                        NoteLinkChip(note: BoardStore.Note(board: kind, index: link.box, title: nil, icon: kind.symbol, tint: 0,
-                                                           tags: [], docked: false),
-                                     open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
+        HStack(spacing: 5) {
+            OpenBoardButton(board: board, help: onOwnBoard ? "On \(board.name): click to show its grid"
+                                                         : "Open the \(board.name) board, with this note opened",
+                            action: openBoard)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 5) {
+                    ForEach(links, id: \.self) { link in
+                        if let note = store.note(link) {
+                            NoteLinkChip(note: note, open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
+                        } else if let kind = BoardStore.kind(link.board) {
+                            // Linked to a note that's empty now: still a way to it.
+                            NoteLinkChip(note: BoardStore.Note(board: kind, index: link.box, title: nil, icon: kind.symbol, tint: 0,
+                                                               tags: [], docked: false),
+                                         open: { store.open(link) }, unlink: { store.removeLink(link, board, index) })
+                        }
                     }
                 }
             }
-            .padding(.horizontal, 3)
+            NoteLinkMenu(store: store, board: board, index: index, links: links)
         }
+        .padding(.horizontal, 3)
         .frame(height: 22)
     }
 }
@@ -668,17 +732,20 @@ private struct NoteLinkChip: View {
     }
 }
 
-/// "⊞ Goals": back to the board a box belongs to.
+/// "⊞ Goals": the board a box belongs to (or, on the Boards grid, the board itself).
 struct OpenBoardButton: View {
     let board: BoardStore.Kind
+    var help: String?
     let action: () -> Void
     @State private var hover = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                Image(systemName: "square.grid.2x2")
+                Image(systemName: board.symbol)
+                    .foregroundStyle(board.color)
                 Text(board.name)
+                    .lineLimit(1)
             }
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.black.opacity(hover ? 0.8 : 0.55))
@@ -689,7 +756,8 @@ struct OpenBoardButton: View {
         }
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
-        .help("Open the \(board.name) board, with this box opened")
+        .help(help ?? "Open the \(board.name) board")
+        .fixedSize()
     }
 }
 
@@ -1108,7 +1176,7 @@ private struct BoxCountdown: View {
 }
 
 /// A small dark icon button, for the light boxes. `lit`: on, filled in its tint.
-private struct BoxButton: View {
+struct BoxButton: View {
     let symbol: String
     let help: String
     var tint: Color?

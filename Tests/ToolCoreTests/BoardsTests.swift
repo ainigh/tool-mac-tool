@@ -271,7 +271,7 @@ final class BoardsTests: XCTestCase {
         b.boxes[2].tint = 2                     // below 0
         b.boxes[3].tint = 3                     // diagonal: not beside it
         XCTAssertEqual(b.nextTint(for: 0, width: 1000, height: 700), 3)
-        b.boxes[0].tint = 7
+        b.boxes[0].tint = Board.tints.count - 1   // the last: round to paper
         XCTAssertEqual(b.nextTint(for: 0, width: 1000, height: 700), 0)
     }
 
