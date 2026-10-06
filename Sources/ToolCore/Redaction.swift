@@ -22,9 +22,12 @@ public struct RedactionMap: Codable, Equatable, Sendable {
         public var seen: Int
         public var added: Date
         public var note: String
+        /// In the Critical bucket: the few words that matter most (watched closely, and checked
+        /// for in every redacted text). Redacting treats both buckets as one map.
+        public var critical: Bool
 
         public init(id: UUID = UUID(), original: String, substitute: String, keep: Bool = false, isNew: Bool = true,
-                    seen: Int = 1, added: Date = Date(), note: String = "") {
+                    seen: Int = 1, added: Date = Date(), note: String = "", critical: Bool = false) {
             self.id = id
             self.original = original
             self.substitute = substitute
@@ -33,6 +36,23 @@ public struct RedactionMap: Codable, Equatable, Sendable {
             self.seen = seen
             self.added = added
             self.note = note
+            self.critical = critical
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, original, substitute, keep, isNew, seen, added, note, critical }
+
+        // A map from before the buckets has no `critical`: everything is in the everyday one.
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            original = try c.decodeIfPresent(String.self, forKey: .original) ?? ""
+            substitute = try c.decodeIfPresent(String.self, forKey: .substitute) ?? ""
+            keep = try c.decodeIfPresent(Bool.self, forKey: .keep) ?? false
+            isNew = try c.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
+            seen = try c.decodeIfPresent(Int.self, forKey: .seen) ?? 0
+            added = try c.decodeIfPresent(Date.self, forKey: .added) ?? Date()
+            note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+            critical = try c.decodeIfPresent(Bool.self, forKey: .critical) ?? false
         }
     }
 
@@ -83,6 +103,9 @@ public struct RedactionMap: Codable, Equatable, Sendable {
         entries.filter { !$0.keep && !$0.original.isEmpty && !$0.substitute.isEmpty && $0.original != $0.substitute }
             .map { ($0.original, $0.substitute) }
     }
+
+    /// The critical words (not kept): the ones to check every redacted text for.
+    public var critical: [Entry] { entries.filter { $0.critical && !$0.keep && !$0.original.isEmpty } }
 
     /// Originals that share a substitute with another (fine: the swap goes one way; restoring
     /// gives back the first of them).
@@ -251,6 +274,27 @@ public enum Redaction {
         if letters == letters.uppercased() && letters != letters.lowercased() { return word.uppercased() }
         if letters == letters.lowercased() && letters != letters.uppercased() { return word.lowercased() }
         return word
+    }
+
+    // MARK: The critical check
+
+    /// The critical words still in `text`, anywhere (not only as whole words: inside a hyphenated
+    /// name, an email address, a handle), case and accents set aside. The substitutes in the text
+    /// are set aside first, so a stand-in that contains a name ("Annabel" for "Ann") isn't counted.
+    public static func leaks(in text: String, map: RedactionMap) -> [String] {
+        let critical = map.critical
+        guard !critical.isEmpty, !text.isEmpty else { return [] }
+        var folded = key(text)
+        for sub in Set(map.pairs.map { key($0.substitute) }).sorted(by: { $0.count > $1.count }) where !sub.isEmpty {
+            folded = folded.replacingOccurrences(of: sub, with: " ")
+        }
+        var out: [String] = []
+        var seen = Set<String>()
+        for e in critical {
+            let k = key(e.original)
+            if !k.isEmpty, folded.contains(k), seen.insert(k).inserted { out.append(e.original) }
+        }
+        return out
     }
 
     // MARK: Front matter

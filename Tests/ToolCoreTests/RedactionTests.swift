@@ -101,3 +101,39 @@ final class RedactionTests: XCTestCase {
         XCTAssertEqual(back.entries.first?.note, "aunt")
     }
 }
+
+final class RedactionBucketsTests: XCTestCase {
+    func testOldMapsLoadWithEverythingEveryday() throws {
+        let json = #"{"entries":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","original":"Ada","substitute":"Person1","keep":false,"isNew":true,"seen":1,"added":"2026-10-06T12:00:00Z","note":""}]}"#
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let map = try decoder.decode(RedactionMap.self, from: Data(json.utf8))
+        XCTAssertEqual(map.entries.first?.critical, false)
+        XCTAssertEqual(map.entries.first?.original, "Ada")
+    }
+
+    func testBothBucketsRedactAsOne() {
+        var map = RedactionMap()
+        map.learn(["Ada", "Bob"])
+        map.entries[0].critical = true
+        XCTAssertEqual(Redaction.apply("Ada and Bob", pairs: map.pairs).text, "Person1 and Person2")
+        XCTAssertEqual(map.critical.map(\.original), ["Ada"])
+    }
+
+    func testLeakCheckFindsCriticalWordsAnywhere() {
+        var map = RedactionMap()
+        map.learn(["Ann", "Bob"])
+        map.entries[0].critical = true
+        map.entries[0].substitute = "Annabel"      // a stand-in that contains the name
+        let red = Redaction.apply("Ann met Bob. Mail ann.smith@x.com or Mary-Ann.", pairs: map.pairs)
+        XCTAssertEqual(red.text, "Annabel met Person2. Mail annabel.smith@x.com or Mary-Annabel.")
+        // Every Ann went (the stand-in itself doesn't count).
+        XCTAssertEqual(Redaction.leaks(in: red.text, map: map), [])
+        // One the whole-word swap can't see: joined to another word.
+        XCTAssertEqual(Redaction.leaks(in: "AnnSmith wrote", map: map), ["Ann"])
+        // Only critical words are checked; kept ones never.
+        XCTAssertEqual(Redaction.leaks(in: "Bobby", map: map), [])
+        map.entries[0].keep = true
+        XCTAssertEqual(Redaction.leaks(in: "AnnSmith", map: map), [])
+    }
+}

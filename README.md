@@ -433,6 +433,13 @@ Takes people's names out of text before you send it anywhere, the same way every
   tick **Keep** for a word the model took for a name and isn't (May, Will). Add any word by hand
   (a company, an email). **Learn from text…** fills it from past text: paste it, and the model
   lists its names and the new ones join the map. Search, and the New and Kept filters, find them.
+- **Two buckets, one map.** The window has **Critical** at the top (the few words that matter
+  most, to watch closely) and **Everything else** under it (the many everyday ones). Click a
+  word's star (or right-click, or **Move to Critical** / **Move out of Critical**) to move it
+  between them; **Critical** when adding one puts it straight in. Redacting uses both buckets as
+  one map. **Every redacted text is checked for the critical words**, anywhere in it, not only
+  as whole words (joined to another word, inside an email address): any still there come up in a
+  red bar over the result, so nothing critical gets through unnoticed.
 - **Redact**: paste text and **Find & redact** (⌘Return). The model (the chat's, through Ollama,
   on this Mac) is asked only for a list of the people's names in it, **one word per line**, so a
   first and a last name always come apart; long texts go a piece at a time. New ones join the map
