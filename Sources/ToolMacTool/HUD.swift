@@ -44,9 +44,8 @@ final class StackedCards {
     private var cards: [Card] = []
     private var count = 0
 
-    /// Shows a card made by `make` (given what closes it), and returns what closes it.
-    @discardableResult
-    func show<V: View>(_ place: Place, level: NSWindow.Level, make: (_ close: @escaping () -> Void) -> V) -> () -> Void {
+    /// Shows a card made by `make`, which is given what closes it.
+    func show<V: View>(_ place: Place, level: NSWindow.Level, make: (_ close: @escaping () -> Void) -> V) {
         count += 1
         let id = count
         let close: () -> Void = { [weak self] in self?.close(id) }
@@ -62,7 +61,6 @@ final class StackedCards {
             ctx.duration = 0.2
             panel.animator().alphaValue = 1
         }
-        return close
     }
 
     func close(_ id: Int) {
