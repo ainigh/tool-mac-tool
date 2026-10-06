@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-// The panel's rows and columns of notes and boards: the boards across the very top (each in its
-// own darker color, the one opened most lately first), the chimes' switches (built-in schedules) beside the Scheduler, the notes
+// The panel's rows and columns of notes and boards: across the very top the Daily plan, the
+// Boards button (every board, on a grid of its own) and the boards with notes (each in its own
+// darker color, the one opened most lately first), the chimes' switches (built-in schedules) beside the Scheduler, the notes
 // running a timer (docked in their column by themselves while it runs), the tags' boards, and the
 // notes docked along the bottom.
 
@@ -12,28 +13,39 @@ import ToolCore
 struct BoardsRow: View {
     @ObservedObject var store: BoardStore
     var groups: PinnedGroups?
+    /// The most boards with notes shown beside the Boards button (the rest are on its grid).
+    static let most = 10
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "Boards", color: Tools.boardsColor, groups: groups, pinID: PinnedGroups.boardsID)
             HStack(spacing: MenuView.gap) {
-                // The board opened most lately first.
-                ForEach(store.recent) { kind in
-                    BoardTile(kind: kind, inMenuBar: store.isInMenuBar(kind.id),
-                              open: {
-                                  MenuPanel.close()
-                                  store.show(kind.id)
-                              },
-                              dock: { store.setInMenuBar($0, kind.id) })
-                }
+                // Always first: the Daily plan, then the Boards button.
+                tile(BoardStore.dailyPlan, help: "The Daily plan: a board of its own, that opens by itself at \(DailyPlan.hoursText) every day.")
+                tile(BoardStore.grid, color: Tools.boardsColor,
+                     help: "Every board, as a card: name them, change their icons and descriptions, and see their notes. A blank board comes with the → at the top.")
+                // Then the boards with notes, the one opened most lately first.
+                ForEach(store.recent.prefix(Self.most)) { kind in tile(kind) }
+                Spacer(minLength: 0)
             }
         }
+    }
+
+    private func tile(_ kind: BoardStore.Kind, color: Color? = nil, help: String? = nil) -> some View {
+        BoardTile(kind: kind, color: color ?? kind.color, help: help, inMenuBar: store.isInMenuBar(kind.id),
+                  open: {
+                      MenuPanel.close()
+                      store.show(kind.id)
+                  },
+                  dock: { store.setInMenuBar($0, kind.id) })
     }
 }
 
 /// A board: its icon and name on its own color. Right-click to dock it in the menu bar.
 private struct BoardTile: View {
     let kind: BoardStore.Kind
+    let color: Color
+    let help: String?
     let inMenuBar: Bool
     let open: () -> Void
     let dock: (Bool) -> Void
@@ -51,9 +63,9 @@ private struct BoardTile: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 4)
-            .frame(maxWidth: .infinity)
+            .frame(minWidth: 0, maxWidth: 104)
             .frame(height: 60)
-            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(kind.color.gradient))
+            .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(color.gradient))
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(.white.opacity(hover ? 0.45 : 0.12), lineWidth: 1))
             .overlay(alignment: .topTrailing) {
                 if inMenuBar {
@@ -70,7 +82,7 @@ private struct BoardTile: View {
         }
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
-        .help("\(kind.name): a board of notes. Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
+        .help("\(help ?? "\(kind.name): a board of notes.") Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
         .contextMenu {
             Button("Open \(kind.name)", action: open)
             Button(inMenuBar ? "Take out of the menu bar" : "Dock in the menu bar (beside the wrench)") { dock(!inMenuBar) }

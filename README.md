@@ -1,8 +1,8 @@
 # Tool Mac Tool
 
 A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, when one is set,
-and beside that any boards you've docked there). Clicking it opens a panel: the ten boards across
-the top, each in its own color; a row under them (Unzip to Desktop, the battery in detail); tool
+and beside that any boards you've docked there). Clicking it opens a panel: across the top the Daily
+plan, the **Boards** button and the boards with notes, each in its own color; a row under them (Unzip to Desktop, the battery in detail); tool
 tiles grouped into sections in two columns (Automate, Voice and Record; Glass, Model tools and Privacy),
 plus two narrow columns (the notes running a timer, and the tags' boards), with dividers between
 them; and the notes you've docked, in a row along the bottom. Each section has its own color, worn
@@ -581,9 +581,10 @@ first.
 
 ### The boards row, and the row under it: Unzip, Battery
 
-**Across the very top of the panel, the ten boards** (below), each tile in its own darker color,
-**the one you opened most lately first**. Click one to open it; right-click to dock it in the menu
-bar.
+**Across the very top of the panel**, always first, the **Daily plan** and the **Boards** button
+(below), then **the boards that have notes**, each tile in its own darker color, **the one you
+opened most lately first** (up to ten; the rest are a click away on the Boards grid). A board with
+no notes isn't listed here. Click one to open it; right-click to dock it in the menu bar.
 
 Under them: the **Unzip to Desktop** tile, then the battery across the rest of the row. The zips
 downloaded lately are listed under it.
@@ -680,11 +681,31 @@ schedules, the default "Snoozes in a day over 4" among them):
 
 Each line has its switch and **Open in Scheduler**.
 
-### The boards: Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health, Communication
+### The boards: the Boards grid, the Daily plan, and Goals, Strategies, Entities, Notes, People, Ideas, Dreams, Projects, Health, Communication
 
-Ten boards, each a big glass panel (nine tenths of the screen, the same moving colors as the other
-glass panels) of notes to type into. Their tiles run across the top of the panel, each in its own
-color. The notes fill the panel, the gutter between them narrowing as there are more. **A note's
+Boards, each a big glass panel (nine tenths of the screen, the same moving colors as the other
+glass panels) of notes to type into. The ten above come with the app; name more on the Boards
+grid. The ones with notes run across the top of the panel, each in its own color.
+
+**The Boards grid** (the **Boards** button at the top of the panel) looks and works like a board,
+but its cards are the boards themselves:
+
+- **A card's first line is the board's name and its second what it's for**: type to change them.
+  Click the icon down its left to pick the board's icon.
+- **Under them, the board's notes with a title**, each with its icon, kept up to date by itself
+  (it isn't typed in): a click opens the note on its board.
+- **At its bottom, the board's button** (its icon and name): a click opens the board, showing its
+  grid. Down its top right: open the card to fill the grid, and put the board in the menu bar.
+- The arrows at the top show fewer or more cards: **→ brings a blank board to name**, ← hides
+  the last (its notes are kept). Show the boards with notes, 2 rows and colors work as on a
+  board, and so do double-clicking, dragging and resizing a card.
+- Kept in `~/Library/Application Support/ToolMacTool/board-catalog.json` (names, icons and
+  descriptions) and `boards/boards.json` (the cards' places, sizes and colors).
+
+**The Daily plan** is a board of its own, always first at the top of the panel and never on the
+Boards grid. It's like any other board, and it **opens by itself at 6 AM, 9 AM and 12 PM every
+day** (with a ding; up to an hour late if the Mac was asleep at the time, and in quiet mode once
+quiet mode ends). The notes fill the panel, the gutter between them narrowing as there are more. **A note's
 first line is twice the size of the rest**: its title; **its second line is halfway between**.
 Web addresses in a note are underlined: click one to open it in your browser.
 
@@ -692,7 +713,8 @@ Web addresses in a note are underlined: click one to open it in your browser.
 in the menu bar, and on its notes that wear their board's (**As it came** puts it back).
 
 **In the middle of the top of the board**, the arrows for fewer or more notes (1 to 36; a hidden
-note keeps its text for when it's shown again), and between them:
+note keeps its text for when it's shown again), and between them (each puts a note opened to fill
+the board back in the grid first):
 
 - **Show the notes with text**: every note with some text is shown (in the order they were), and
   the empty ones are hidden.
@@ -700,7 +722,7 @@ note keeps its text for when it's shown again), and between them:
   there are; lit while it's on, and a click again lets them fill the board as fits best.
 - **Colors**: each note shown gets a color, different from the notes beside, above and below it.
 
-**Double-click a note** to step it through light colors, skipping the colors of the notes around
+**Double-click a note** to step it through eighteen light colors, skipping the colors of the notes around
 it, so it stands apart from them.
 
 **Order the notes by dragging them**: drag a note from anywhere on it (its text too; the pointer
@@ -753,14 +775,15 @@ player window of its own (✕ or ⌘W closes it and stops it).
 - **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
   **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
   color when on.
+- **Above its bottom**, always (on its board, pinned, on a tag's board): **its board's button**,
+  the board's icon and name. Pinned or on a tag's board, a click opens the board with the note
+  opened; on its own board it shows the board's grid. Then the notes it links to, and the **+**.
+  - **Link**: the **+** at the end of that row lists the notes with a title on every board (a menu
+    for each board): pick one, and it shows in the row, its icon on its color and its title. Pick
+    more to link more. **A click on one opens its board with that note opened to fill it**;
+    right-click to unlink it (or pick it in the + again).
 - **Down its top right**, one under another: copy its text; open it to fill the board (lit while
-  it's open; Esc or click again to go back); **link** notes (the **+**); put it **in the menu
-  bar**; **dock** it; and **pin** it.
-  - **Link**: the **+** lists the notes with a title on every board (a menu for each board): pick
-    one, and it shows in the row above the note's bottom (To do, Pending, Completed and the tags
-    stay as they are), its icon on its color and its title. Pick more to link more. **A click on
-    one opens its board with that note opened to fill it**; right-click to unlink it (or pick it
-    in the + again). The row is there pinned too, after the button back to its board.
+  it's open; Esc or click again to go back); put it **in the menu bar**; **dock** it; and **pin** it.
   - **In the menu bar**: the note's icon sits in the menu bar beside the wrench (it follows the
     note's icon, and says its title). A click there opens the note by itself just under it, as if
     pinned (drag it anywhere, type in it); another click, ⌘W or Esc puts it away; right-click
@@ -776,7 +799,7 @@ player window of its own (✕ or ⌘W closes it and stops it).
 
 **The tags' boards** have the panel's last column: **Important**, **Urgent**, **Delegate** and
 **Think**, each with how many notes have the tag. Each opens a board of every note with that tag,
-from all ten boards: the notes themselves, so what you type there is typed on their own boards,
+from all the boards: the notes themselves, so what you type there is typed on their own boards,
 and a button at the bottom of each opens its board. Take the tag off a note (bottom right) to take
 it off.
 
@@ -819,7 +842,8 @@ Sources/ToolCore/             the tools' logic: redaction (the map, the model's 
                               them in turn and one another, separating old jobs into actions), timers (what's due when,
                               reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery
                               and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, Daily/Weekly/Monthly
-                              and To do/Pending/Completed, the grid), updates
+                              and To do/Pending/Completed, the grid), the board catalog (names, icons,
+                              descriptions; when the Daily plan opens), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the menu bar's
                               countdown), PanelRows (the boards row, the chimes' tiles, the Timers column, the tags'
@@ -836,9 +860,11 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               Timers (the battery, the sounds, the chimes' cards), BigCards (the quarter-screen cards),
                               ActivityStore (the log, and who hears of each entry), TimerLogView (the report, the
                               thresholds and signals as schedules),
-                              BoardView (the boards; a note, pinned or not), NoteViews (the tags' boards, the icon
+                              BoardView (the boards; a note, pinned or not), BoardsGrid (a board's card on
+                              the Boards grid), NoteViews (the tags' boards, the icon
                               picker, docking a board in the menu bar),
-                              BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards), BoxCards (their cards),
+                              BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards,
+                              the Daily plan opening by itself), BoxCards (their cards),
                               MemoryView, HUD (the small cards, stacked), Updater, Modes (the mode switch, quiet
                               mode's held pop-ups, asking before a schedule goes on or off), PinnedGroups,
                               Screenshots, Permissions (the check after installing, keeping macOS's
