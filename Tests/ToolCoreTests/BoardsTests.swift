@@ -204,4 +204,81 @@ final class BoardsTests: XCTestCase {
         XCTAssertTrue(l.cells[0].contains(x: 0.2, y: 0.9))
         XCTAssertFalse(l.cells[1].contains(x: 0.2, y: 0.9))
     }
+
+    // MARK: Links, rows, colors
+
+    func testLinksAndRowsAreKeptAndOldFilesHaveNone() throws {
+        var b = Board()
+        b.boxes[0].links = [NoteLink(board: "ideas", box: 3), NoteLink(board: "goals", box: 1)]
+        b.arrange(rows: 2)
+        let back = try JSONDecoder().decode(Board.self, from: JSONEncoder().encode(b)).tidied()
+        XCTAssertEqual(back.boxes[0].links, b.boxes[0].links)
+        XCTAssertEqual(back.rows, 2)
+        let old = try JSONDecoder().decode(Board.self, from: Data(#"{"shown":2,"boxes":[{"text":"a"}]}"#.utf8))
+        XCTAssertEqual(old.boxes[0].links, [])
+        XCTAssertNil(old.rows)
+    }
+
+    func testShowWrittenShowsEveryNoteWithTextAndHidesTheEmpty() {
+        var b = Board(shown: 3)
+        b.boxes[1].text = "one"
+        b.boxes[7].text = "  \nseven"
+        b.boxes[9].text = "   "
+        b.move(1, to: 0)                     // 1, 0, 2, 3 …
+        b.showWritten()
+        XCTAssertEqual(b.visible, [1, 7])
+        XCTAssertEqual(b.order.count, Board.maxBoxes)
+        var empty = Board(shown: 5)
+        empty.showWritten()
+        XCTAssertEqual(empty.shown, 1)
+    }
+
+    func testTwoRowsHoldTheShownBoxes() {
+        var b = Board(shown: 7)
+        b.resize(0, across: 2, down: 2)
+        b.arrange(rows: 2)
+        XCTAssertEqual(b.boxes[0].across, 1)
+        let l = b.layout(width: 600, height: 900)   // tall: unfixed, it would take more rows
+        XCTAssertEqual(l.down, 2)
+        XCTAssertEqual(Set(l.cells.map(\.y)).count, 2)
+        XCTAssertEqual(Board.rows(for: 7, width: 600, height: 900, fixed: 2), [4, 3])
+        XCTAssertEqual(Board.rows(for: 1, width: 600, height: 900, fixed: 2), [1])
+        // A big box in two rows: the grid widens rather than growing a third row.
+        b.resize(1, across: 2, down: 2)
+        XCTAssertEqual(b.layout(width: 600, height: 900).down, 2)
+        b.arrange(rows: nil)
+        XCTAssertNil(b.rows)
+    }
+
+    func testColorizeGivesNeighboursDifferentColors() {
+        for shown in [2, 4, 6, 9, 12] {
+            var b = Board(shown: shown)
+            b.colorize(width: 1000, height: 700)
+            let cells = b.layout(width: 1000, height: 700).cells
+            for c in cells {
+                XCTAssertNotEqual(b.boxes[c.box].tint, 0)
+                for d in cells where d.box != c.box && d.touches(c) {
+                    XCTAssertNotEqual(b.boxes[c.box].tint, b.boxes[d.box].tint, "\(shown): \(c.box) and \(d.box)")
+                }
+            }
+        }
+    }
+
+    func testNextTintSkipsTheColorsAround() {
+        var b = Board(shown: 4)                 // 2 × 2
+        b.boxes[0].tint = 0
+        b.boxes[1].tint = 1                     // right of 0
+        b.boxes[2].tint = 2                     // below 0
+        b.boxes[3].tint = 3                     // diagonal: not beside it
+        XCTAssertEqual(b.nextTint(for: 0, width: 1000, height: 700), 3)
+        b.boxes[0].tint = 7
+        XCTAssertEqual(b.nextTint(for: 0, width: 1000, height: 700), 0)
+    }
+
+    func testCellsTouchOnlyAlongAnEdge() {
+        let a = Board.Cell(box: 0, x: 0, y: 0, width: 0.5, height: 0.5)
+        XCTAssertTrue(a.touches(Board.Cell(box: 1, x: 0.5, y: 0, width: 0.5, height: 0.5)))
+        XCTAssertTrue(a.touches(Board.Cell(box: 2, x: 0, y: 0.5, width: 0.5, height: 0.5)))
+        XCTAssertFalse(a.touches(Board.Cell(box: 3, x: 0.5, y: 0.5, width: 0.5, height: 0.5)))
+    }
 }

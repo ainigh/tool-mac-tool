@@ -3,7 +3,7 @@ import SwiftUI
 import ToolCore
 
 // The panel's rows and columns of notes and boards: the boards across the very top (each in its
-// own darker color), the chimes' switches (built-in schedules) beside the Scheduler, the notes
+// own darker color, the one opened most lately first), the chimes' switches (built-in schedules) beside the Scheduler, the notes
 // running a timer (docked in their column by themselves while it runs), the tags' boards, and the
 // notes docked along the bottom.
 
@@ -17,7 +17,8 @@ struct BoardsRow: View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeader(title: "Boards", color: Tools.boardsColor, groups: groups, pinID: PinnedGroups.boardsID)
             HStack(spacing: MenuView.gap) {
-                ForEach(BoardStore.kinds) { kind in
+                // The board opened most lately first.
+                ForEach(store.recent) { kind in
                     BoardTile(kind: kind, inMenuBar: store.isInMenuBar(kind.id),
                               open: {
                                   MenuPanel.close()

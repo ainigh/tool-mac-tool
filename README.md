@@ -581,8 +581,9 @@ first.
 
 ### The boards row, and the row under it: Unzip, Battery
 
-**Across the very top of the panel, the ten boards** (below), each tile in its own darker color.
-Click one to open it; right-click to dock it in the menu bar.
+**Across the very top of the panel, the ten boards** (below), each tile in its own darker color,
+**the one you opened most lately first**. Click one to open it; right-click to dock it in the menu
+bar.
 
 Under them: the **Unzip to Desktop** tile, then the battery across the rest of the row. The zips
 downloaded lately are listed under it.
@@ -683,11 +684,24 @@ Each line has its switch and **Open in Scheduler**.
 
 Ten boards, each a big glass panel (nine tenths of the screen, the same moving colors as the other
 glass panels) of notes to type into. Their tiles run across the top of the panel, each in its own
-color. The big arrows either side of the notes show fewer or more (1 to 36); a hidden note keeps
-its text for when it's shown again. The notes fill the panel, the gutter between them narrowing as
-there are more. Double-click a note to step it through light colors. **A note's first line is
-twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
-it in your browser.
+color. The notes fill the panel, the gutter between them narrowing as there are more. **A note's
+first line is twice the size of the rest**: its title; **its second line is halfway between**.
+Web addresses in a note are underlined: click one to open it in your browser.
+
+**Click the board's icon** (top left, by its name) to pick another for the board: on its tile,
+in the menu bar, and on its notes that wear their board's (**As it came** puts it back).
+
+**In the middle of the top of the board**, the arrows for fewer or more notes (1 to 36; a hidden
+note keeps its text for when it's shown again), and between them:
+
+- **Show the notes with text**: every note with some text is shown (in the order they were), and
+  the empty ones are hidden.
+- **In 2 rows**: the notes shown are arranged in two rows (each back to one block), however many
+  there are; lit while it's on, and a click again lets them fill the board as fits best.
+- **Colors**: each note shown gets a color, different from the notes beside, above and below it.
+
+**Double-click a note** to step it through light colors, skipping the colors of the notes around
+it, so it stands apart from them.
 
 **Order the notes by dragging them**: drag a note from anywhere on it (its text too; the pointer
 becomes a closed hand once it moves) onto another note's place, and it takes that place, the notes
@@ -739,8 +753,18 @@ player window of its own (✕ or ⌘W closes it and stops it).
 - **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
   **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
   color when on.
-- **Down its top right**, one under another: copy its text, open it to fill the board (Esc or click again to go back),
-  **dock** it, and **pin** it.
+- **Down its top right**, one under another: copy its text; open it to fill the board (lit while
+  it's open; Esc or click again to go back); **link** notes (the **+**); put it **in the menu
+  bar**; **dock** it; and **pin** it.
+  - **Link**: the **+** lists the notes with a title on every board (a menu for each board): pick
+    one, and it shows in the row above the note's bottom (To do, Pending, Completed and the tags
+    stay as they are), its icon on its color and its title. Pick more to link more. **A click on
+    one opens its board with that note opened to fill it**; right-click to unlink it (or pick it
+    in the + again). The row is there pinned too, after the button back to its board.
+  - **In the menu bar**: the note's icon sits in the menu bar beside the wrench (it follows the
+    note's icon, and says its title). A click there opens the note by itself just under it, as if
+    pinned (drag it anywhere, type in it); another click, ⌘W or Esc puts it away; right-click
+    takes it out of the menu bar.
   - **Dock**: the note shows in the **Docked notes** row along the bottom of the panel, across all
     its columns: a small icon on the note's color (its board's, if it's plain), with its title and
     a badge when it's running a timer. Click it to open the note; right-click to pin or undock it.

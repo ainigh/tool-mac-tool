@@ -38,10 +38,13 @@ enum NoteLook {
     }
 }
 
-/// The icons a note can wear: a click picks one, or goes back to its board's.
+/// The icons a note (or a board) can wear: a click picks one, or goes back to its board's (the one
+/// a board comes with).
 struct IconPicker: View {
     let current: String
     let board: BoardStore.Kind
+    /// Picking a board's own icon, rather than a note's.
+    var forBoard = false
     let pick: (String?) -> Void
 
     static let symbols: [String] = [
@@ -61,15 +64,15 @@ struct IconPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("The note's icon").font(.headline)
+                Text(forBoard ? "\(board.name)'s icon" : "The note's icon").font(.headline)
                 Spacer()
                 Button {
                     pick(nil)
                 } label: {
-                    Label("\(board.name)'s", systemImage: board.symbol)
+                    Label(forBoard ? "As it came" : "\(board.name)'s", systemImage: forBoard ? board.defaultSymbol : board.symbol)
                 }
                 .controlSize(.small)
-                .help("Back to its board's icon")
+                .help(forBoard ? "Back to the icon the board came with" : "Back to its board's icon")
             }
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 4), count: 8), spacing: 4) {

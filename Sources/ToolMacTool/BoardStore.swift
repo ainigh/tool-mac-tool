@@ -15,13 +15,29 @@ final class BoardStore: ObservableObject {
     struct Kind: Identifiable, Equatable, Sendable {
         let id: String
         let name: String
-        let symbol: String
+        /// The icon it comes with.
+        let defaultSymbol: String
         /// Its own color in the panel, a darker shade (red, green and blue from 0 to 1).
         let red: Double
         let green: Double
         let blue: Double
 
+        init(id: String, name: String, symbol: String, red: Double, green: Double, blue: Double) {
+            self.id = id
+            self.name = name
+            self.defaultSymbol = symbol
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+
         var color: Color { Color(red: red, green: green, blue: blue) }
+
+        /// Its icon: the one picked for it (a click on the icon at the top of the board), else
+        /// the one it comes with.
+        var symbol: String { UserDefaults.standard.string(forKey: Self.iconKey(id)) ?? defaultSymbol }
+
+        static func iconKey(_ id: String) -> String { "boardIcon.\(id)" }
     }
 
     nonisolated static let kinds: [Kind] = [
@@ -133,8 +149,64 @@ final class BoardStore: ObservableObject {
     /// Opens a board; `focus` opens that box to fill it (showing it if it was hidden).
     func show(_ id: String, focus: Int? = nil) {
         guard let board = Self.kind(id) else { return }
+        opened[id] = Date()
+        UserDefaults.standard.set(opened.mapValues(\.timeIntervalSince1970), forKey: Self.openedKey)
         BoardWindow.show(self, board, focus: focus)
     }
+
+    // MARK: The boards, the latest opened first
+
+    /// When each board was last opened.
+    @Published private(set) var opened: [String: Date] =
+        ((UserDefaults.standard.dictionary(forKey: BoardStore.openedKey) as? [String: Double]) ?? [:]).mapValues(Date.init(timeIntervalSince1970:))
+    nonisolated static let openedKey = "boardsOpened"
+
+    /// The boards, the one opened most lately first (those never opened after, as they come).
+    var recent: [Kind] {
+        Self.kinds.enumerated().sorted { a, b in
+            let x = opened[a.element.id] ?? .distantPast, y = opened[b.element.id] ?? .distantPast
+            return x != y ? x > y : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// A different icon for a board (nil: the one it comes with): on its tile, at its top, in the
+    /// menu bar, and on its notes that wear their board's.
+    func setIcon(_ symbol: String?, for board: Kind) {
+        if let symbol, symbol != board.defaultSymbol {
+            UserDefaults.standard.set(symbol, forKey: Kind.iconKey(board.id))
+        } else {
+            UserDefaults.standard.removeObject(forKey: Kind.iconKey(board.id))
+        }
+        objectWillChange.send()
+        model(board).objectWillChange.send()
+        if let button = statusItems[board.id]?.button {
+            button.image = NSImage(systemSymbolName: board.symbol, accessibilityDescription: board.name)
+            button.image?.isTemplate = true
+        }
+        refreshNotes()
+    }
+
+    // MARK: Linked notes
+
+    /// A note linked to: its summary (nil when it's gone, or has nothing to show).
+    func note(_ link: NoteLink) -> Note? { notes.first { $0.board.id == link.board && $0.index == link.box } }
+
+    /// Every note it could link to: the ones with a title, from all the boards, not itself.
+    func linkable(from board: Kind, _ i: Int) -> [Note] {
+        notes.filter { $0.title != nil && !($0.board.id == board.id && $0.index == i) }
+    }
+
+    func addLink(_ link: NoteLink, _ board: Kind, _ i: Int) {
+        guard !model(board).board.boxes[i].links.contains(link) else { return }
+        model(board).board.boxes[i].links.append(link)
+    }
+
+    func removeLink(_ link: NoteLink, _ board: Kind, _ i: Int) {
+        model(board).board.boxes[i].links.removeAll { $0 == link }
+    }
+
+    /// Opens the board a linked note is on, with the note opened to fill it.
+    func open(_ link: NoteLink) { show(link.board, focus: link.box) }
 
     /// Opens a tag's board: every note with that tag, from all the boards.
     func show(_ tag: NoteTag) { TagBoardWindow.show(self, tag) }
@@ -142,6 +214,7 @@ final class BoardStore: ObservableObject {
     /// A board docked in the menu bar (a board's id, or "tag-…"): opened, or closed when it's
     /// open (its icon toggles it).
     func open(docked id: String) {
+        if let note = Self.note(fromDock: id) { return toggleMenuNote(note.board, note.box, id: id) }
         let window = Self.tag(fromDock: id).map { TagBoardWindow.id($0) } ?? BoardWindow.id(id)
         if let w = Windows.window(window), w.isVisible {
             w.orderOut(nil)
@@ -188,6 +261,15 @@ final class BoardStore: ObservableObject {
             }
         }
         if out != notes { notes = out }
+        // A note in the menu bar wears its icon, and says its title.
+        for (id, item) in statusItems where Self.note(fromDock: id) != nil {
+            guard let label = label(forDock: id), let button = item.button else { continue }
+            if button.toolTip?.hasPrefix(label.name + ":") != true {
+                button.toolTip = "\(label.name): open or close the note (right-click to take it out of the menu bar)"
+            }
+            button.image = NSImage(systemSymbolName: label.symbol, accessibilityDescription: label.name)
+            button.image?.isTemplate = true
+        }
     }
 
     // MARK: Boards docked in the menu bar
@@ -197,11 +279,68 @@ final class BoardStore: ObservableObject {
         id.hasPrefix("tag-") ? NoteTag(rawValue: String(id.dropFirst(4))) : nil
     }
 
-    /// A docked board's name and icon.
-    nonisolated static func label(forDock id: String) -> (name: String, symbol: String)? {
-        if let tag = tag(fromDock: id) { return (tag.title, tag.symbol) }
-        if let kind = kind(id) { return (kind.name, kind.symbol) }
+    /// A note's id in the menu bar: "note-<board>-<box>".
+    nonisolated static func dockID(_ board: Kind, _ i: Int) -> String { "note-\(board.id)-\(i)" }
+    nonisolated static func note(fromDock id: String) -> (board: Kind, box: Int)? {
+        guard id.hasPrefix("note-") else { return nil }
+        let rest = id.dropFirst(5)
+        guard let dash = rest.lastIndex(of: "-"), let box = Int(rest[rest.index(after: dash)...]),
+              let kind = kind(String(rest[..<dash])), (0..<Board.maxBoxes).contains(box) else { return nil }
+        return (kind, box)
+    }
+
+    /// What's docked in the menu bar: its name and icon (a board's, a tag's board's, or a note's).
+    func label(forDock id: String) -> (name: String, symbol: String)? {
+        if let tag = Self.tag(fromDock: id) { return (tag.title, tag.symbol) }
+        if let kind = Self.kind(id) { return (kind.name, kind.symbol) }
+        if let n = Self.note(fromDock: id) {
+            let box = model(n.board).board.boxes[n.box]
+            return (box.title ?? "\(n.board.name) · box \(n.box + 1)", box.icon ?? n.board.symbol)
+        }
         return nil
+    }
+
+    // MARK: A note in the menu bar
+
+    private var menuNotes: [String: GlassPanel] = [:]
+
+    /// A note docked in the menu bar: a click there opens it by itself under its icon, as if
+    /// pinned; another click puts it away.
+    private func toggleMenuNote(_ board: Kind, _ i: Int, id: String) {
+        if let panel = menuNotes[id], panel.isVisible {
+            panel.orderOut(nil)
+            return
+        }
+        let panel: GlassPanel
+        if let made = menuNotes[id] {
+            panel = made
+        } else {
+            panel = GlassPanel(size: NSSize(width: 340, height: 300), resizable: true)
+            panel.level = .floating
+            panel.hasShadow = true
+            panel.dragsAnywhere = true
+            panel.minSize = NSSize(width: 220, height: 170)
+            let host = FirstClickHostingView(rootView: PinnedBox(model: model(board), store: self, board: board, index: i))
+            host.sizingOptions = []
+            panel.contentView = host
+            panel.commands = ["w": { [weak panel] in panel?.orderOut(nil) }]
+            panel.onEscape = { [weak panel] in
+                panel?.orderOut(nil)
+                return true
+            }
+            menuNotes[id] = panel
+        }
+        // Just under its icon in the menu bar.
+        if let frame = statusItems[id]?.button?.window?.frame {
+            let size = panel.frame.size
+            var origin = NSPoint(x: frame.midX - size.width / 2, y: frame.minY - size.height - 6)
+            if let v = NSScreen.screens.first(where: { $0.frame.intersects(frame) })?.visibleFrame {
+                origin.x = min(max(origin.x, v.minX + 8), v.maxX - size.width - 8)
+            }
+            panel.setFrameOrigin(origin)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
     }
 
     func isInMenuBar(_ id: String) -> Bool { menuBarBoards.contains(id) }
@@ -220,9 +359,10 @@ final class BoardStore: ObservableObject {
             NSStatusBar.system.removeStatusItem(item)
             statusItems[id] = nil
             statusTargets[id] = nil
+            menuNotes[id]?.orderOut(nil)
         }
         for id in menuBarBoards where statusItems[id] == nil {
-            guard let label = Self.label(forDock: id) else { continue }
+            guard let label = label(forDock: id) else { continue }
             let name = label.name, symbol = label.symbol
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             item.autosaveName = "ToolMacTool.board.\(id)"
@@ -231,7 +371,9 @@ final class BoardStore: ObservableObject {
                 button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
                 button.image?.isTemplate = true
                 button.identifier = MenuPanel.boardItem
-                button.toolTip = "\(name): open or close the board (right-click to take it out of the menu bar)"
+                button.toolTip = Self.note(fromDock: id) != nil
+                    ? "\(name): open or close the note (right-click to take it out of the menu bar)"
+                    : "\(name): open or close the board (right-click to take it out of the menu bar)"
                 button.target = target
                 button.action = #selector(StatusTarget.clicked(_:))
                 button.sendAction(on: [.leftMouseUp, .rightMouseUp])
