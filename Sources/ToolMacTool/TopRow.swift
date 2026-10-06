@@ -14,9 +14,10 @@ struct TopRow: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: files.title, color: files.color)
+                    SectionHeader(title: files.title, color: files.color, groups: model.groups, pinID: files.id)
                     ToolTile(tool: Tools.unzip, color: files.color) { model.open(Tools.unzip) }
                 }
+                .frame(width: MenuView.tile)
                 BatteryPanel(board: model.timers, activity: model.activity, color: Tools.batteryColor)
                     .frame(maxWidth: .infinity)
             }
@@ -60,7 +61,7 @@ struct BatteryPanel: View {
     var body: some View {
         RowCard(title: TimerBoard.batteryName, color: color) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                content(now: context.date)
+                content(now: AppClock.time(at: context.date))
             }
         }
         .contextMenu {
@@ -223,17 +224,15 @@ private struct Fact: View {
 struct MenuBarIcon: View {
     @ObservedObject var updater: Updater
     @ObservedObject var boards: BoardStore
+    @ObservedObject var modes: ModeCenter = .shared
 
     var body: some View {
-        // The filled icon means an update is waiting.
+        // The filled icon means an update is waiting; test and quiet mode show their own beside it.
         let icon = Image(systemName: updater.hasUpdate ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
-        if let text = next {
-            HStack(spacing: 4) {
-                icon
-                Text(text).monospacedDigit()
-            }
-        } else {
+        HStack(spacing: 4) {
             icon
+            if modes.mode != .normal { Image(systemName: modes.mode.symbol) }
+            if let text = next { Text(text).monospacedDigit() }
         }
     }
 

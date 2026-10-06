@@ -58,7 +58,7 @@ final class Scheduler: ObservableObject {
         activity.onRecord { [weak self] entry in self?.heard(entry) }
         if !UserDefaults.standard.bool(forKey: Self.migratedKey) {
             UserDefaults.standard.set(true, forKey: Self.migratedKey)
-            let now = Date()
+            let now = AppClock.now()
             for var job in ScheduleBook.fromSignals(activity.settings) {
                 job.plan(from: now)
                 book.jobs.append(job)
@@ -68,7 +68,7 @@ final class Scheduler: ObservableObject {
 
     /// Starts checking every few seconds (and as soon as the Mac wakes).
     func start() {
-        let now = Date()
+        let now = AppClock.now()
         for i in book.jobs.indices {
             let job = book.jobs[i]
             // Never planned, or missed long ago: plan from now. (Missed a little: it runs now.)
@@ -77,9 +77,12 @@ final class Scheduler: ObservableObject {
             }
         }
         ticker?.invalidate()
-        ticker = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // Every second: in test mode a second is a minute, and a chime more than five late is skipped.
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
         waking = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil,
                                                                    queue: .main) { [weak self] _ in
             Task { @MainActor in self?.woke() }
@@ -92,8 +95,14 @@ final class Scheduler: ObservableObject {
         }
     }
 
+    /// The app's clock jumped (test mode began or ended): every job is planned again from now.
+    func replanAll() {
+        let now = AppClock.now()
+        for i in book.jobs.indices { book.jobs[i].plan(from: now) }
+    }
+
     private func tick() {
-        let now = Date()
+        let now = AppClock.now()
         for job in book.jobs where job.isDue(now) && !running.contains(job.id) {
             // A chime missed by more than a few minutes (the Mac was asleep) waits for the next hour.
             if job.action == .chime, let next = job.next, now.timeIntervalSince(next) > TimerSpec.chimeGrace {
@@ -107,7 +116,7 @@ final class Scheduler: ObservableObject {
     /// Back from sleep: what was missed by a lot is skipped, what was just missed runs; then the
     /// jobs that wait for the Mac to wake.
     private func woke() {
-        let now = Date()
+        let now = AppClock.now()
         for i in book.jobs.indices where book.jobs[i].enabled {
             if let next = book.jobs[i].next, now.timeIntervalSince(next) > Self.lateness { book.jobs[i].plan(from: now) }
         }
@@ -128,7 +137,7 @@ final class Scheduler: ObservableObject {
     /// A new entry in the log: the jobs waiting for it run.
     private func heard(_ entry: LogEntry) {
         guard let activity else { return }
-        let now = Date()
+        let now = AppClock.now()
         for job in book.jobs where job.enabled && job.when.kind == .event && job.when.event.isLogged {
             guard job.when.matches(entry, log: activity.log) else { continue }
             fire(job, context: Context(entry: entry, crossing: job.when.crossing(entry, log: activity.log)), now: now)
@@ -137,7 +146,7 @@ final class Scheduler: ObservableObject {
 
     /// Something that isn't in the log happened (the app started, the Mac woke).
     private func happened(_ event: ScheduleEvent) {
-        let now = Date()
+        let now = AppClock.now()
         for job in book.jobs where job.enabled && job.when.kind == .event && job.when.event == event {
             fire(job, context: Context(), now: now)
         }
@@ -177,7 +186,7 @@ final class Scheduler: ObservableObject {
             job.action = old.action
             job.target = old.target
         }
-        if job.when != old.when || job.enabled != old.enabled { job.plan(from: Date()) }
+        if job.when != old.when || job.enabled != old.enabled { job.plan(from: AppClock.now()) }
         book.jobs[i] = job
     }
 
@@ -196,7 +205,7 @@ final class Scheduler: ObservableObject {
         job.lastRun = book.jobs[i].lastRun
         job.lastOK = book.jobs[i].lastOK
         job.lastResult = book.jobs[i].lastResult
-        job.plan(from: Date())
+        job.plan(from: AppClock.now())
         book.jobs[i] = job
     }
 
@@ -204,7 +213,7 @@ final class Scheduler: ObservableObject {
     func add(_ job: ScheduledJob = ScheduledJob(name: "New schedule", action: .remind,
                                                 when: Schedule(kind: .daily, hour: 9, minute: 0))) -> String {
         var job = job
-        job.plan(from: Date())
+        job.plan(from: AppClock.now())
         book.jobs.insert(job, at: 0)
         return job.id
     }
@@ -239,7 +248,7 @@ final class Scheduler: ObservableObject {
 
     /// Runs it now. On its schedule, it then moves on to its next time; run by hand, its
     /// schedule stays as it was.
-    func run(_ id: String, now: Date = Date(), byHand: Bool = false, context: Context = Context()) {
+    func run(_ id: String, now: Date = AppClock.now(), byHand: Bool = false, context: Context = Context()) {
         guard let job = job(id), !running.contains(id) else { return }
         running.insert(id)
         if !byHand, let i = book.jobs.firstIndex(where: { $0.id == id }) {
@@ -531,46 +540,30 @@ final class Scheduler: ObservableObject {
 // MARK: - The card a job's result comes on
 
 /// A glass card at the top right of the screen with a job's result or reminder. It stays until
-/// you close it; a newer result takes its place.
+/// you close it; newer ones stack under it. In quiet mode it waits.
 @MainActor
 final class ResultCard {
     static let shared = ResultCard()
-    private var panel: NSPanel?
 
     func show(job: ScheduledJob, text: String, ok: Bool, scheduler: Scheduler) {
-        let panel = self.panel ?? make()
-        self.panel = panel
-        let view = ResultCardView(title: job.name, symbol: job.action.symbol, text: text, ok: ok,
-                                  say: { scheduler.speaker.say(text) },
-                                  open: { [weak self] in
-                                      self?.hide()
-                                      SchedulerWindow.show(scheduler, select: job.id)
-                                  },
-                                  close: { [weak self] in self?.hide() })
-        let host = FirstClickHostingView(rootView: view)
-        panel.contentView = host
-        let size = host.fittingSize
-        if let screen = NSScreen.main {
-            let v = screen.visibleFrame
-            panel.setFrame(NSRect(x: v.maxX - size.width - 12, y: v.maxY - size.height - 8, width: size.width, height: size.height),
-                           display: true)
-        }
-        panel.orderFrontRegardless()
-        if ok { NSSound(named: NSSound.Name("Glass"))?.play() } else { NSSound.beep() }
+        let at = AppClock.now()
+        if ModeCenter.shared.hold("result-\(UUID().uuidString)", { [weak self] in
+            self?.show(job: job, text: text, ok: ok, scheduler: scheduler, at: at)
+        }) { return }
+        show(job: job, text: text, ok: ok, scheduler: scheduler, at: at)
     }
 
-    func hide() { panel?.orderOut(nil) }
-
-    private func make() -> NSPanel {
-        let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        p.isOpaque = false
-        p.backgroundColor = .clear
-        p.hasShadow = false
-        p.level = .floating
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        p.hidesOnDeactivate = false
-        p.isReleasedWhenClosed = false
-        return p
+    private func show(job: ScheduledJob, text: String, ok: Bool, scheduler: Scheduler, at: Date) {
+        StackedCards.shared.show(.topRight, level: .floating) { close in
+            ResultCardView(title: job.name, symbol: job.action.symbol, text: text, ok: ok, at: at,
+                           say: { scheduler.speaker.say(text) },
+                           open: {
+                               close()
+                               SchedulerWindow.show(scheduler, select: job.id)
+                           },
+                           close: close)
+        }
+        if ok { NSSound(named: NSSound.Name("Glass"))?.play() } else { NSSound.beep() }
     }
 }
 
@@ -579,6 +572,8 @@ struct ResultCardView: View {
     let symbol: String
     let text: String
     let ok: Bool
+    /// When it came (on the app's clock).
+    var at = Date()
     let say: () -> Void
     let open: () -> Void
     let close: () -> Void
@@ -595,7 +590,7 @@ struct ResultCardView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(Date(), style: .time)
+                Text(at.formatted(date: .omitted, time: .shortened))
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.5))
                 GlassIcon(symbol: "xmark", help: "Close", action: close)

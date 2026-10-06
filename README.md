@@ -6,9 +6,47 @@ the top, each in its own color; a row under them (Unzip to Desktop, the battery 
 tiles grouped into sections in two columns (Automate, Voice and Record; Glass and Model tools),
 plus two narrow columns (the notes running a timer, and the tags' boards), with dividers between
 them; and the notes you've docked, in a row along the bottom. Each section has its own color, worn
-by its tiles and its title. The bar at the bottom holds updates (with the version you're on),
-**Open at login** and **Quit**. Hover over a tile to see what it does. New tools get added over
-time, and the app updates itself from GitHub.
+by its tiles and its title, with a pin at the right of the title to float the group on your screen
+(below). The bar at the bottom holds updates (with the version you're on), the **mode** (normal,
+test or quiet, below), **Open at login** and **Quit**. Hover over a tile to see what it does. A
+tile, a board, a note or anything else that opens a window puts the panel away as it does. New
+tools get added over time, and the app updates itself from GitHub.
+
+## Pop-ups stay until you close them
+
+Every card the app puts up (a timer ringing, a reminder, a chime, a Note reminder, a schedule's
+result, a threshold crossed, a saved recording, an unzip, a screenshot) stays on screen until you
+close it: nothing fades out or goes away by itself. Small cards stack down the top right of the
+screen (a new column to the left when one fills); the big ones each have their own spot. Turning
+a schedule on or off (a Scheduler job's switch, the Day chime or Night watch, a note's Daily,
+Weekly or Monthly) first says what that means and asks.
+
+## Modes: normal, test and quiet
+
+The three buttons in the panel's bottom bar (a dashed circle, a hare, a moon) switch the app's
+mode; each asks first, saying what it means. While one is on, its icon shows beside the wrench in
+the menu bar, and the bottom bar shows the time it has left.
+
+- **Normal**: the real clock; pop-ups come when they're due.
+- **Test**: the clock that the schedules, the chimes, the notes' timers and due dates, the Note
+  reminders and the battery run by goes **60 times faster**: a day goes by in 24 minutes, an hour
+  in a minute, a minute in a second. It's for trying out schedules and timings without waiting.
+  It goes back to normal by itself after **30 minutes**. Then the schedules are planned again from
+  the real time, and what was set on the fast clock (timers, the battery's start, log entries,
+  Note reminders' marks) is cleared up, so nothing is left waiting for a time that hasn't come.
+- **Quiet**: nothing pops up and the timers make no sound. It goes back to normal by itself after
+  **an hour**, and then **everything that would have popped up meanwhile pops up**, so you can catch
+  up (the same card coming up twice, a note's hourly reminder say, comes up once, up to date). The
+  bottom bar counts what's being held back.
+
+The mode is kept across a relaunch (with what's left of its time); what quiet mode held back isn't.
+
+## Pinned groups
+
+Any group in the panel (Boards, Files, Automate, Voice, Record, Glass, Model tools, Timers, Tags)
+has a pin at the right of its title. Pinned, the group floats on your screen in a window of its
+own, above other windows, its tiles working as they do in the panel. Drag anywhere on it to move
+it; the pin (or ⌘W) puts it away. Pinned groups come back where you left them after a relaunch.
 
 It's a native Mac app (Swift, SwiftUI and AppKit). You never build it by hand. GitHub Actions
 builds it on every push and publishes a release when something lands on `main`. When GitHub hasn't
@@ -99,8 +137,8 @@ What running it does:
 
 If moving stops partway (a file can't be moved, say), it says what had already been added and
 replaced. If Downloads or the Desktop can't be read, the list says so and links to the privacy
-setting. The zip stays in Downloads. A card also fades in at the middle of the screen with a
-**Show in Finder** button.
+setting. The zip stays in Downloads. A card also comes up in the middle of the screen with a
+**Show in Finder** button, and stays until you click **OK**.
 
 ### Read aloud, Dictate, Transcribe (Voice)
 
@@ -135,7 +173,7 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   files go to Parakeet in pieces of under a minute, each cut at the quietest moment near its end.
   It keeps going if you close the window.
 
-### Record screen, Screen only, Record audio, Recordings (Record)
+### Record screen, Screen only, Record audio, Recordings, Screenshot (Record)
 
 - **Record screen.** Click the tile and the screens dim: **drag a box** around what to record
   (its size shows beside it), or **click** to take the whole screen; Esc cancels. What's inside
@@ -150,6 +188,10 @@ was refused, the tool says so and **Open Settings** goes to the right page.
 - **Record audio.** Just the microphone: **Record** (⌘R), **Pause**/**Resume**, **Stop** (saves) or
   **Discard**. Saved as `glass-audio-<time>.m4a`. (Dictate writes down what you say but doesn't keep
   the sound; this keeps the sound.) Closing the window stops and saves.
+- **Screenshot.** Click the tile and the screens dim: **drag a box** around what to copy, or
+  **click** for the whole screen (Esc cancels). A picture of it, at the screen's full resolution,
+  goes on the **clipboard**, ready to paste anywhere (⌘V); a card says so. It uses the same Screen
+  Recording permission as Record screen.
 - **Recordings.** A glass panel as big as the diagram's (90% of the screen) with every video and
   audio file in the Glass folder in a grid, newest first: a picture from each video, its length,
   when it was made and its size, and badges for **No sound** and **Transcript**. **All**, **Videos**
@@ -456,6 +498,8 @@ the box on its board, and waits for **OK** (or Esc).
 Two more chime on the hour. They're the Scheduler's built-in jobs, on from the start, with a tile
 each beside the Scheduler: click one to turn it on or off, or change its hours in the Scheduler.
 
+Both of their cards stay until you click **OK** (or ✕, or Esc).
+
 - **Day chime** (top middle): every hour from 6 AM to 10 PM, a bright ding and a card
   with the time ("Monday 2 PM"), how many hours have passed since 6 AM and how many are left to
   10 PM, with a bar for the day so far.
@@ -516,14 +560,38 @@ there are more. Double-click a note to step it through light colors. **A note's 
 twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
 it in your browser.
 
+**Paste a web address into a note** and its page is fetched straight away: under the text, a line
+with the **page's icon (favicon), its title and its site** (a click opens it; right-click to copy
+the link or fetch it again). Each note shows its first two links (four when it's big), and the
+pages are remembered in `~/Library/Application Support/ToolMacTool/links.json`. **A YouTube link
+plays in the note**: when the note is big enough (opened to fill the board, or a large pinned
+note) the video's player is right there under the text; otherwise its line opens the video in a
+player window of its own (✕ or ⌘W closes it and stops it).
+
 - **Down each note's left**, a thin column (its buttons shrink to fit a small note):
   - at the top, **the note's icon** (its board's at first): click it to pick another;
   - its timers: Timer 1, Timer 2, Repeat 1, Repeat 2 and a due date. Click one to pick how long
     (or the day and time); the one running is filled in. One timer a note: setting another
     replaces it. Its **countdown shows at the top middle of the note**, with a ✕ to stop it, and
-    the note docks itself in the panel's **Timers** column while it runs;
-  - at the bottom, its four **tags**: **Important** (a star), **Urgent** (a flame), **Delegate**
-    (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its color when on.
+    the note docks itself in the panel's **Timers** column while it runs.
+- **At its top left, next to its icon: Daily, Weekly and Monthly** (just D, W and M on a small
+  note). Turn one on (it asks first, saying what it means; one at a time) and the note **comes
+  round**: on its day, **every hour on the hour from 6 AM to 10 PM**, a **Note reminder** pops up
+  in the middle of the screen with the note's title big, its text to read and edit, and two
+  buttons. **Pending** puts it away until the next hour. **Completed** puts it away until the next
+  day (Daily), **next Monday** (Weekly) or **the 1st of next month** (Monthly). A weekly note starts
+  on Monday and a monthly one on the 1st, and keeps coming each hour (on the days after, too) until
+  it's completed. It repeats like that until you turn it off. Turned on in the middle of an hour,
+  the first reminder comes at the next hour; hours missed while the Mac slept aren't made up (the
+  latest one comes).
+- **At its bottom left: To do, Pending and Completed** (icons on a small note). At most one is on;
+  click the one that's on to take it off. A note that comes round uses them: turning Daily, Weekly
+  or Monthly on sets it to To do, its reminder's Pending and Completed set those, marking it
+  Completed yourself counts too (no more reminders until the next day, week or month), and each
+  new day, week or month sets it back to To do.
+- **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
+  **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
+  color when on.
 - **At its top right**: copy its text, open it to fill the board (Esc or click again to go back),
   **dock** it, and **pin** it.
   - **Dock**: the note shows in the **Docked notes** row along the bottom of the panel, across all
@@ -538,7 +606,8 @@ it in your browser.
 **The tags' boards** have the panel's last column: **Important**, **Urgent**, **Delegate** and
 **Think**, each with how many notes have the tag. Each opens a board of every note with that tag,
 from all ten boards: the notes themselves, so what you type there is typed on their own boards,
-and a button at the bottom of each opens its board. Take the tag off a note to take it off.
+and a button at the bottom of each opens its board. Take the tag off a note (bottom right) to take
+it off.
 
 **Dock a board in the menu bar**: right-click a board's tile (or a tag's) in the panel, or click
 **Dock in the menu bar** at the top of the board. Its icon then sits in the menu bar beside the
@@ -567,14 +636,16 @@ For frameless, see-through UI, use `GlassPanel` (in `Windows.swift`) and draw yo
 
 ```
 Package.swift                 Swift package: ToolCore (logic), ToolMacTool (app), tests
-Sources/ToolCore/             the tools' logic: zips, memory, chat context, Ollama's replies, reply Markdown,
+Sources/ToolCore/             the tools' logic: the app's modes and its clock (normal, test, quiet), link previews
+                              (a page's title and icons, YouTube addresses), zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
                               shortcuts as tools and tool calls,
                               spoken text and sentences, captions, phrases, voices, dictation files,
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
                               their text and placeholders, events, web calls, built-in chimes, history), timers (what's due when,
                               reminders, snoozes, due dates, their sounds), the timer log (counts, thresholds, signals, the battery
-                              and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, the grid), updates
+                              and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, Daily/Weekly/Monthly
+                              and To do/Pending/Completed, the grid), updates
                               (testable anywhere)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the menu bar's
                               countdown), PanelRows (the boards row, the chimes' tiles, the Timers column, the tags'
@@ -593,7 +664,9 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               BoardView (the boards; a note, pinned or not), NoteViews (the tags' boards, the icon
                               picker, docking a board in the menu bar),
                               BoardStore (every board, its notes' timers, pinned notes, the menu bar's boards), BoxCards (their cards),
-                              MemoryView, HUD, Updater
+                              MemoryView, HUD (the small cards, stacked), Updater, Modes (the mode switch, quiet
+                              mode's held pop-ups, asking before a schedule goes on or off), PinnedGroups,
+                              Screenshots, LinkPreviews (a note's links, the YouTube player)
 Sources/ToolMacTool/Network/  the diagram canvas: canvas.html, network.js (the network view), and from Mind Map
                               Studio mermaid.js (reads Mermaid) and the icons (icons, icon-set, icon-brands,
                               icon-match); shipped as the app's resources

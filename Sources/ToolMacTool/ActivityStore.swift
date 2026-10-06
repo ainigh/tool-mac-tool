@@ -61,12 +61,20 @@ final class ActivityStore: ObservableObject {
     /// Adds to the log; then everyone listening hears of it (the scheduler's event jobs).
     @discardableResult
     func record(_ kind: LogEntry.Kind, source: String, name: String, detail: String = "", value: Double? = nil,
-                at: Date = Date()) -> LogEntry {
+                at: Date = AppClock.now()) -> LogEntry {
         let entry = LogEntry(at: at, source: source, name: name, kind: kind, detail: detail, value: value)
         log.add(entry)
         scheduleSave()
         for listener in listeners { listener(entry) }
         return entry
+    }
+
+    /// Test mode ended: what was logged on the fast clock (dated after the real time) goes.
+    func dropFuture(after now: Date = Date()) {
+        let kept = log.entries.filter { $0.at <= now.addingTimeInterval(5) }
+        guard kept.count != log.entries.count else { return }
+        log = ActivityLog(entries: kept)
+        scheduleSave()
     }
 
     func clearLog() {

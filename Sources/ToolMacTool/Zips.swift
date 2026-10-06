@@ -229,7 +229,10 @@ struct ZipProblem: View {
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
-                Button("Open Privacy Settings") { NSWorkspace.shared.open(ZipModel.privacySettings) }
+                Button("Open Privacy Settings") {
+                    MenuPanel.close()
+                    NSWorkspace.shared.open(ZipModel.privacySettings)
+                }
                 Button("Copy the error") { Clipboard.copy(text) }
             }
             .buttonStyle(.link)
@@ -267,6 +270,7 @@ struct ZipRow: View {
             .help("Unzip into " + (item.plan.target.map { "Desktop/\($0)" } ?? "its Desktop folder"))
 
             IconButton(symbol: "folder", help: "Show in Finder") {
+                MenuPanel.close()
                 NSWorkspace.shared.show(ZipModel.place(item))
             }
         }

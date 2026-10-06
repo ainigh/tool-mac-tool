@@ -60,7 +60,7 @@ enum Tools {
                         extra: .chimes),
             ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
             ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
-                        tools: [recordScreen, recordScreenOnly, recordAudio, recordings]),
+                        tools: [recordScreen, recordScreenOnly, recordAudio, recordings, screenshot]),
         ],
         [
             ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings]),
@@ -207,6 +207,14 @@ enum Tools {
         symbol: "record.circle",
         open: { model in AudioRecorderWindow.show(model.audioRecorder) { RecordingsWindow.show(model) } })
 
+    static let screenshot = Tool(
+        id: "screenshot",
+        name: "Screenshot",
+        title: "Screenshot to the clipboard",
+        subtitle: "Drag a box on the screen (or click for the whole screen) and a picture of it goes on the clipboard, ready to paste anywhere (⌘V). Esc cancels.",
+        symbol: "camera.viewfinder",
+        open: { model in model.screenshots.take() })
+
     static let recordings = Tool(
         id: "recordings",
         name: "Recordings",
@@ -243,7 +251,7 @@ enum Tools {
         Tool(id: "board-\(kind.id)",
              name: kind.name,
              title: "\(kind.name): a board of notes",
-             subtitle: "A big glass panel of notes to type into, the first line of each its title. The arrows either side show more or fewer (hidden ones keep their text). Double-click a note to change its color. Down its left: its icon (click to pick another), a timer or a due date (one at a time; the note shows in the panel's Timers column while it runs), and its tags (Important, Urgent, Delegate, Think). At its top right: copy, open it to fill the board, dock it along the bottom of this panel, and pin it to float on your screen. Right-click the tile to dock the board in the menu bar.",
+             subtitle: "A big glass panel of notes to type into, the first line of each its title. The arrows either side show more or fewer (hidden ones keep their text). Double-click a note to change its color. Down its left: its icon (click to pick another), and a timer or a due date (one at a time; the note shows in the panel's Timers column while it runs). Top left: Daily, Weekly or Monthly, for a reminder every hour from 6 AM until it's done. Bottom left: To do, Pending, Completed; bottom right: its tags (Important, Urgent, Delegate, Think). At its top right: copy, open it to fill the board, dock it along the bottom of this panel, and pin it to float on your screen. Paste a web address to see its page's icon and title (a YouTube video plays in the note). Right-click the tile to dock the board in the menu bar.",
              symbol: kind.symbol,
              open: { model in model.boards.show(kind.id) })
     }

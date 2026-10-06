@@ -570,7 +570,10 @@ private struct JobLine: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Toggle("", isOn: Binding(get: { job.enabled }, set: { scheduler.setEnabled(job.id, $0) }))
+            Toggle("", isOn: Binding(get: { job.enabled }, set: { on in
+                guard Confirm.schedule(job, on: on, clock24: scheduler.prefs.settings.clock24) else { return }
+                scheduler.setEnabled(job.id, on)
+            }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
             Image(systemName: job.action.symbol).foregroundStyle(.white.opacity(0.6)).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {

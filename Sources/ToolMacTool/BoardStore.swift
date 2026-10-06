@@ -79,7 +79,7 @@ final class BoardStore: ObservableObject {
     /// Every box's alarm that's counting or ringing, ringing ones first, then soonest first.
     @Published private(set) var upcoming: [Upcoming] = []
     /// Bumped every second, for what shows a countdown (the menu bar).
-    @Published private(set) var now = Date()
+    @Published private(set) var now = AppClock.now()
 
     private(set) var models: [String: BoardModel] = [:]
     private let sounds: TonePlayer
@@ -93,7 +93,7 @@ final class BoardStore: ObservableObject {
     nonisolated static let menuBarKey = "menuBarBoards"
 
     /// What each box's card is showing, so OK knows what it's putting away.
-    private enum Shown { case reminder, ringing, round }
+    private enum Shown { case reminder, ringing, round, roundPassed }
     private var showing: [String: Shown] = [:]
 
     init(sounds: TonePlayer, activity: ActivityStore) {
@@ -241,7 +241,7 @@ final class BoardStore: ObservableObject {
 
     /// Starts one of a countdown's presets in a box (whatever it was running stops: one at a time).
     func start(_ spec: TimerSpec, choice: Int, in board: Kind, _ i: Int) {
-        let state = spec.chose(choice, now: Date())
+        let state = spec.chose(choice, now: AppClock.now())
         set(board, i, BoxAlarm(spec: spec.id, state: state))
         if let d = spec.duration(state) { log(board, i, spec, .set, detail: TimerText.duration(d), value: d) }
     }
@@ -249,7 +249,7 @@ final class BoardStore: ObservableObject {
     /// A due date for a box, counting down from now.
     func setDue(_ date: Date, in board: Kind, _ i: Int) {
         let spec = TimerSpec.deadline
-        let state = spec.due(until: date, now: Date())
+        let state = spec.due(until: date, now: AppClock.now())
         set(board, i, BoxAlarm(spec: spec.id, state: state))
         log(board, i, spec, .set, detail: "Due \(date.formatted(date: .abbreviated, time: .shortened))",
             value: spec.duration(state))
@@ -265,7 +265,7 @@ final class BoardStore: ObservableObject {
     func restart(_ board: Kind, _ i: Int) {
         guard let a = alarm(board, i), let spec = a.timer else { return }
         if spec.kind == .deadline {
-            if let until = a.state.until, until > Date() { setDue(until, in: board, i) }
+            if let until = a.state.until, until > AppClock.now() { setDue(until, in: board, i) }
         } else if let c = a.state.choice {
             start(spec, choice: c, in: board, i)
         }
@@ -273,12 +273,12 @@ final class BoardStore: ObservableObject {
 
     func canSnooze(_ board: Kind, _ i: Int) -> Bool {
         guard let a = alarm(board, i), let spec = a.timer else { return false }
-        return spec.canSnooze(a.state, now: Date())
+        return spec.canSnooze(a.state, now: AppClock.now())
     }
 
     /// Quiet now, and ring again in three minutes (once).
     func snooze(_ board: Kind, _ i: Int) {
-        let now = Date()
+        let now = AppClock.now()
         guard let a = alarm(board, i), let spec = a.timer, spec.canSnooze(a.state, now: now) else { return }
         model(board).board.boxes[i].alarm = BoxAlarm(spec: a.spec, state: spec.snoozed(a.state, now: now))
         let key = Self.cardID(board, i)
@@ -295,10 +295,10 @@ final class BoardStore: ObservableObject {
         sounds.stop(key)
         hideCard(key)
         guard let a = alarm(board, i), let spec = a.timer else { return }
-        if was == .ringing || was == .round { log(board, i, spec, .dismissed) }
-        if spec.isOneOff, spec.phase(a.state, now: Date()) == .finished {
+        if was == .ringing || was == .round || was == .roundPassed { log(board, i, spec, .dismissed) }
+        if spec.isOneOff, spec.phase(a.state, now: AppClock.now()) == .finished {
             model(board).board.boxes[i].alarm = nil
-            refresh(Date())
+            refresh(AppClock.now())
         }
     }
 
@@ -308,7 +308,7 @@ final class BoardStore: ObservableObject {
         sounds.stop(key)
         hideCard(key)
         model(board).board.boxes[i].alarm = alarm
-        refresh(Date())
+        refresh(AppClock.now())
     }
 
     private func hideCard(_ key: String) {
@@ -327,23 +327,24 @@ final class BoardStore: ObservableObject {
     // MARK: Running
 
     private func tick() {
-        let now = Date()
+        let now = AppClock.now()
         let cal = calendar
         for board in Self.kinds {
             let m = model(board)
             for i in m.board.boxes.indices {
                 guard let a = m.board.boxes[i].alarm, let spec = a.timer else { continue }
                 let key = Self.cardID(board, i)
-                // A repeating timer's card goes when the next round starts.
+                // A repeating timer's sound stops when the next round starts; its card stays until OK.
                 if showing[key] == .round, case .counting = spec.phase(a.state, now: now) {
                     sounds.stop(key)
-                    hideCard(key)
+                    showing[key] = .roundPassed
                 }
                 guard let due = spec.due(a.state, now: now, calendar: cal) else { continue }
                 m.board.boxes[i].alarm = due.state.isOn ? BoxAlarm(spec: a.spec, state: due.state) : nil
                 if let event = due.event { fire(event, spec, board, i) }
             }
         }
+        routines(now, calendar: cal)
         refresh(now)
     }
 
@@ -394,7 +395,7 @@ final class BoardStore: ObservableObject {
             let again = event == .snoozeOver(round: 0) || spec.kind == .repeating
             switch spec.kind {
             case .deadline:
-                let when = (state.until ?? Date()).formatted(date: .abbreviated, time: .shortened)
+                let when = (state.until ?? AppClock.now()).formatted(date: .abbreviated, time: .shortened)
                 log(board, i, spec, .alarm, detail: again ? "Again after a snooze" : "Due · \(when)", value: length)
                 moment = .due(snoozed: again)
             case .repeating:
@@ -403,7 +404,7 @@ final class BoardStore: ObservableObject {
             default:
                 log(board, i, spec, .alarm, detail: again ? "Again after a snooze" : "Time's up · \(TimerText.duration(length))",
                     value: length)
-                moment = .done(snoozed: again, at: Date())
+                moment = .done(snoozed: again, at: AppClock.now())
             }
             sounds.play(look.tone, for: key, maxSeconds: look.tone.loops ? 120 : nil)
         case .roundDone(let round):
@@ -417,6 +418,108 @@ final class BoardStore: ObservableObject {
         cards.show(key, at: look.spot, onEscape: ok) { size in
             BoxAlarmCard(size: size, box: box, model: box.model, moment: moment)
         }
+    }
+
+    // MARK: Daily, weekly and monthly notes
+
+    /// A note's status (To do, Pending, Completed): set, or taken off when it's the one on.
+    func toggle(_ status: NoteStatus, _ board: Kind, _ i: Int) {
+        model(board).board.boxes[i].toggle(status, now: AppClock.now())
+        // Completed for this period: its reminder (if one is up) has done its job.
+        if model(board).board.boxes[i].status == .completed { hideRoutineCard(board, i) }
+    }
+
+    /// Daily, weekly or monthly on (asking first, saying what it means), or off again.
+    func chooseRepeat(_ new: NoteRepeat, _ board: Kind, _ i: Int) {
+        let box = model(board).board.boxes[i]
+        let name = box.title ?? "\(board.name) · box \(i + 1)"
+        let on = box.repeats != new
+        let message: String
+        if on {
+            message = new.meaning(note: name)
+                + (box.repeats.map { "\n\nIt's \($0.title) now: that goes (one at a time)." } ?? "")
+                + "\n\nThe note's status (bottom left) is set to To do."
+        } else {
+            message = "No more Note reminders for \u{201C}\(name)\u{201D}. Its status (bottom left) stays as it is."
+        }
+        guard Confirm.ask(on ? "Turn on \(new.title) for this note?" : "Turn off \(new.title)?", message,
+                          ok: on ? "Turn on \(new.title)" : "Turn off") else { return }
+        model(board).board.boxes[i].setRepeat(on ? new : nil, now: AppClock.now())
+        if !on { hideRoutineCard(board, i) }
+    }
+
+    static func routineID(_ board: Kind, _ i: Int) -> String { "routine-\(board.id)-\(i)" }
+
+    private func hideRoutineCard(_ board: Kind, _ i: Int) {
+        let key = Self.routineID(board, i)
+        sounds.stop(key)
+        cards.hide(key)
+    }
+
+    /// The notes that come round: a new day, week or month sets them back to To do, and on the
+    /// hour (6 AM to 10 PM) each that isn't completed puts up its Note reminder.
+    private func routines(_ now: Date, calendar cal: Calendar) {
+        for board in Self.kinds {
+            let m = model(board)
+            for i in m.board.boxes.indices where m.board.boxes[i].repeats != nil {
+                var box = m.board.boxes[i]
+                _ = box.rollOver(now: now, calendar: cal)
+                let hour = box.reminderDue(now: now, calendar: cal)
+                if let hour { box.remindedAt = hour }
+                if box != m.board.boxes[i] { m.board.boxes[i] = box }
+                if let hour { remind(board, i, hour: hour) }
+            }
+        }
+    }
+
+    /// The Note reminder: Pending (again next hour) or Completed (done until the next day, week
+    /// or month). It stays until one of them (or its ✕) is clicked.
+    private func remind(_ board: Kind, _ i: Int, hour: Date) {
+        let key = Self.routineID(board, i)
+        // No screen (the lid is closed): nothing to show it on; the next hour tries again.
+        guard !NSScreen.screens.isEmpty else { return }
+        sounds.play(.ding, for: key, maxSeconds: nil)
+        let m = model(board)
+        cards.show(key, at: .center, onEscape: { [weak self] in self?.hideRoutineCard(board, i) }) { [weak self] size in
+            NoteReminderCard(size: size, model: m, board: board, index: i, hour: hour,
+                             pending: { self?.answer(.pending, board, i) },
+                             completed: { self?.answer(.completed, board, i) },
+                             open: { self?.show(board.id, focus: i) },
+                             close: { self?.hideRoutineCard(board, i) })
+        }
+    }
+
+    /// Pending or Completed on a Note reminder: the note's status, and the card put away.
+    private func answer(_ status: NoteStatus, _ board: Kind, _ i: Int) {
+        let m = model(board)
+        m.board.boxes[i].status = status
+        m.board.boxes[i].statusAt = AppClock.now()
+        hideRoutineCard(board, i)
+    }
+
+    /// Test mode ended: what was set on the fast clock (still ahead of the real time) is cleared:
+    /// timers, and the reminders and statuses of the notes that come round.
+    func leftTestClock(now: Date = Date()) {
+        let ahead = now.addingTimeInterval(5)
+        for board in Self.kinds {
+            let m = model(board)
+            for i in m.board.boxes.indices {
+                var box = m.board.boxes[i]
+                if let s = box.alarm?.state, [s.start, s.until, s.snoozeAt, s.lastChime].contains(where: { ($0 ?? .distantPast) > ahead }) {
+                    let key = Self.cardID(board, i)
+                    sounds.stop(key)
+                    hideCard(key)
+                    box.alarm = nil
+                }
+                if let r = box.remindedAt, r > ahead { box.remindedAt = now }
+                if let t = box.statusAt, t > ahead {
+                    box.statusAt = now
+                    if box.repeats != nil { box.status = .todo }
+                }
+                if box != m.board.boxes[i] { m.board.boxes[i] = box }
+            }
+        }
+        refresh(now)
     }
 
     // MARK: Pinned boxes

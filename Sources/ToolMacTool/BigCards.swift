@@ -3,8 +3,8 @@ import SwiftUI
 import ToolCore
 
 // The big glass cards the timers put on screen: each covers a quarter of the screen (half as wide
-// and half as tall), in its own spot, with its words zoomed to fill it. Reminders come up the same
-// size in the middle and fade away by themselves; a crossed threshold waits for OK there.
+// and half as tall), in its own spot, with its words zoomed to fill it. Each stays until it's put
+// away; a crossed threshold waits for OK in the middle.
 
 /// Where on the screen a card shows: each timer has its own, so two at once never cover each other.
 enum ScreenSpot {
@@ -51,34 +51,36 @@ enum ScreenSpot {
     }
 }
 
-/// The big cards, one per id, each in its own floating panel.
+/// The big cards, one per id, each in its own floating panel. A card stays until it's put away
+/// (its OK, its ✕ or Esc): nothing fades out by itself. In quiet mode a card waits, and comes up
+/// when quiet mode ends.
 @MainActor
 final class BigCards {
     static let shared = BigCards()
     private var panels: [String: GlassPanel] = [:]
-    private var hides: [String: Task<Void, Never>] = [:]
     /// Bumped on each show, so a fade-out under way doesn't put away a newer card.
     private var shown: [String: Int] = [:]
 
     func isShown(_ id: String) -> Bool { panels[id]?.isVisible == true }
 
-    /// Shows a card a quarter of the screen in size at `spot`. `fade`: it fades in, stays, fades
-    /// out (in that many seconds) and lets clicks through; otherwise it stays until hidden (or
-    /// `hideAfter`). Esc on it runs `onEscape`.
-    func show<V: View>(_ id: String, at spot: ScreenSpot, fade: TimeInterval? = nil, hideAfter: TimeInterval? = nil,
-                       onEscape: (() -> Void)? = nil, @ViewBuilder content: (NSSize) -> V) {
-        hides[id]?.cancel()
+    /// Shows a card a quarter of the screen in size at `spot`, until it's hidden. Esc on it runs
+    /// `onEscape`.
+    func show<V: View>(_ id: String, at spot: ScreenSpot, onEscape: (() -> Void)? = nil,
+                       @ViewBuilder content: @escaping (NSSize) -> V) {
+        if ModeCenter.shared.hold("big-\(id)", { [weak self] in self?.show(id, at: spot, onEscape: onEscape, content: content) }) {
+            return
+        }
         guard let screen = ScreenSpot.screen else { return }
         let v = screen.visibleFrame
         let size = ScreenSpot.quarter(of: v)
         let panel = panels[id] ?? {
             let p = GlassPanel(size: size)
-            p.level = fade == nil ? .floating : .statusBar
+            p.level = .floating
             self.panels[id] = p
             return p
         }()
-        panel.dragsAnywhere = fade == nil
-        panel.ignoresMouseEvents = fade != nil
+        panel.dragsAnywhere = true
+        panel.ignoresMouseEvents = false
         if let onEscape {
             panel.onEscape = {
                 onEscape()
@@ -94,28 +96,15 @@ final class BigCards {
         shown[id] = mine
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        let fadeIn = fade.map { $0 * 0.18 } ?? 0.25
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = fadeIn
+            ctx.duration = 0.25
             panel.animator().alphaValue = 1
-        }
-        if let fade {
-            // In, stay, out: about `fade` seconds in all.
-            hides[id] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64((fade * 0.64) * 1_000_000_000))
-                if !Task.isCancelled { self?.hide(id, fade: fade * 0.18) }
-            }
-        } else if let hideAfter {
-            hides[id] = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(hideAfter * 1_000_000_000))
-                if !Task.isCancelled { self?.hide(id) }
-            }
         }
     }
 
     func hide(_ id: String, fade: TimeInterval = 0.2) {
-        hides[id]?.cancel()
-        hides[id] = nil
+        // Put away while quiet mode held it: it never comes up.
+        ModeCenter.shared.drop("big-\(id)")
         guard let panel = panels[id], panel.isVisible else { return }
         let mine = shown[id]
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -231,15 +220,20 @@ struct BigCard<Extra: View>: View {
 @MainActor
 enum ThresholdCard {
     static func show(title: String, metric: ThresholdRule.Metric, count: Int, limit: Int, text: String) {
-        NSSound(named: NSSound.Name("Funk"))?.play()
         let id = "threshold"
+        let at = AppClock.now()
+        // Held whole in quiet mode (the card's own key), so its sound comes with it.
+        if ModeCenter.shared.hold("big-\(id)", {
+            show(title: title, metric: metric, count: count, limit: limit, text: text)
+        }) { return }
+        NSSound(named: NSSound.Name("Funk"))?.play()
         BigCards.shared.show(id, at: .center, onEscape: { BigCards.shared.hide(id) }) { size in
             BigCard(size: size, symbol: "exclamationmark.octagon.fill", accent: Color(red: 1, green: 0.62, blue: 0.3),
                     name: "Threshold crossed · \(title)",
                     headline: "\(count) \(metric.words.lowercased())",
                     line: text.isEmpty ? "today: over your limit of \(limit)" : text, mood: .error) {
                 HStack {
-                    Text(Date().formatted(date: .abbreviated, time: .shortened))
+                    Text(at.formatted(date: .abbreviated, time: .shortened))
                         .font(.system(size: max(12, size.height * 0.035), weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.55))
                     Spacer()
