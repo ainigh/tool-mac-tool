@@ -235,6 +235,9 @@ final class RecordingsModel: ObservableObject {
     @Published private(set) var info: [Recordings.Item: Info] = [:]
     /// The recordings that have a transcript beside them (by id).
     @Published private(set) var transcripts: Set<String> = []
+    /// The recordings kept in iCloud and not downloaded to this Mac (by id): nothing is read
+    /// from them until they're opened, so the list never waits on a download.
+    @Published private(set) var remote: Set<String> = []
     /// The one being transcribed, how far it's got and its lines so far; the ones waiting.
     @Published private(set) var transcribing: String?
     @Published private(set) var progress = 0.0
@@ -246,50 +249,119 @@ final class RecordingsModel: ObservableObject {
     /// The recording open on its own (playing, with its transcript).
     @Published var selected: Recordings.Item?
     @Published private(set) var transcriptText = ""
+    /// The Glass folder, as of the last look (finding it reads Glass's settings, so it isn't
+    /// worked out again on every redraw).
+    @Published private(set) var folder: URL = RecordingsModel.glassFolder()
 
-    var folder: URL { GlassWindow.glassFolder }
     private var job: FileTranscriber?
+    /// A look at the folder is under way (it's done off the main thread, one at a time), and
+    /// another was asked for meanwhile.
+    private var scanning = false
+    private var scanAgain = false
+    /// Recordings waiting for their length, sound and picture to be read, one at a time.
+    private var toLoad: [Recordings.Item] = []
+    private var loadingInfo = false
 
     struct Problem: LocalizedError {
         let errorDescription: String?
         init(_ text: String) { errorDescription = text }
     }
 
-    func reload() {
-        let folder = self.folder
-        do {
-            items = try Recordings.list(in: folder)
-            problem = nil
-        } catch {
-            items = []
-            problem = FileManager.default.fileExists(atPath: folder.path) ? "Couldn't read \(folder.path): \(error.localizedDescription)" : nil
-        }
-        transcripts = Set(items.filter { FileManager.default.fileExists(atPath: $0.transcript.path) }.map(\.id))
-        let current = Set(items)
-        info = info.filter { current.contains($0.key) }
-        for item in items where info[item] == nil { load(item) }
-        if let selected, !items.contains(where: { $0.id == selected.id }) { self.selected = nil }
+    nonisolated static func glassFolder() -> URL {
+        MemoryStore.forCurrentUser().url.deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    /// Its length, whether it has sound, and a picture from early on.
-    private func load(_ item: Recordings.Item) {
-        info[item] = Info()
-        Task {
-            let asset = AVURLAsset(url: item.url)
-            var found = Info()
-            if let duration = try? await asset.load(.duration), duration.isNumeric { found.duration = duration.seconds }
-            if let tracks = try? await asset.loadTracks(withMediaType: .audio) { found.hasSound = !tracks.isEmpty }
-            if item.isVideo {
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: 720, height: 720)
-                let at = CMTime(seconds: min(1, (found.duration ?? 0) / 2), preferredTimescale: 600)
-                if let picture = try? await generator.image(at: at) {
-                    found.thumbnail = NSImage(cgImage: picture.image, size: .zero)
-                }
-            }
-            if self.info[item] != nil { self.info[item] = found }
+    /// What a look at the folder found.
+    private struct Scan: Sendable {
+        var folder: URL
+        var items: [Recordings.Item] = []
+        var transcripts: Set<String> = []
+        var remote: Set<String> = []
+        var problem: String?
+    }
+
+    /// Looks at the folder again, off the main thread (the Glass folder is in Documents, which
+    /// may be in iCloud, and a big folder can take a while: the window never waits for it).
+    func reload() {
+        if scanning {
+            scanAgain = true
+            return
         }
+        scanning = true
+        Task.detached(priority: .utility) { [weak self] in
+            let found = Self.scan()
+            await self?.apply(found)
+        }
+    }
+
+    private nonisolated static func scan() -> Scan {
+        let folder = glassFolder()
+        var out = Scan(folder: folder)
+        let fm = FileManager.default
+        do {
+            out.items = try Recordings.list(in: folder)
+        } catch {
+            out.problem = fm.fileExists(atPath: folder.path) ? "Couldn't read \(folder.path): \(error.localizedDescription)" : nil
+            return out
+        }
+        for item in out.items {
+            if fm.fileExists(atPath: item.transcript.path) { out.transcripts.insert(item.id) }
+            let status = (try? item.url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]))?.ubiquitousItemDownloadingStatus
+            if status == .notDownloaded { out.remote.insert(item.id) }
+        }
+        return out
+    }
+
+    private func apply(_ found: Scan) {
+        scanning = false
+        // Only what changed is published, so the grid isn't redrawn on every look.
+        if folder != found.folder { folder = found.folder }
+        if problem != found.problem { problem = found.problem }
+        if items != found.items { items = found.items }
+        if transcripts != found.transcripts { transcripts = found.transcripts }
+        if remote != found.remote { remote = found.remote }
+        let current = Set(items)
+        if info.keys.contains(where: { !current.contains($0) }) { info = info.filter { current.contains($0.key) } }
+        toLoad.removeAll { !current.contains($0) }
+        for item in items where info[item] == nil && !remote.contains(item.id) && !toLoad.contains(item) { toLoad.append(item) }
+        loadNextInfo()
+        if let selected, !items.contains(where: { $0.id == selected.id }) { self.selected = nil }
+        if scanAgain {
+            scanAgain = false
+            reload()
+        }
+    }
+
+    /// Its length, whether it has sound, and a picture from early on: one recording at a time
+    /// (all at once, a big folder had AVFoundation reading every file together).
+    private func loadNextInfo() {
+        guard !loadingInfo, !toLoad.isEmpty else { return }
+        let item = toLoad.removeFirst()
+        loadingInfo = true
+        Task { [weak self] in
+            let found = await Self.readInfo(item)
+            guard let self else { return }
+            self.loadingInfo = false
+            if self.items.contains(item) { self.info[item] = found }
+            self.loadNextInfo()
+        }
+    }
+
+    private nonisolated static func readInfo(_ item: Recordings.Item) async -> Info {
+        let asset = AVURLAsset(url: item.url)
+        var found = Info()
+        if let duration = try? await asset.load(.duration), duration.isNumeric { found.duration = duration.seconds }
+        if let tracks = try? await asset.loadTracks(withMediaType: .audio) { found.hasSound = !tracks.isEmpty }
+        if item.isVideo {
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 480, height: 480)
+            let at = CMTime(seconds: min(1, (found.duration ?? 0) / 2), preferredTimescale: 600)
+            if let picture = try? await generator.image(at: at) {
+                found.thumbnail = NSImage(cgImage: picture.image, size: .zero)
+            }
+        }
+        return found
     }
 
     func select(_ item: Recordings.Item?) {
@@ -297,12 +369,21 @@ final class RecordingsModel: ObservableObject {
         loadTranscript()
     }
 
+    /// Read off the main thread (a transcript in iCloud may have to be downloaded first).
     private func loadTranscript() {
         guard let selected else {
             transcriptText = ""
             return
         }
-        transcriptText = (try? String(contentsOf: selected.transcript, encoding: .utf8)) ?? ""
+        transcriptText = ""
+        let url = selected.transcript
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            await MainActor.run {
+                guard let self, self.selected?.transcript == url else { return }
+                self.transcriptText = text
+            }
+        }
     }
 
     func isWaiting(_ item: Recordings.Item) -> Bool { waiting.contains(item.id) }
@@ -547,7 +628,7 @@ struct RecordingsView: View {
         .background(GlassCard(clock: clock, mood: mood, paused: still, radius: 30))
         .padding(RecordingsWindow.margin)
         .environment(\.colorScheme, .dark)
-        .onVisibleTick(every: 3) { model.reload() }
+        .onVisibleTick(every: 5) { model.reload() }
         .onChange(of: model.selected) { item in
             player?.pause()
             player = item.map { AVPlayer(url: $0.url) }
@@ -722,6 +803,7 @@ struct RecordingTile: View {
             .overlay(alignment: .topLeading) {
                 HStack(spacing: 5) {
                     if !item.isVideo { Badge(text: "Audio", symbol: "waveform") }
+                    if model.remote.contains(item.id) { Badge(text: "In iCloud", symbol: "icloud") }
                     if info?.hasSound == false { Badge(text: "No sound", symbol: "speaker.slash") }
                     if model.hasTranscript(item) { Badge(text: "Transcript", symbol: "text.alignleft") }
                 }

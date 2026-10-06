@@ -57,7 +57,7 @@ public enum Recordings {
     }
 
     /// A recording in the folder.
-    public struct Item: Identifiable, Hashable {
+    public struct Item: Identifiable, Hashable, Sendable {
         public let url: URL
         public let date: Date
         public let size: Int64
