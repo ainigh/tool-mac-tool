@@ -67,6 +67,8 @@ enum Tools {
             // What the chat's model can do for you (it calls them as tools); each also works by itself.
             ToolSection(title: "Model tools", color: Color(red: 0.96, green: 0.56, blue: 0.10),
                         tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
+            // Names out of text before it goes anywhere: a map of words to stand-ins, kept here.
+            ToolSection(title: "Privacy", color: Color(red: 0.36, green: 0.42, blue: 0.55), tools: [redact, redactionMap]),
         ],
         [
             // The notes running a timer or a due date, soonest first: a click opens one.
@@ -238,6 +240,22 @@ enum Tools {
         subtitle: "A big report of the timers: when each was set, went off or was snoozed, counts per day (and the days nothing was set), the battery's level over time, and the thresholds and signals (scheduler jobs that wait for a count to go over a limit, or call your web address).",
         symbol: "chart.bar.xaxis",
         open: { model in TimerLogWindow.show(model) })
+
+    static let redact = Tool(
+        id: "redact",
+        name: "Redact",
+        title: "Redact names from text",
+        subtitle: "Paste text: the model on this Mac finds every person's name (new ones join the Redaction map), then each word in the map is swapped for its stand-in, the same way every time. Restore swaps them back. Optionally with the substitutions at the top.",
+        symbol: "eye.slash",
+        open: { _ in RedactWindow.show() })
+
+    static let redactionMap = Tool(
+        id: "redaction-map",
+        name: "Redaction map",
+        title: "The redaction map: words and their stand-ins",
+        subtitle: "Every name you've redacted (or learned from past text), each with what stands in for it. Change the stand-ins, give one person's several names the same one, keep words that aren't names. Kept on this Mac.",
+        symbol: "list.bullet.rectangle",
+        open: { _ in RedactionMapWindow.show() })
 
     static let memory = Tool(
         id: "memory",
