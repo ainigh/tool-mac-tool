@@ -7,13 +7,15 @@ import ToolCore
 /// ~/Library/Application Support/ToolMacTool/boards/<id>.json.
 @MainActor
 enum BoardWindow {
+    static func id(_ board: String) -> String { "board-\(board)" }
+
     static func show(_ store: BoardStore, _ board: BoardStore.Kind, focus: Int? = nil) {
         let model = store.model(board)
         if let focus, model.board.boxes.indices.contains(focus) {
             if focus >= model.board.shown { model.board.shown = focus + 1 }
             model.expanded = focus
         }
-        let id = "board-\(board.id)"
+        let id = Self.id(board.id)
         Windows.show(id) {
             let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
@@ -147,7 +149,7 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("Double-click a box to change its color. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily, Weekly or Monthly (a reminder every hour until it's done). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
+            Text("Double-click a box to change its color. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Top right: dock it in the panel, or pin it to float on your screen. Paste a web address to see its page (a YouTube video plays here).")
                 .lineLimit(1)
             Spacer()
             if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
@@ -253,7 +255,7 @@ struct BoardBox: View {
                 .padding(.leading, 3)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    // Next to the note's icon: Daily, Weekly, Monthly (one at a time).
+                    // Next to the note's icon: Daily, Mornings, Afternoons, Evenings, Weekly, Monthly (one at a time).
                     RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
                         .padding(.leading, 2)
                     // The strip above the text: a double-click here steps the color too.
@@ -438,8 +440,9 @@ private struct NoteIconButton: View {
     }
 }
 
-/// Daily, Weekly, Monthly, at the top left of a note: the one on comes round with a Note
-/// reminder every hour of its day from 6 AM until it's completed. A click asks first.
+/// Daily, Mornings, Afternoons, Evenings (a sun rising, the sun, the moon), Weekly, Monthly, at the
+/// top left of a note: the one on comes round with a Note reminder every hour of its hours until
+/// it's completed. A click asks first.
 private struct RepeatButtons: View {
     let store: BoardStore
     let board: BoardStore.Kind
@@ -450,11 +453,11 @@ private struct RepeatButtons: View {
     var body: some View {
         HStack(spacing: 2) {
             ForEach(NoteRepeat.allCases, id: \.self) { r in
-                NotePill(title: short ? String(r.title.prefix(1)) : r.title, symbol: nil, on: on == r,
+                NotePill(title: r.symbol != nil ? nil : short ? String(r.title.prefix(1)) : r.title, symbol: r.symbol, on: on == r,
                          color: Color(red: 0.16, green: 0.55, blue: 0.42),
                          help: on == r
-                            ? "\(r.title): on. A Note reminder pops up every hour (6 AM to 10 PM) until it's marked completed, then not again until \(r.until). Click to turn it off."
-                            : "\(r.title): a Note reminder every hour of the day from 6 AM until it's completed, then not again until \(r.until). Click to turn it on (it asks first).") {
+                            ? "\(r.title): on. A Note reminder pops up every hour (\(r.hoursText)) until it's marked completed, then not again until \(r.until). Click to turn it off."
+                            : "\(r.title): a Note reminder every hour, \(r.hoursText), until it's completed, then not again until \(r.until). Click to turn it on (it asks first).") {
                     store.chooseRepeat(r, board, index)
                 }
             }

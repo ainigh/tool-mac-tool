@@ -8,7 +8,7 @@ import ToolCore
 // pinned boxes float on the screen in windows of their own, and come back after a relaunch. It
 // also keeps a summary of every note for the panel: the ones docked along its bottom, and the
 // ones each tag's board gathers (Important, Urgent, Delegate, Think). A board can be docked in
-// the menu bar too, its icon beside the wrench: a click opens it.
+// the menu bar too, its icon beside the wrench: a click opens it, another closes it.
 
 @MainActor
 final class BoardStore: ObservableObject {
@@ -139,8 +139,14 @@ final class BoardStore: ObservableObject {
     /// Opens a tag's board: every note with that tag, from all the boards.
     func show(_ tag: NoteTag) { TagBoardWindow.show(self, tag) }
 
-    /// Opens a board docked in the menu bar (a board's id, or "tag-…").
+    /// A board docked in the menu bar (a board's id, or "tag-…"): opened, or closed when it's
+    /// open (its icon toggles it).
     func open(docked id: String) {
+        let window = Self.tag(fromDock: id).map { TagBoardWindow.id($0) } ?? BoardWindow.id(id)
+        if let w = Windows.window(window), w.isVisible {
+            w.orderOut(nil)
+            return
+        }
         if let tag = Self.tag(fromDock: id) { show(tag) } else { show(id) }
     }
 
@@ -224,7 +230,8 @@ final class BoardStore: ObservableObject {
             if let button = item.button {
                 button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
                 button.image?.isTemplate = true
-                button.toolTip = "\(name): open the board (right-click to take it out of the menu bar)"
+                button.identifier = MenuPanel.boardItem
+                button.toolTip = "\(name): open or close the board (right-click to take it out of the menu bar)"
                 button.target = target
                 button.action = #selector(StatusTarget.clicked(_:))
                 button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -436,7 +443,8 @@ final class BoardStore: ObservableObject {
         if model(board).board.boxes[i].status == .completed { hideRoutineCard(board, i) }
     }
 
-    /// Daily, weekly or monthly on (asking first, saying what it means), or off again.
+    /// Daily (or mornings, afternoons, evenings), weekly or monthly on (asking first, saying what
+    /// it means), or off again.
     func chooseRepeat(_ new: NoteRepeat, _ board: Kind, _ i: Int) {
         let box = model(board).board.boxes[i]
         let name = box.title ?? "\(board.name) · box \(i + 1)"
@@ -463,8 +471,9 @@ final class BoardStore: ObservableObject {
         cards.hide(key)
     }
 
-    /// The notes that come round: a new day, week or month sets them back to To do, and on the
-    /// hour (6 AM to 10 PM) each that isn't completed puts up its Note reminder.
+    /// The notes that come round: a new day, week or month (from 8 AM the day before) sets them
+    /// back to To do, and on the hour (in its hours) each that isn't completed puts up its Note
+    /// reminder.
     private func routines(_ now: Date, calendar cal: Calendar) {
         for board in Self.kinds {
             let m = model(board)

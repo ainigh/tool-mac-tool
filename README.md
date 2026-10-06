@@ -9,8 +9,11 @@ them; and the notes you've docked, in a row along the bottom. Each section has i
 by its tiles and its title, with a pin at the right of the title to float the group on your screen
 (below). The bar at the bottom holds updates (with the version you're on), the **mode** (normal,
 test or quiet, below), **Open at login** and **Quit**. Hover over a tile to see what it does. A
-tile, a board, a note or anything else that opens a window puts the panel away as it does. New
-tools get added over time, and the app updates itself from GitHub.
+tile, a board, a note or anything else that opens a window puts the panel away as it does, and
+**closing what it opened brings the panel back**, so you can pick something else (or click away to
+dismiss it, as usual). The panel only comes back for what was opened from it: once the panel's
+been put away some other way, closing that window leaves it away. New tools get added over time,
+and the app updates itself from GitHub.
 
 ## Permissions, right after installing
 
@@ -653,19 +656,26 @@ player window of its own (✕ or ⌘W closes it and stops it).
     (or the day and time); the one running is filled in. One timer a note: setting another
     replaces it. Its **countdown shows at the top middle of the note**, with a ✕ to stop it, and
     the note docks itself in the panel's **Timers** column while it runs.
-- **At its top left, next to its icon: Daily, Weekly and Monthly** (just D, W and M on a small
-  note). Turn one on (it asks first, saying what it means; one at a time) and the note **comes
-  round**: on its day, **every hour on the hour from 6 AM to 10 PM**, a **Note reminder** pops up
-  in the middle of the screen with the note's title big, its text to read and edit, and two
-  buttons. **Pending** puts it away until the next hour. **Completed** puts it away until the next
-  day (Daily), **next Monday** (Weekly) or **the 1st of next month** (Monthly). A weekly note starts
-  on Monday and a monthly one on the 1st, and keeps coming each hour (on the days after, too) until
-  it's completed. It repeats like that until you turn it off. Turned on in the middle of an hour,
-  the first reminder comes at the next hour; hours missed while the Mac slept aren't made up (the
-  latest one comes).
+- **At its top left, next to its icon: Daily, Mornings, Afternoons, Evenings, Weekly and
+  Monthly** (Mornings, Afternoons and Evenings are a sun rising, the sun and the moon; the others
+  just D, W and M on a small note). Turn one on (it asks first, saying what it means; one at a
+  time) and the note **comes round**: **every hour on the hour from 8 AM to 10 PM**, a **Note
+  reminder** pops up in the middle of the screen with the note's title big, its text to read and
+  edit, and two buttons. **Pending** puts it away until the next hour. **Completed** puts it away
+  until the next day, week or month begins.
+  - **Each day, week or month begins at 8 AM the day before**: a day runs from 8 AM to 8 AM the
+    next day, a week from **Sunday 8 AM**, a month from **8 AM on the last day of the month
+    before**. A weekly or monthly note keeps coming each hour (on the days after, too) until it's
+    completed.
+  - **Mornings, Afternoons and Evenings** are Daily, with its reminders only in that part of the
+    day: mornings **8 to 11 AM**, afternoons **12 to 4 PM**, evenings **5 to 10 PM** (the last
+    reminder's hour).
+  - It repeats like that until you turn it off. Turned on in the middle of an hour, the first
+    reminder comes at the next hour; hours missed while the Mac slept aren't made up (the latest
+    one comes).
 - **At its bottom left: To do, Pending and Completed** (icons on a small note). At most one is on;
-  click the one that's on to take it off. A note that comes round uses them: turning Daily, Weekly
-  or Monthly on sets it to To do, its reminder's Pending and Completed set those, marking it
+  click the one that's on to take it off. A note that comes round uses them: turning Daily (or a
+  part of the day), Weekly or Monthly on sets it to To do, its reminder's Pending and Completed set those, marking it
   Completed yourself counts too (no more reminders until the next day, week or month), and each
   new day, week or month sets it back to To do.
 - **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
@@ -690,7 +700,7 @@ it off.
 
 **Dock a board in the menu bar**: right-click a board's tile (or a tag's) in the panel, or click
 **Dock in the menu bar** at the top of the board. Its icon then sits in the menu bar beside the
-wrench: a click opens the board, a right-click takes it out. (⌘-drag to move it along the bar.)
+wrench: a click opens the board, another click closes it again, and a right-click takes it out. (⌘-drag to move it along the bar.)
 
 ⌘W closes a board. Everything is saved as you go, in
 `~/Library/Application Support/ToolMacTool/boards/<board>.json`.

@@ -185,9 +185,10 @@ struct BoxNote: View {
 
 // MARK: - A note that comes round
 
-/// The Note reminder a daily, weekly or monthly note puts up on the hour (6 AM to 10 PM) until
-/// it's completed: its title big, its text to read and edit, and Pending (put away until the next
-/// hour) or Completed (until the next day, week or month). It stays until one is clicked.
+/// The Note reminder a daily (or mornings, afternoons, evenings), weekly or monthly note puts up on
+/// the hour (8 AM to 10 PM, or its part of the day) until it's completed: its title big, its text
+/// to read and edit, and Pending (put away until the next hour) or Completed (until the next day,
+/// week or month, each from 8 AM). It stays until one is clicked.
 struct NoteReminderCard: View {
     let size: NSSize
     @ObservedObject var model: BoardModel
@@ -230,10 +231,9 @@ struct NoteReminderCard: View {
     }
 
     static func line(_ repeats: NoteRepeat, status: NoteStatus?) -> String {
-        let period = repeats == .daily ? "today" : repeats == .weekly ? "this week" : "this month"
         switch status {
-        case .pending: return "pending · not completed \(period)"
-        default: return "not completed \(period)"
+        case .pending: return "pending · not completed \(repeats.current)"
+        default: return "not completed \(repeats.current)"
         }
     }
 }

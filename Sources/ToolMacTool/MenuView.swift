@@ -57,14 +57,99 @@ struct MenuView: View {
 }
 
 /// The panel that drops down from the menu bar icon, so a button that opens something elsewhere
-/// can put it away (it would otherwise sit over what was opened).
+/// can put it away (it would otherwise sit over what was opened). What it opened is watched: once
+/// that's closed again, the panel drops down again, to pick something else (or click away, as
+/// usual). The panel opening again some other way, or nothing having opened, ends the watch.
 @MainActor
 enum MenuPanel {
     static weak var window: NSWindow?
 
+    /// The windows opened from the panel, while they're watched.
+    private static var opened: [WeakWindow] = []
+    private static var watch: Timer?
+    /// Bumped by each close, so only the latest one starts a watch.
+    private static var closes = 0
+    /// Marks the boards' own icons in the menu bar, so the wrench is told apart from them.
+    static let boardItem = NSUserInterfaceItemIdentifier("ToolMacTool.boardItem")
+
+    private struct WeakWindow { weak var window: NSWindow? }
+
     static func close() {
         guard let window, window.isVisible else { return }
+        let before = Set(visibleWindows().map(ObjectIdentifier.init))
         window.close()
+        stopWatching()
+        closes += 1
+        let mine = closes
+        // What was clicked opens right after this (some of it a moment later): then see what came up.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard closes == mine, Self.window?.isVisible != true else { return }
+            var found = visibleWindows().filter { !before.contains(ObjectIdentifier($0)) }
+            // Nothing new: something already open, brought forward (not another app, like Finder).
+            if found.isEmpty, NSApp.isActive, let key = NSApp.keyWindow, key.isVisible, key !== Self.window, !isStatusBar(key) {
+                found = [key]
+            }
+            guard !found.isEmpty else { return }
+            opened = found.map { WeakWindow(window: $0) }
+            let t = Timer(timeInterval: 0.3, repeats: true) { _ in
+                Task { @MainActor in check() }
+            }
+            RunLoop.main.add(t, forMode: .common)
+            watch = t
+        }
+    }
+
+    private static func check() {
+        // Dropped down again some other way (the wrench clicked): it's as usual from here.
+        if window?.isVisible == true { return stopWatching() }
+        let open = opened.contains { $0.window.map { $0.isVisible || $0.isMiniaturized } ?? false }
+        guard !open else { return }
+        stopWatching()
+        reopen()
+    }
+
+    private static func stopWatching() {
+        watch?.invalidate()
+        watch = nil
+        opened = []
+    }
+
+    /// Drops the panel down again, as a click on the wrench does. Up to macOS 26 that's a click on
+    /// its button; from macOS 27 the button does nothing by itself, and the item is asked to begin
+    /// its "expanded interface session" instead (private, so only where it answers to it).
+    static func reopen() {
+        guard window?.isVisible != true, let item = wrench() else { return }
+        let begin = NSSelectorFromString("_beginExpandedInterfaceSession:")
+        let delegate = NSSelectorFromString("expandedInterfaceDelegate")
+        if item.responds(to: begin), item.responds(to: delegate), item.perform(delegate) != nil,
+           let imp = item.method(for: begin) {
+            // It takes the time of the click that began it, and drops one older than the last
+            // session's end: none is older than the end of time.
+            typealias Begin = @convention(c) (NSStatusItem, Selector, TimeInterval) -> Void
+            unsafeBitCast(imp, to: Begin.self)(item, begin, .greatestFiniteMagnitude)
+        } else {
+            item.button?.performClick(nil)
+        }
+    }
+
+    /// The wrench's menu bar item: the one that isn't a board's (nor a copy of it shown on
+    /// another display).
+    private static func wrench() -> NSStatusItem? {
+        let key = NSSelectorFromString("statusItem")
+        return NSApp.windows
+            .filter { isStatusBar($0) && $0.responds(to: key) }
+            .compactMap { $0.value(forKey: "statusItem") as? NSStatusItem }
+            .first { $0.button?.identifier != boardItem && !NSStringFromClass(type(of: $0)).contains("Replicant") }
+    }
+
+    /// The app's windows on screen, but for the panel and the menu bar's own.
+    private static func visibleWindows() -> [NSWindow] {
+        NSApp.windows.filter { $0.isVisible && $0 !== window && !isStatusBar($0) }
+    }
+
+    private static func isStatusBar(_ w: NSWindow) -> Bool {
+        NSStringFromClass(type(of: w)).contains("StatusBarWindow")
     }
 }
 

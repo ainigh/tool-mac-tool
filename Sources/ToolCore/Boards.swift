@@ -24,8 +24,9 @@ public struct Board: Codable, Equatable, Sendable {
         public var tags: [NoteTag]
         /// Docked in the row along the bottom of the menu bar panel.
         public var docked: Bool
-        /// Daily, weekly or monthly: a note reminder pops up every hour of its day from 6 AM until
-        /// it's marked completed (nil: none).
+        /// Daily (or mornings, afternoons, evenings), weekly or monthly: a note reminder pops up
+        /// every hour of its hours (8 AM to 10 PM, or the part of the day) until it's marked
+        /// completed (nil: none).
         public var repeats: NoteRepeat?
         /// To do, pending or completed (at most one; nil: none of them).
         public var status: NoteStatus?
@@ -88,7 +89,8 @@ public struct Board: Codable, Equatable, Sendable {
             }
         }
 
-        /// Completed in the period `now` is in (the day, the week from Monday, the month).
+        /// Completed in the period `now` is in (the day, the week, the month, each from 8 AM the
+        /// day before).
         public func isDone(now: Date, calendar: Calendar) -> Bool {
             guard let repeats, status == .completed, let statusAt,
                   let period = repeats.period(containing: now, calendar: calendar) else { return false }
@@ -105,13 +107,13 @@ public struct Board: Codable, Equatable, Sendable {
             return true
         }
 
-        /// The hour a note reminder is due for at `now`, if one is: on the hour, 6 AM to 10 PM,
+        /// The hour a note reminder is due for at `now`, if one is: on the hour, in its hours,
         /// later than the last one (and than when the repeat was turned on), while it isn't
         /// completed for this period. Hours missed (asleep) aren't made up: only the latest comes.
         public func reminderDue(now: Date, calendar: Calendar) -> Date? {
-            guard repeats != nil, !isDone(now: now, calendar: calendar),
+            guard let repeats, !isDone(now: now, calendar: calendar),
                   let hour = calendar.dateInterval(of: .hour, for: now)?.start,
-                  NoteRepeat.hours.contains(calendar.component(.hour, from: hour)) else { return nil }
+                  repeats.hours.contains(calendar.component(.hour, from: hour)) else { return nil }
             if let remindedAt, remindedAt >= hour { return nil }
             return hour
         }
@@ -247,25 +249,58 @@ public enum NoteTag: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// How often a note comes round: every day, every week (from Monday) or every month (from the 1st).
+/// How often a note comes round: every day (or only its mornings, afternoons or evenings), every
+/// week or every month. Each period begins at 8 AM the day before the calendar's own: a day runs
+/// from 8 AM to 8 AM the next day, a week from Sunday 8 AM, a month from 8 AM on the last day of
+/// the month before.
 public enum NoteRepeat: String, Codable, CaseIterable, Sendable {
-    case daily, weekly, monthly
+    case daily, mornings, afternoons, evenings, weekly, monthly
 
     public var title: String {
         switch self {
         case .daily: return "Daily"
+        case .mornings: return "Mornings"
+        case .afternoons: return "Afternoons"
+        case .evenings: return "Evenings"
         case .weekly: return "Weekly"
         case .monthly: return "Monthly"
         }
     }
 
-    /// The hours of the day a reminder comes on the hour: 6 AM to 10 PM.
-    public static let hours = Array(6...22)
-
-    /// The day, the week (Monday to Sunday) or the month `date` is in.
-    public func period(containing date: Date, calendar: Calendar) -> DateInterval? {
+    /// An SF Symbol for the daily ones scoped to part of the day (nil: it shows its word).
+    public var symbol: String? {
         switch self {
-        case .daily: return calendar.dateInterval(of: .day, for: date)
+        case .mornings: return "sunrise.fill"
+        case .afternoons: return "sun.max.fill"
+        case .evenings: return "moon.fill"
+        default: return nil
+        }
+    }
+
+    /// The hour a period begins at (on the day before the calendar's day, week or month).
+    public static let startHour = 8
+
+    /// The hours of the day a reminder comes on the hour: 8 AM to 10 PM, or the part of the day
+    /// it's scoped to (mornings 8 to 11 AM, afternoons 12 to 4 PM, evenings 5 to 10 PM).
+    public var hours: ClosedRange<Int> {
+        switch self {
+        case .mornings: return 8...11
+        case .afternoons: return 12...16
+        case .evenings: return 17...22
+        case .daily, .weekly, .monthly: return 8...22
+        }
+    }
+
+    /// "8 AM to 10 PM", in words.
+    public var hoursText: String {
+        func name(_ h: Int) -> String { h == 12 ? "12 PM" : h < 12 ? "\(h) AM" : "\(h - 12) PM" }
+        return "\(name(hours.lowerBound)) to \(name(hours.upperBound))"
+    }
+
+    /// The calendar's own day, week (Monday to Sunday) or month `date` is in.
+    private func calendarPeriod(containing date: Date, calendar: Calendar) -> DateInterval? {
+        switch self {
+        case .daily, .mornings, .afternoons, .evenings: return calendar.dateInterval(of: .day, for: date)
         case .weekly:
             var c = calendar
             c.firstWeekday = 2
@@ -274,26 +309,65 @@ public enum NoteRepeat: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// 8 AM the day before `start`.
+    private static func eve(of start: Date, calendar: Calendar) -> Date? {
+        calendar.date(byAdding: .day, value: -1, to: start)
+            .flatMap { calendar.date(bySettingHour: startHour, minute: 0, second: 0, of: $0) }
+    }
+
+    /// The period `date` is in: the calendar's day, week or month, each begun at 8 AM the day
+    /// before (so a day runs 8 AM to 8 AM, a week from Sunday 8 AM, a month from 8 AM on the last
+    /// day of the month before).
+    public func period(containing date: Date, calendar: Calendar) -> DateInterval? {
+        guard let own = calendarPeriod(containing: date, calendar: calendar),
+              let start = Self.eve(of: own.start, calendar: calendar),
+              let end = Self.eve(of: own.end, calendar: calendar) else { return nil }
+        if date < end { return DateInterval(start: start, end: end) }
+        // From 8 AM the day before the next one: that one's begun.
+        guard let next = calendarPeriod(containing: own.end, calendar: calendar),
+              let nextEnd = Self.eve(of: next.end, calendar: calendar) else { return nil }
+        return DateInterval(start: end, end: nextEnd)
+    }
+
+    /// The period it's done for, in words ("today", "this morning", "this week").
+    public var current: String {
+        switch self {
+        case .daily: return "today"
+        case .mornings: return "this morning"
+        case .afternoons: return "this afternoon"
+        case .evenings: return "this evening"
+        case .weekly: return "this week"
+        case .monthly: return "this month"
+        }
+    }
+
     /// When completing it lasts until, in words.
     public var until: String {
         switch self {
-        case .daily: return "tomorrow"
-        case .weekly: return "next Monday"
-        case .monthly: return "the 1st of next month"
+        case .daily: return "8 AM tomorrow"
+        case .mornings: return "tomorrow morning"
+        case .afternoons: return "tomorrow afternoon"
+        case .evenings: return "tomorrow evening"
+        case .weekly: return "8 AM next Sunday"
+        case .monthly: return "8 AM on the last day of the month"
         }
     }
 
     /// What turning it on means, in a few sentences (the confirmation says it).
     public func meaning(note: String) -> String {
         let days: String
+        let unit: String
         switch self {
-        case .daily: days = "Every day"
-        case .weekly: days = "Every week, from Monday"
-        case .monthly: days = "Every month, from the 1st"
+        case .daily: (days, unit) = ("Every day", "day")
+        case .mornings: (days, unit) = ("Every morning", "day")
+        case .afternoons: (days, unit) = ("Every afternoon", "day")
+        case .evenings: (days, unit) = ("Every evening", "day")
+        case .weekly: (days, unit) = ("Every week, from Sunday 8 AM", "week")
+        case .monthly: (days, unit) = ("Every month, from 8 AM on the last day of the month before", "month")
         }
-        return "\(days), a Note reminder for \u{201C}\(note)\u{201D} pops up every hour on the hour, 6 AM to 10 PM. "
+        return "\(days), a Note reminder for \u{201C}\(note)\u{201D} pops up every hour on the hour, \(hoursText). "
             + "Pending puts it away until the next hour. Completed puts it away until \(until), and marks the note Completed. "
-            + "At the start of each \(self == .daily ? "day" : self == .weekly ? "week" : "month") the note goes back to To do. "
+            + "At the start of each \(unit) (8 AM\(unit == "day" ? "" : " the day before")) the note goes back to To do. "
             + "This repeats until you turn \(title) off."
     }
 }

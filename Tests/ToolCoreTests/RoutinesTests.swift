@@ -43,27 +43,75 @@ final class RoutinesTests: XCTestCase {
         XCTAssertNil(box.status)
     }
 
-    func testDailyRemindsEveryHourFromSixUntilCompleted() {
+    func testDailyRemindsEveryHourFromEightUntilCompleted() {
         var box = Board.Box(text: "Stretch")
         box.setRepeat(.daily, now: date(6, 23, 30))
-        // Nothing at night.
+        // Nothing at night, nor before 8.
         XCTAssertNil(box.reminderDue(now: date(7, 3), calendar: cal))
-        // 6 AM.
-        XCTAssertEqual(box.reminderDue(now: date(7, 6, 0), calendar: cal), date(7, 6))
-        box.remindedAt = date(7, 6)
-        XCTAssertNil(box.reminderDue(now: date(7, 6, 40), calendar: cal))
+        XCTAssertNil(box.reminderDue(now: date(7, 7, 30), calendar: cal))
+        // 8 AM.
+        XCTAssertEqual(box.reminderDue(now: date(7, 8, 0), calendar: cal), date(7, 8))
+        box.remindedAt = date(7, 8)
+        XCTAssertNil(box.reminderDue(now: date(7, 8, 40), calendar: cal))
         // Pending: again the next hour.
-        box.toggle(.pending, now: date(7, 6, 41))
-        XCTAssertEqual(box.reminderDue(now: date(7, 7, 0, ), calendar: cal), date(7, 7))
-        box.remindedAt = date(7, 7)
-        // Completed: nothing more today, back tomorrow at 6 as To do.
-        box.toggle(.completed, now: date(7, 7, 5))
-        XCTAssertNil(box.reminderDue(now: date(7, 8), calendar: cal))
+        box.toggle(.pending, now: date(7, 8, 41))
+        XCTAssertEqual(box.reminderDue(now: date(7, 9, 0), calendar: cal), date(7, 9))
+        box.remindedAt = date(7, 9)
+        // Completed: nothing more until 8 AM tomorrow, back then as To do.
+        box.toggle(.completed, now: date(7, 9, 5))
+        XCTAssertNil(box.reminderDue(now: date(7, 10), calendar: cal))
         XCTAssertNil(box.reminderDue(now: date(7, 22), calendar: cal))
-        XCTAssertTrue(box.rollOver(now: date(8, 0, 1), calendar: cal))
+        XCTAssertFalse(box.rollOver(now: date(8, 0, 1), calendar: cal))
+        XCTAssertFalse(box.rollOver(now: date(8, 7, 59), calendar: cal))
+        XCTAssertTrue(box.rollOver(now: date(8, 8, 0), calendar: cal))
         XCTAssertEqual(box.status, .todo)
-        XCTAssertFalse(box.rollOver(now: date(8, 0, 2), calendar: cal))
-        XCTAssertEqual(box.reminderDue(now: date(8, 6, 2), calendar: cal), date(8, 6))
+        XCTAssertFalse(box.rollOver(now: date(8, 8, 1), calendar: cal))
+        XCTAssertEqual(box.reminderDue(now: date(8, 8, 2), calendar: cal), date(8, 8))
+    }
+
+    func testDayBeginsAtEightTheDayBefore() {
+        // Completed in the small hours counts for the day begun at 8 AM the day before.
+        var box = Board.Box()
+        box.setRepeat(.daily, now: date(6, 9))
+        box.toggle(.completed, now: date(7, 2))
+        XCTAssertTrue(box.isDone(now: date(7, 7, 59), calendar: cal))
+        XCTAssertFalse(box.isDone(now: date(7, 8), calendar: cal))
+        XCTAssertEqual(NoteRepeat.daily.period(containing: date(7, 7, 59), calendar: cal),
+                       DateInterval(start: date(6, 8), end: date(7, 8)))
+        XCTAssertEqual(NoteRepeat.daily.period(containing: date(7, 8), calendar: cal),
+                       DateInterval(start: date(7, 8), end: date(8, 8)))
+    }
+
+    func testWeekAndMonthBeginAtEightTheDayBefore() {
+        // The week of Monday 5 Oct begins Sunday 4 Oct, 8 AM.
+        XCTAssertEqual(NoteRepeat.weekly.period(containing: date(7, 12), calendar: cal),
+                       DateInterval(start: date(4, 8), end: date(11, 8)))
+        XCTAssertEqual(NoteRepeat.weekly.period(containing: date(4, 7), calendar: cal),
+                       DateInterval(start: date(27, 8, month: 9), end: date(4, 8)))
+        XCTAssertEqual(NoteRepeat.weekly.period(containing: date(11, 9), calendar: cal),
+                       DateInterval(start: date(11, 8), end: date(18, 8)))
+        // October begins 30 September, 8 AM, and ends 31 October, 8 AM.
+        XCTAssertEqual(NoteRepeat.monthly.period(containing: date(15, 12), calendar: cal),
+                       DateInterval(start: date(30, 8, month: 9), end: date(31, 8)))
+        XCTAssertEqual(NoteRepeat.monthly.period(containing: date(30, 9, month: 9), calendar: cal),
+                       DateInterval(start: date(30, 8, month: 9), end: date(31, 8)))
+        XCTAssertEqual(NoteRepeat.monthly.period(containing: date(31, 9), calendar: cal),
+                       DateInterval(start: date(31, 8), end: date(30, 8, month: 11)))
+    }
+
+    func testPeriodAcrossTheClocksGoingBack() {
+        var ny = Calendar(identifier: .gregorian)
+        ny.timeZone = TimeZone(identifier: "America/New_York")!
+        func at(_ day: Int, _ hour: Int) -> Date {
+            ny.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour))!
+        }
+        // The clocks go back on Sunday 1 November: the day still runs 8 AM to 8 AM.
+        XCTAssertEqual(NoteRepeat.daily.period(containing: at(1, 12), calendar: ny),
+                       DateInterval(start: at(1, 8), end: at(2, 8)))
+        let saturday = ny.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 8))!
+        XCTAssertEqual(NoteRepeat.daily.period(containing: at(1, 7), calendar: ny),
+                       DateInterval(start: saturday, end: at(1, 8)))
+        XCTAssertEqual(at(1, 8).timeIntervalSince(saturday), 25 * 3600)
     }
 
     func testLastHourIsTenPM() {
@@ -80,30 +128,63 @@ final class RoutinesTests: XCTestCase {
         XCTAssertEqual(box.reminderDue(now: date(7, 15, 0), calendar: cal), date(7, 15))
     }
 
-    func testWeeklyCompletedLastsUntilMonday() {
-        var box = Board.Box()
-        box.setRepeat(.weekly, now: date(5, 5))          // Monday 5 Oct, 5 AM
-        XCTAssertEqual(box.reminderDue(now: date(5, 6), calendar: cal), date(5, 6))
-        box.remindedAt = date(5, 6)
-        box.toggle(.pending, now: date(5, 6, 1))
-        // Not completed Monday: it carries on Tuesday.
-        XCTAssertEqual(box.reminderDue(now: date(6, 6), calendar: cal), date(6, 6))
-        box.remindedAt = date(6, 6)
-        box.toggle(.completed, now: date(6, 6, 2))
-        XCTAssertNil(box.reminderDue(now: date(9, 12), calendar: cal))     // Friday
-        XCTAssertNil(box.reminderDue(now: date(11, 22), calendar: cal))    // Sunday
-        XCTAssertFalse(box.rollOver(now: date(11, 23), calendar: cal))
-        XCTAssertTrue(box.rollOver(now: date(12, 0, 5), calendar: cal))    // Monday
-        XCTAssertEqual(box.reminderDue(now: date(12, 6), calendar: cal), date(12, 6))
+    func testPartsOfTheDayRemindOnlyInTheirHours() {
+        let parts: [(NoteRepeat, first: Int, last: Int)] = [(.mornings, 8, 11), (.afternoons, 12, 16), (.evenings, 17, 22)]
+        for (r, first, last) in parts {
+            var box = Board.Box()
+            box.setRepeat(r, now: date(6, 23, 30))
+            XCTAssertNil(box.reminderDue(now: date(7, first - 1, 30), calendar: cal), r.title)
+            XCTAssertEqual(box.reminderDue(now: date(7, first), calendar: cal), date(7, first), r.title)
+            XCTAssertEqual(box.reminderDue(now: date(7, last, 59), calendar: cal), date(7, last), r.title)
+            XCTAssertNil(box.reminderDue(now: date(7, last + 1, 0), calendar: cal), r.title)
+            // Completed: not again until its hours tomorrow, To do again from 8 AM.
+            box.remindedAt = date(7, last)
+            box.toggle(.completed, now: date(7, last, 10))
+            XCTAssertNil(box.reminderDue(now: date(7, last, 30), calendar: cal), r.title)
+            XCTAssertTrue(box.isDone(now: date(8, 7, 59), calendar: cal), r.title)
+            XCTAssertTrue(box.rollOver(now: date(8, 8), calendar: cal), r.title)
+            XCTAssertEqual(box.reminderDue(now: date(8, first), calendar: cal), date(8, first), r.title)
+        }
+        XCTAssertEqual(NoteRepeat.mornings.hoursText, "8 AM to 11 AM")
+        XCTAssertEqual(NoteRepeat.afternoons.hoursText, "12 PM to 4 PM")
+        XCTAssertEqual(NoteRepeat.evenings.hoursText, "5 PM to 10 PM")
+        XCTAssertEqual(NoteRepeat.daily.hoursText, "8 AM to 10 PM")
     }
 
-    func testMonthlyCompletedLastsUntilTheFirst() {
+    func testPartsOfTheDayRoundTrip() throws {
+        var box = Board.Box(text: "Walk")
+        box.setRepeat(.evenings, now: date(7, 9))
+        let data = try JSONEncoder().encode(box)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("\"evenings\""))
+        XCTAssertEqual(try JSONDecoder().decode(Board.Box.self, from: data), box)
+    }
+
+    func testWeeklyCompletedLastsUntilSunday() {
+        var box = Board.Box()
+        box.setRepeat(.weekly, now: date(4, 7))          // Sunday 4 Oct, 7 AM
+        XCTAssertNil(box.reminderDue(now: date(4, 7, 30), calendar: cal))
+        XCTAssertEqual(box.reminderDue(now: date(4, 8), calendar: cal), date(4, 8))
+        box.remindedAt = date(4, 8)
+        box.toggle(.pending, now: date(4, 8, 1))
+        // Not completed Sunday: it carries on Monday.
+        XCTAssertEqual(box.reminderDue(now: date(5, 8), calendar: cal), date(5, 8))
+        box.remindedAt = date(5, 8)
+        box.toggle(.completed, now: date(5, 8, 2))
+        XCTAssertNil(box.reminderDue(now: date(9, 12), calendar: cal))     // Friday
+        XCTAssertNil(box.reminderDue(now: date(10, 22), calendar: cal))    // Saturday
+        XCTAssertFalse(box.rollOver(now: date(11, 7, 59), calendar: cal))
+        XCTAssertTrue(box.rollOver(now: date(11, 8, 0), calendar: cal))    // Sunday, 8 AM
+        XCTAssertEqual(box.reminderDue(now: date(11, 8, 5), calendar: cal), date(11, 8))
+    }
+
+    func testMonthlyCompletedLastsUntilTheLastDayAtEight() {
         var box = Board.Box()
         box.setRepeat(.monthly, now: date(1, 5))
         box.toggle(.completed, now: date(2, 10))
-        XCTAssertNil(box.reminderDue(now: date(31, 12), calendar: cal))
-        XCTAssertTrue(box.rollOver(now: date(1, 1, month: 11), calendar: cal))
-        XCTAssertEqual(box.reminderDue(now: date(1, 6, month: 11), calendar: cal), date(1, 6, month: 11))
+        XCTAssertNil(box.reminderDue(now: date(30, 12), calendar: cal))
+        XCTAssertFalse(box.rollOver(now: date(31, 7), calendar: cal))
+        XCTAssertTrue(box.rollOver(now: date(31, 8), calendar: cal))
+        XCTAssertEqual(box.reminderDue(now: date(31, 8, 30), calendar: cal), date(31, 8))
     }
 
     func testNoRepeatNoReminder() {
