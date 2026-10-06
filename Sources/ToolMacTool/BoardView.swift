@@ -135,6 +135,7 @@ struct BoardView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
                 .help("Drag to move")
+            FocusButton(focus: FocusCenter.shared, board: board)
             MenuBarDockButton(store: store, id: board.id, name: board.name)
             GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
         }
@@ -231,6 +232,7 @@ struct BoardBox: View {
     /// Floating in a window of its own: a drag on its text moves the window too.
     var floating = false
     @State private var copied = false
+    @ObservedObject private var focus = FocusCenter.shared
 
     var body: some View {
         GeometryReader { g in
@@ -277,7 +279,8 @@ struct BoardBox: View {
                         store.setDocked(!box.docked, board, index)
                     }
                     BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
-                              help: box.pinned ? "Unpin: put the floating box away (it stays here)"
+                              help: focus.isFocus(board, index) ? "Focus keeps this note pinned while it's the one in focus"
+                                  : box.pinned ? "Unpin: put the floating box away (it stays here)"
                                   : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
                               tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
                         store.setPinned(!box.pinned, board, index)
@@ -308,16 +311,20 @@ struct BoardBox: View {
             }
         }
         .overlay(alignment: .top) {
-            if let alarm = box.alarm, let spec = alarm.timer {
-                BoxCountdown(alarm: alarm, spec: spec) {
-                    if spec.isOneOff, spec.phase(alarm.state, now: AppClock.now()) == .finished {
-                        store.dismiss(board, index)
-                    } else {
-                        store.stop(board, index)
+            VStack(spacing: 2) {
+                // The note in focus: the phase, its countdown and Completed.
+                if focus.isFocus(board, index) { FocusBar(focus: focus) }
+                if let alarm = box.alarm, let spec = alarm.timer {
+                    BoxCountdown(alarm: alarm, spec: spec) {
+                        if spec.isOneOff, spec.phase(alarm.state, now: AppClock.now()) == .finished {
+                            store.dismiss(board, index)
+                        } else {
+                            store.stop(board, index)
+                        }
                     }
                 }
-                .padding(.top, 3)
             }
+            .padding(.top, 3)
         }
         .background(shape.fill(fill))
         .overlay(shape.strokeBorder(Color.black.opacity(0.08)))

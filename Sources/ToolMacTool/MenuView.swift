@@ -227,6 +227,7 @@ struct BigToolTile: View {
 struct BottomBar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: Updater
+    @ObservedObject private var focus = FocusCenter.shared
 
     var body: some View {
         HStack(spacing: 4) {
@@ -243,7 +244,16 @@ struct BottomBar: View {
                        tint: model.openAtLogin ? .accentColor : .secondary) {
                 model.setOpenAtLogin(!model.openAtLogin)
             }
-            IconButton(symbol: "power", help: "Quit") { NSApp.terminate(nil) }
+            if focus.isStrict {
+                // Strict focus: nothing in the app ends it (Quit would).
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .frame(width: 26, height: 24)
+                    .help("Strict focus is on: Quit is locked until the battery is empty")
+            } else {
+                IconButton(symbol: "power", help: "Quit") { NSApp.terminate(nil) }
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -262,7 +272,9 @@ struct BottomBar: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .help("\(u.commit.short): \(u.commit.title)"
+            .disabled(focus.isStrict)
+            .help(focus.isStrict ? "Strict focus is on: updating (which relaunches the app) waits until it's over"
+                  : "\(u.commit.short): \(u.commit.title)"
                   + (u.release == nil ? "\n\nGitHub hasn't built it, so it's built here (a minute or two)." : ""))
         case .installing(let step):
             ProgressView().controlSize(.mini)

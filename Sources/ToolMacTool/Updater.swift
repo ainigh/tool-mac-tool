@@ -91,6 +91,8 @@ final class Updater: ObservableObject {
     }
 
     func install() {
+        // Strict focus: updating relaunches the app, which would end it.
+        if FocusCenter.shared.isStrict { return }
         guard case .available(let update) = state else { return }
         state = .installing("Updating…")
         Task.detached {

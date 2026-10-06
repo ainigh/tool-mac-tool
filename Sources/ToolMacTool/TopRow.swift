@@ -56,6 +56,7 @@ private struct RowCard<Content: View>: View {
 struct BatteryPanel: View {
     @ObservedObject var board: TimerBoard
     @ObservedObject var activity: ActivityStore
+    @ObservedObject private var focus = FocusCenter.shared
     let color: Color
 
     var body: some View {
@@ -67,6 +68,7 @@ struct BatteryPanel: View {
         .contextMenu {
             ForEach(Array(Battery.levels.enumerated()), id: \.offset) { i, l in
                 Button("Set to \(Int(l))%") { board.chooseBattery(i) }
+                    .disabled(focus.isOn)
             }
         }
     }
@@ -88,7 +90,9 @@ struct BatteryPanel: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(PressStyle())
-                .help("Click to set it to 100, 80, 60, 40, 20 or 0% (one step each click); right-click to pick. It drains 20% an hour and stops at 0; the Timer log charts it.")
+                .disabled(focus.isOn)
+                .help(focus.isOn ? "Focus is on: the battery is its clock (focus goes on until it's empty), so it can't be set now."
+                      : "Click to set it to 100, 80, 60, 40, 20 or 0% (one step each click); right-click to pick. It drains 20% an hour and stops at 0; the Timer log charts it.")
                 Text(set ? "\(Int(level.rounded(.up)))%" : "Not set")
                     .font(.system(size: set ? 24 : 15, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(ink)
@@ -225,6 +229,7 @@ struct MenuBarIcon: View {
     @ObservedObject var updater: Updater
     @ObservedObject var boards: BoardStore
     @ObservedObject var modes: ModeCenter = .shared
+    @ObservedObject var focus: FocusCenter = .shared
 
     var body: some View {
         // The filled icon means an update is waiting; test and quiet mode show their own beside it.
@@ -232,7 +237,13 @@ struct MenuBarIcon: View {
         HStack(spacing: 4) {
             icon
             if modes.mode != .normal { Image(systemName: modes.mode.symbol) }
-            if let text = next { Text(text).monospacedDigit() }
+            if let s = focus.session {
+                // Focus first: its phase and countdown (it ticks with the boards' clock).
+                Image(systemName: s.strict ? "lock.fill" : "scope")
+                Text(FocusStatus.short(s, now: boards.now)).monospacedDigit()
+            } else if let text = next {
+                Text(text).monospacedDigit()
+            }
         }
     }
 

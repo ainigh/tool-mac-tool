@@ -424,6 +424,13 @@ final class BoardStore: ObservableObject {
 
     /// A note's status (To do, Pending, Completed): set, or taken off when it's the one on.
     func toggle(_ status: NoteStatus, _ board: Kind, _ i: Int) {
+        // Completed on the note in focus is focus's Completed (it needs text, and moves on).
+        let focus = FocusCenter.shared
+        if status == .completed, focus.isFocus(board, i), focus.session?.canComplete == true,
+           model(board).board.boxes[i].status != .completed {
+            focus.complete()
+            return
+        }
         model(board).board.boxes[i].toggle(status, now: AppClock.now())
         // Completed for this period: its reminder (if one is up) has done its job.
         if model(board).board.boxes[i].status == .completed { hideRoutineCard(board, i) }
@@ -526,8 +533,13 @@ final class BoardStore: ObservableObject {
 
     func isPinned(_ board: Kind, _ i: Int) -> Bool { model(board).board.boxes[i].pinned }
 
-    /// Floats a box on the screen in a window of its own (or puts it back).
-    func setPinned(_ on: Bool, _ board: Kind, _ i: Int) {
+    /// Floats a box on the screen in a window of its own (or puts it back). The note in focus stays
+    /// pinned while focus is on (only focus itself unpins it: `force`).
+    func setPinned(_ on: Bool, _ board: Kind, _ i: Int, force: Bool = false) {
+        if !on, !force, FocusCenter.shared.isFocus(board, i) {
+            NSSound.beep()
+            return
+        }
         model(board).board.boxes[i].pinned = on
         if on { showPin(board, i) } else { pins[Self.pinID(board, i)]?.orderOut(nil) }
     }
