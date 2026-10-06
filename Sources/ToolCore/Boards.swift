@@ -34,10 +34,13 @@ public struct Board: Codable, Equatable, Sendable {
         public var statusAt: Date?
         /// The last hour a note reminder came up for (or when the repeat was turned on).
         public var remindedAt: Date?
+        /// How many blocks of the board's grid it spans, across and down (1 to `Board.maxSpan`).
+        public var across: Int
+        public var down: Int
 
         public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
                     tags: [NoteTag] = [], docked: Bool = false, repeats: NoteRepeat? = nil, status: NoteStatus? = nil,
-                    statusAt: Date? = nil, remindedAt: Date? = nil) {
+                    statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
@@ -49,13 +52,15 @@ public struct Board: Codable, Equatable, Sendable {
             self.status = status
             self.statusAt = statusAt
             self.remindedAt = remindedAt
+            self.across = across
+            self.down = down
         }
 
         private enum CodingKeys: String, CodingKey {
-            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt
+            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down
         }
 
-        // A file from before timers, pins, icons, tags, the dock, repeats and statuses has none of them.
+        // A file from before timers, pins, icons, tags, the dock, repeats, statuses and sizes has none of them.
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
@@ -71,6 +76,8 @@ public struct Board: Codable, Equatable, Sendable {
             status = (try? c.decodeIfPresent(NoteStatus.self, forKey: .status)) ?? nil
             statusAt = try c.decodeIfPresent(Date.self, forKey: .statusAt)
             remindedAt = try c.decodeIfPresent(Date.self, forKey: .remindedAt)
+            across = (try? c.decodeIfPresent(Int.self, forKey: .across)) ?? 1
+            down = (try? c.decodeIfPresent(Int.self, forKey: .down)) ?? 1
         }
 
         /// The status set (or, when it's the one already on, taken off: at most one is on).
@@ -137,15 +144,68 @@ public struct Board: Codable, Equatable, Sendable {
     public static let maxBoxes = 36
     public static let defaultShown = 4
 
-    /// How many boxes are shown (the first ones).
-    public var shown: Int
-    /// Every box, shown or not: always `maxBoxes` of them.
-    public var boxes: [Box]
+    /// The most blocks a box spans, across or down.
+    public static let maxSpan = 4
 
-    public init(shown: Int = Board.defaultShown, boxes: [Box] = []) {
+    /// How many boxes are shown (the first ones in `order`).
+    public var shown: Int
+    /// Every box, shown or not: always `maxBoxes` of them. A box keeps its place here (what its
+    /// timer, pin, cards and focus go by); `order` is where it shows.
+    public var boxes: [Box]
+    /// The boxes in the order they show on the board (dragged into it): every index of `boxes`
+    /// once. The first `shown` of them are on the board.
+    public var order: [Int]
+
+    public init(shown: Int = Board.defaultShown, boxes: [Box] = [], order: [Int] = []) {
         self.shown = shown
         self.boxes = boxes
+        self.order = order
         self = tidied()
+    }
+
+    private enum CodingKeys: String, CodingKey { case shown, boxes, order }
+
+    // A file from before the boxes could be ordered has no order: they show as they're kept.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        shown = try c.decodeIfPresent(Int.self, forKey: .shown) ?? Self.defaultShown
+        boxes = try c.decodeIfPresent([Box].self, forKey: .boxes) ?? []
+        order = (try? c.decodeIfPresent([Int].self, forKey: .order)) ?? []
+    }
+
+    /// The boxes on the board, in the order they show.
+    public var visible: [Int] { Array(order.prefix(shown)) }
+
+    /// On the board (not hidden by the arrows).
+    public func isShown(_ box: Int) -> Bool { visible.contains(box) }
+
+    /// A hidden box shown: it comes in after the last one on the board.
+    public mutating func reveal(_ box: Int) {
+        guard !isShown(box), let at = order.firstIndex(of: box) else { return }
+        order.remove(at: at)
+        order.insert(box, at: shown)
+        shown = min(shown + 1, Self.maxBoxes)
+    }
+
+    /// A box dragged onto another's place: it takes it, and the boxes between move along one.
+    public mutating func move(_ box: Int, to target: Int) {
+        guard box != target, let from = order.firstIndex(of: box), let to = order.firstIndex(of: target) else { return }
+        order.remove(at: from)
+        order.insert(box, at: to)
+    }
+
+    /// A box's size in blocks, across and down (each 1 to `maxSpan`).
+    public mutating func resize(_ box: Int, across: Int, down: Int) {
+        boxes[box].across = min(max(across, 1), Self.maxSpan)
+        boxes[box].down = min(max(down, 1), Self.maxSpan)
+    }
+
+    /// The note focus goes to after `box` (from the first on the board when nil, counting it when
+    /// `including`), going round the board in its order, then the hidden ones.
+    public func nextNote(after box: Int?, including: Bool = false) -> Int? {
+        let done = order.map { boxes[$0].status == .completed }
+        let at = box.flatMap { order.firstIndex(of: $0) } ?? 0
+        return FocusSession.nextNote(after: at, completed: done, shown: shown, including: including).map { order[$0] }
     }
 
     /// The light colors a double-click steps through, as red, green and blue from 0 to 1.
@@ -174,6 +234,14 @@ public struct Board: Codable, Equatable, Sendable {
         if b.boxes.count > Self.maxBoxes { b.boxes = Array(b.boxes.prefix(Self.maxBoxes)) }
         b.boxes += Array(repeating: Box(), count: Self.maxBoxes - b.boxes.count)
         for i in b.boxes.indices where !Self.tints.indices.contains(b.boxes[i].tint) { b.boxes[i].tint = 0 }
+        for i in b.boxes.indices {
+            b.boxes[i].across = min(max(b.boxes[i].across, 1), Self.maxSpan)
+            b.boxes[i].down = min(max(b.boxes[i].down, 1), Self.maxSpan)
+        }
+        // Every box once: unknown or repeated places go, missing boxes come at the end.
+        var seen = Set<Int>()
+        b.order = b.order.filter { b.boxes.indices.contains($0) && seen.insert($0).inserted }
+        b.order += b.boxes.indices.filter { !seen.contains($0) }
         for i in b.boxes.indices where b.boxes[i].alarm?.timer == nil || b.boxes[i].alarm?.state.isOn != true {
             b.boxes[i].alarm = nil
         }
@@ -202,6 +270,92 @@ public struct Board: Codable, Equatable, Sendable {
         // Spread the boxes over the rows, the longer rows first.
         let base = n / best.rows, extra = n % best.rows
         return (0..<best.rows).map { $0 < extra ? base + 1 : base }
+    }
+
+    /// A box's place on the board, as fractions of its width and height (0 to 1).
+    public struct Cell: Equatable, Sendable {
+        public var box: Int
+        public var x: Double, y: Double, width: Double, height: Double
+
+        public init(box: Int, x: Double, y: Double, width: Double, height: Double) {
+            self.box = box
+            self.x = x
+            self.y = y
+            self.width = width
+            self.height = height
+        }
+
+        public func contains(x px: Double, y py: Double) -> Bool {
+            px >= x && px < x + width && py >= y && py < y + height
+        }
+    }
+
+    /// Where the shown boxes go on a board this size, and the grid's blocks across and down. When
+    /// every box is one block, the rows of `rows(for:)` (each row's boxes filling its width); when
+    /// one is bigger, a grid, each box placed in turn at the first place it fits from where the
+    /// last one went, with as many blocks across as come closest to square blocks and fewest left
+    /// empty.
+    public func layout(width: Double, height: Double) -> (cells: [Cell], across: Int, down: Int) {
+        let ids = visible
+        let w = max(width, 1), h = max(height, 1)
+        if ids.allSatisfy({ boxes[$0].across == 1 && boxes[$0].down == 1 }) {
+            let rows = Self.rows(for: ids.count, width: w, height: h)
+            var cells: [Cell] = []
+            var k = 0
+            for (r, n) in rows.enumerated() {
+                for c in 0..<n {
+                    cells.append(Cell(box: ids[k], x: Double(c) / Double(n), y: Double(r) / Double(rows.count),
+                                      width: 1 / Double(n), height: 1 / Double(rows.count)))
+                    k += 1
+                }
+            }
+            return (cells, rows.max() ?? 1, rows.count)
+        }
+        let spans = ids.map { (box: $0, across: boxes[$0].across, down: boxes[$0].down) }
+        let widest = spans.map(\.across).max() ?? 1
+        let area = spans.reduce(0) { $0 + $1.across * $1.down }
+        var best: (score: Double, across: Int, down: Int, placed: [(Int, Int, Int, Int, Int)])?
+        for columns in widest...max(widest, area) {
+            let (placed, rows) = Self.pack(spans, columns: columns)
+            let aspect = (w / Double(columns)) / (h / Double(rows))
+            let empty = Double(columns * rows - area) / Double(columns * rows)
+            let score = abs(log(aspect)) + empty
+            if best == nil || score < best!.score - 1e-9 { best = (score, columns, rows, placed) }
+        }
+        guard let best else { return ([], 1, 1) }
+        let cells = best.placed.map { box, x, y, a, d in
+            Cell(box: box, x: Double(x) / Double(best.across), y: Double(y) / Double(best.down),
+                 width: Double(a) / Double(best.across), height: Double(d) / Double(best.down))
+        }
+        return (cells, best.across, best.down)
+    }
+
+    /// Each box at the first place it fits, row by row, from where the last one went: (box,
+    /// column, row, across, down), and how many rows that takes.
+    static func pack(_ spans: [(box: Int, across: Int, down: Int)], columns: Int) -> ([(Int, Int, Int, Int, Int)], Int) {
+        var taken: [[Bool]] = []
+        var placed: [(Int, Int, Int, Int, Int)] = []
+        var cursor = (row: 0, column: 0)
+        func free(_ r: Int, _ c: Int, _ a: Int, _ d: Int) -> Bool {
+            guard c + a <= columns else { return false }
+            for y in r..<(r + d) where y < taken.count {
+                for x in c..<(c + a) where taken[y][x] { return false }
+            }
+            return true
+        }
+        for s in spans {
+            let a = min(s.across, columns)
+            var r = cursor.row, c = cursor.column
+            while !free(r, c, a, s.down) {
+                c += 1
+                if c + a > columns { c = 0; r += 1 }
+            }
+            while taken.count < r + s.down { taken.append(Array(repeating: false, count: columns)) }
+            for y in r..<(r + s.down) { for x in c..<(c + a) { taken[y][x] = true } }
+            placed.append((s.box, c, r, a, s.down))
+            cursor = (r, c + a)
+        }
+        return (placed, max(taken.count, 1))
     }
 
     /// Where a board is kept: ~/Library/Application Support/ToolMacTool/boards/<id>.json.

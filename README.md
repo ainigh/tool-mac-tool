@@ -642,6 +642,17 @@ there are more. Double-click a note to step it through light colors. **A note's 
 twice the size of the rest**: its title. Web addresses in a note are underlined: click one to open
 it in your browser.
 
+**Order the notes by dragging them**: drag a note by the strip along its top (the three lines; the
+pointer becomes a hand) onto another note's place, and it takes that place, the notes between
+moving along one. The order is kept, and the arrows show more or fewer from the end of it (a hidden
+note shown again comes in at the end). Focus goes round the notes in this order too.
+
+**Make a note span more blocks**: drag the corner at its bottom right. A dashed outline shows how
+many blocks it will take, across and down (up to 4 each way); let go and the board makes room.
+Double-click the corner to put it back to one block. While every note is one block, they fill the
+board in rows as before; once one is bigger, the board becomes a grid of equal blocks, the notes
+placed in order, each at the first place it fits.
+
 **Paste a web address into a note** and its page is fetched straight away: under the text, a line
 with the **page's icon (favicon), its title and its site** (a click opens it; right-click to copy
 the link or fetch it again). Each note shows its first two links (four when it's big), and the

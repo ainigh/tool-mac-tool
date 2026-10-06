@@ -90,4 +90,118 @@ final class BoardsTests: XCTestCase {
         XCTAssertFalse(old.docked)
         XCTAssertNil(Board.Box(text: " \n ").title)
     }
+
+    // MARK: Order and size
+
+    func testOldBoardsKeepTheirOrderAndSize() throws {
+        let json = #"{"shown":3,"boxes":[{"text":"a"},{"text":"b"},{"text":"c"}]}"#
+        let b = try JSONDecoder().decode(Board.self, from: Data(json.utf8)).tidied()
+        XCTAssertEqual(b.order, Array(0..<Board.maxBoxes))
+        XCTAssertEqual(b.visible, [0, 1, 2])
+        XCTAssertEqual(b.boxes[1].text, "b")
+        XCTAssertEqual(b.boxes[1].across, 1)
+        XCTAssertEqual(b.boxes[1].down, 1)
+    }
+
+    func testOrderIsTidiedToEveryBoxOnce() {
+        let b = Board(shown: 4, order: [3, 3, 99, -1, 0])
+        XCTAssertEqual(b.order.count, Board.maxBoxes)
+        XCTAssertEqual(Set(b.order).count, Board.maxBoxes)
+        XCTAssertEqual(Array(b.order.prefix(3)), [3, 0, 1])
+    }
+
+    func testMoveTakesTheTargetsPlace() {
+        var b = Board()
+        b.move(0, to: 2)                       // forward: after the ones between
+        XCTAssertEqual(b.visible, [1, 2, 0, 3])
+        b.move(3, to: 1)                       // back: before the target
+        XCTAssertEqual(b.visible, [3, 1, 2, 0])
+        b.move(3, to: 3)
+        XCTAssertEqual(b.visible, [3, 1, 2, 0])
+    }
+
+    func testOrderAndSizeRoundTrip() throws {
+        var b = Board()
+        b.boxes[2].text = "big"
+        b.move(2, to: 0)
+        b.resize(2, across: 2, down: 9)
+        let back = try JSONDecoder().decode(Board.self, from: JSONEncoder().encode(b)).tidied()
+        XCTAssertEqual(back, b)
+        XCTAssertEqual(back.visible, [2, 0, 1, 3])
+        XCTAssertEqual(back.boxes[2].across, 2)
+        XCTAssertEqual(back.boxes[2].down, Board.maxSpan)
+    }
+
+    func testRevealBringsAHiddenBoxAfterTheShownOnes() {
+        var b = Board()
+        b.move(1, to: 0)
+        b.reveal(9)
+        XCTAssertEqual(b.visible, [1, 0, 2, 3, 9])
+        XCTAssertTrue(b.isShown(9))
+        b.reveal(9)
+        XCTAssertEqual(b.shown, 5)
+    }
+
+    func testFocusGoesRoundInTheBoardsOrder() {
+        var b = Board()
+        b.move(3, to: 0)                       // 3, 0, 1, 2
+        XCTAssertEqual(b.nextNote(after: nil, including: true), 3)
+        XCTAssertEqual(b.nextNote(after: 3), 0)
+        XCTAssertEqual(b.nextNote(after: 2), 3)
+        b.boxes[0].status = .completed
+        XCTAssertEqual(b.nextNote(after: 3), 1)
+        for i in [3, 1, 2] { b.boxes[i].status = .completed }
+        XCTAssertEqual(b.nextNote(after: 2), 4)  // the first hidden one
+    }
+
+    func testSingleBlocksLayOutInRows() {
+        let b = Board(shown: 5)
+        let l = b.layout(width: 1000, height: 700)
+        let rows = Board.rows(for: 5, width: 1000, height: 700)
+        XCTAssertEqual(l.cells.map(\.box), [0, 1, 2, 3, 4])
+        XCTAssertEqual(l.down, rows.count)
+        // Each row fills the width.
+        for y in Set(l.cells.map(\.y)) {
+            XCTAssertEqual(l.cells.filter { $0.y == y }.map(\.width).reduce(0, +), 1, accuracy: 1e-9)
+        }
+    }
+
+    func testABigBoxSpansBlocksAndNothingOverlaps() {
+        for shown in 2...12 {
+            var b = Board(shown: shown)
+            b.resize(b.visible[0], across: 2, down: 2)
+            if shown > 3 { b.resize(b.visible[3], across: 3, down: 1) }
+            for (w, h) in [(1000.0, 700.0), (600.0, 900.0)] {
+                let l = b.layout(width: w, height: h)
+                XCTAssertEqual(l.cells.map(\.box), b.visible)
+                let blockW = 1 / Double(l.across), blockH = 1 / Double(l.down)
+                for c in l.cells {
+                    XCTAssertEqual(c.width / blockW, Double(min(b.boxes[c.box].across, l.across)), accuracy: 1e-9)
+                    XCTAssertEqual(c.height / blockH, Double(b.boxes[c.box].down), accuracy: 1e-9)
+                    XCTAssertLessThanOrEqual(c.x + c.width, 1 + 1e-9)
+                    XCTAssertLessThanOrEqual(c.y + c.height, 1 + 1e-9)
+                }
+                for (i, a) in l.cells.enumerated() {
+                    for d in l.cells[(i + 1)...] {
+                        let apart = a.x + a.width <= d.x + 1e-9 || d.x + d.width <= a.x + 1e-9
+                            || a.y + a.height <= d.y + 1e-9 || d.y + d.height <= a.y + 1e-9
+                        XCTAssertTrue(apart, "\(shown) boxes: \(a) and \(d) overlap")
+                    }
+                }
+            }
+        }
+    }
+
+    func testTwoByTwoInFourBlocksAcross() {
+        var b = Board(shown: 5)
+        b.resize(0, across: 2, down: 2)
+        let l = b.layout(width: 1000, height: 500)
+        XCTAssertEqual(l.across, 4)
+        XCTAssertEqual(l.down, 2)
+        XCTAssertEqual(l.cells[0], Board.Cell(box: 0, x: 0, y: 0, width: 0.5, height: 1))
+        XCTAssertEqual(l.cells[1], Board.Cell(box: 1, x: 0.5, y: 0, width: 0.25, height: 0.5))
+        XCTAssertEqual(l.cells[3], Board.Cell(box: 3, x: 0.5, y: 0.5, width: 0.25, height: 0.5))
+        XCTAssertTrue(l.cells[0].contains(x: 0.2, y: 0.9))
+        XCTAssertFalse(l.cells[1].contains(x: 0.2, y: 0.9))
+    }
 }

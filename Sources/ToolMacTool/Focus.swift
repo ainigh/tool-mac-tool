@@ -85,8 +85,7 @@ final class FocusCenter: ObservableObject {
                               ok: "Stop it and go on") else { return }
         }
         let model = boards.model(board)
-        let done = model.board.boxes.map { $0.status == .completed }
-        guard let first = FocusSession.nextNote(after: 0, completed: done, shown: model.board.shown, including: true) else {
+        guard let first = model.board.nextNote(after: nil, including: true) else {
             _ = Confirm.ask("Every note on \(board.name) is completed", "Mark one To do or Pending (bottom left of a note) to focus on it.",
                             ok: "OK", cancel: "Close")
             return
@@ -186,9 +185,8 @@ final class FocusCenter: ObservableObject {
         m.board.boxes[s.note].status = .completed
         m.board.boxes[s.note].statusAt = now
         let was = s.note
-        let done = m.board.boxes.map { $0.status == .completed }
         sounds.stop(Self.cardID)
-        guard let next = FocusSession.nextNote(after: was, completed: done, shown: m.board.shown) else {
+        guard let next = m.board.nextNote(after: was) else {
             s.completed += 1
             session = s
             boards.setPinned(false, board, was, force: true)
@@ -209,7 +207,7 @@ final class FocusCenter: ObservableObject {
     private func show(_ board: BoardStore.Kind, _ i: Int) {
         guard let boards else { return }
         let m = boards.model(board)
-        if m.board.shown <= i { m.board.shown = i + 1 }
+        m.board.reveal(i)
         boards.setPinned(true, board, i)
     }
 
