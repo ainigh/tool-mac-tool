@@ -128,9 +128,13 @@ struct HUDView: View {
                 .font(.system(size: 22))
                 .foregroundStyle(ok ? .green : .orange)
             VStack(alignment: .leading, spacing: 4) {
+                // Both wrap rather than cut off: the card is sized to fit them.
                 Text(title).font(.system(size: 13, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(message).font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    // An error worth searching for or passing on can be selected and copied.
+                    .textSelection(.enabled)
                 HStack(spacing: 12) {
                     if reveal != nil {
                         Button("Show in Finder", action: onReveal)
@@ -144,10 +148,14 @@ struct HUDView: View {
                 .padding(.top, 2)
             }
             Button(action: onClose) {
+                // A target bigger than the 10-point glyph, so a click just beside it still closes.
                 Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help("Close")
+            .accessibilityLabel("Close")
         }
         .padding(14)
         .frame(width: 340)

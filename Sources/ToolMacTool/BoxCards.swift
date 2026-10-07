@@ -52,6 +52,7 @@ struct BoxAlarmCard: View {
                             Label("Open \(box.board.name)", systemImage: "square.grid.2x2")
                                 .font(.system(size: max(11, h * 0.3), weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white.opacity(0.6))
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .help("Open the board this box is on")
@@ -133,7 +134,7 @@ struct BoxAlarmCard: View {
                 BigButton(title: "Snooze \(TimerText.duration(TimerSpec.snooze))", symbol: "zzz", height: h) {
                     box.store.snooze(box.board, box.index)
                 }
-                .help("Quiet for 3 minutes, then it rings again (once per countdown)")
+                .help("Quiet for \(TimerText.duration(TimerSpec.snooze)), then it rings again (once per countdown)")
             }
             BigButton(title: "Again", symbol: "arrow.counterclockwise", height: h) { box.store.restart(box.board, box.index) }
                 .help("Start the same countdown again")
@@ -142,7 +143,7 @@ struct BoxAlarmCard: View {
                 BigButton(title: "Snooze \(TimerText.duration(TimerSpec.snooze))", symbol: "zzz", height: h) {
                     box.store.snooze(box.board, box.index)
                 }
-                .help("Quiet now, ring again in 3 minutes (once a round)")
+                .help("Quiet now, ring again in \(TimerText.duration(TimerSpec.snooze)) (once a round)")
             }
             BigButton(title: "Stop timer", symbol: "stop.fill", height: h) { box.store.stop(box.board, box.index) }
                 .help("Stop \(box.spec.name): no more rounds")
@@ -151,7 +152,7 @@ struct BoxAlarmCard: View {
                 BigButton(title: "Snooze \(TimerText.duration(TimerSpec.snooze))", symbol: "zzz", height: h) {
                     box.store.snooze(box.board, box.index)
                 }
-                .help("Quiet for 3 minutes, then it rings again (once)")
+                .help("Quiet for \(TimerText.duration(TimerSpec.snooze)), then it rings again (once)")
             }
         }
     }
@@ -217,6 +218,7 @@ struct NoteReminderCard: View {
                         Label("Open \(board.name)", systemImage: "square.grid.2x2")
                             .font(.system(size: max(11, h * 0.3), weight: .semibold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.6))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Open the board this note is on")

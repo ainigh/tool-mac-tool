@@ -162,7 +162,7 @@ private struct LogReport: View {
             }
             HStack(alignment: .top, spacing: 20) {
                 ChartBox(title: "Alarms and snoozes per day", note: "Hover a day for its numbers") {
-                    PerDay(days: days, hovered: $hoveredDay)
+                    PerDay(days: days, calendar: cal, hovered: $hoveredDay)
                 }
                 ChartBox(title: "Was anything set?", note: "A filled dot: a timer or the battery was set that day") {
                     SetDays(days: days)
@@ -311,6 +311,9 @@ private struct Timeline: View {
 /// Alarms and snoozes, side by side for each day.
 private struct PerDay: View {
     let days: [DaySummary]
+    /// The calendar the days were cut with (the time zone in Settings), so a hovered point lands
+    /// on the same day start as the summaries; the system's own could miss them all.
+    let calendar: Calendar
     @Binding var hovered: Date?
 
     var body: some View {
@@ -329,8 +332,8 @@ private struct PerDay: View {
                 RuleMark(x: .value("Day", d.day, unit: .day))
                     .foregroundStyle(.white.opacity(0.18))
                     .annotation(position: .top, alignment: .center, spacing: 4) {
-                        Text("\(d.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))): \(d.alarms) alarms · \(d.snoozes) snoozes\(d.anySet ? "" : " · nothing set")")
-                            .font(.system(size: 11, weight: .semibold))
+                        Text("\(d.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))): \(d.alarms) alarm\(d.alarms == 1 ? "" : "s") · \(d.snoozes) snooze\(d.snoozes == 1 ? "" : "s")\(d.anySet ? "" : " · nothing set")")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(Capsule().fill(.black.opacity(0.6)))
@@ -360,7 +363,7 @@ private struct PerDay: View {
                             guard let plot = proxy.plotFrame else { return }
                             let x = point.x - g[plot].origin.x
                             if let date: Date = proxy.value(atX: x) {
-                                hovered = Calendar.current.dateInterval(of: .day, for: date)?.start
+                                hovered = calendar.dateInterval(of: .day, for: date)?.start
                             }
                         case .ended:
                             hovered = nil
@@ -459,18 +462,26 @@ private struct EntryList: View {
                             .monospacedDigit()
                             .foregroundStyle(.white.opacity(0.55))
                             .frame(width: 150, alignment: .leading)
-                        Text(e.name).frame(width: 110, alignment: .leading)
+                        Text(e.name).lineLimit(1).truncationMode(.tail).frame(width: 110, alignment: .leading)
                         HStack(spacing: 6) {
                             Circle().fill(color(e.kind)).frame(width: 7, height: 7)
-                            Text(e.kind.words)
+                            Text(e.kind.words).lineLimit(1)
                         }
                         .frame(width: 130, alignment: .leading)
-                        Text(e.detail).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                        Text(e.detail).foregroundStyle(.white.opacity(0.7)).lineLimit(1).truncationMode(.tail)
+                            .help(e.detail)
                         Spacer(minLength: 0)
                     }
                     .font(.system(size: 12))
                     .padding(.vertical, 5)
                     Divider().opacity(0.3)
+                }
+                // Only the newest 400 are listed: say so, rather than let the list look complete.
+                if entries.count > 400 {
+                    Text("And \(entries.count - 400) older (the log file has them all)")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.top, 8)
                 }
             }
         }
@@ -542,7 +553,7 @@ private struct SignalsPane: View {
                     .buttonStyle(.link)
                     if !store.outbox.isEmpty {
                         HStack(spacing: 12) {
-                            Text("\(store.outbox.count) signals from before are waiting to go to \(store.settings.endpoint?.host ?? "the old address")")
+                            Text("\(store.outbox.count) signal\(store.outbox.count == 1 ? "" : "s") from before \(store.outbox.count == 1 ? "is" : "are") waiting to go to \(store.settings.endpoint?.host ?? "the old address")")
                                 .foregroundStyle(.white.opacity(0.65))
                             Button("Retry now") { store.flush() }
                                 .disabled(store.settings.endpoint == nil)
@@ -553,8 +564,9 @@ private struct SignalsPane: View {
                     }
                 }
             }
-            ChartBox(title: "The log", note: "\(store.log.entries.count) entries in \(store.logURL.lastPathComponent)") {
+            ChartBox(title: "The log", note: "\(store.log.entries.count) entr\(store.log.entries.count == 1 ? "y" : "ies") in \(store.logURL.lastPathComponent)") {
                 Button("Clear the log…") { confirmClear = true }
+                    .disabled(store.log.entries.isEmpty)
                     .confirmationDialog("Clear every entry in the timer log?", isPresented: $confirmClear) {
                         Button("Clear the log", role: .destructive) { store.clearLog() }
                     }
@@ -572,16 +584,19 @@ private struct JobLine: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Toggle("", isOn: Binding(get: { job.enabled }, set: { on in
+            Toggle(job.name, isOn: Binding(get: { job.enabled }, set: { on in
                 guard Confirm.schedule(job, doing: scheduler.doing(job), on: on, clock24: scheduler.prefs.settings.clock24) else { return }
                 scheduler.setEnabled(job.id, on)
             }))
                 .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                .help(job.enabled ? "On: turn it off" : "Off: turn it on")
             Image(systemName: scheduler.symbol(for: job)).foregroundStyle(.white.opacity(0.6)).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(job.name).font(.system(size: 12.5, weight: .semibold))
+                Text(job.name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
                 Text(detail)
                     .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(detail)
             }
             Spacer()
             if let ok = job.lastOK {

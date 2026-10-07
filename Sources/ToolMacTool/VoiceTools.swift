@@ -76,6 +76,7 @@ struct GlassScaffold<Main: View, Controls: View, Footer: View>: View {
                     Text(status)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .help(status)
                 }
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(dot == .trouble ? Color(red: 1, green: 0.7, blue: 0.75) : .white.opacity(0.72))
@@ -174,6 +175,7 @@ struct MenuPill: View {
         .buttonStyle(.plain)
         .fixedSize()
         .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
         .help(help)
     }
 
@@ -229,6 +231,11 @@ struct VoiceChoice: View {
     }
 }
 
+/// "1 word", "2 words": a count for the footers, with the noun agreeing.
+fileprivate func counted(_ n: Int, _ noun: String) -> String {
+    "\(n) \(noun)\(n == 1 ? "" : "s")"
+}
+
 // MARK: - Read aloud (TTS)
 
 @MainActor
@@ -252,6 +259,8 @@ struct ReadAloudView: View {
     @State private var ink = Double.random(in: 0..<360)
 
     var words: Int { text.split(whereSeparator: \.isWhitespace).count }
+    /// Nothing to read (spaces and returns only).
+    var blank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         GlassScaffold(clock: clock, mood: speaker.speaking && !speaker.paused ? .streaming : .idle,
@@ -280,9 +289,9 @@ struct ReadAloudView: View {
                     }
                     PillButton(title: "Stop") { speaker.stop() }
                 } else {
-                    PillButton(title: "Read", prominent: !text.isEmpty) { read() }
+                    PillButton(title: "Read", prominent: !blank) { read() }
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(blank)
                     PillButton(title: "Paste & read") {
                         if let s = NSPasteboard.general.string(forType: .string), !s.isEmpty {
                             text = s
@@ -290,11 +299,14 @@ struct ReadAloudView: View {
                         }
                     }
                     PillButton(title: "Save audio…") { saveAudio() }
-                        .disabled(text.isEmpty)
+                        .disabled(blank)
+                        .help("Save it read aloud as a .wav file")
                 }
                 Spacer()
-                KeyHint(key: "⌘⏎", does: "read")
-                Text("\(words) words · ~\(Self.minutes(words)) min")
+                if !speaker.speaking {
+                    KeyHint(key: "⌘⏎", does: "read")       // Read (and its shortcut) is only there when it isn't reading
+                }
+                Text(words == 0 ? counted(0, "word") : counted(words, "word") + " · ~\(Self.minutes(words)) min")
                     .monospacedDigit()
             }
         }
@@ -304,7 +316,8 @@ struct ReadAloudView: View {
     /// What's being read, the word being said in white.
     var reading: Text {
         let s = speaker.current
-        let base = Text(s)
+        // The first sentence is still being made.
+        let base = Text(s.isEmpty ? "…" : s)
         guard let r = speaker.word, let range = Range(r, in: s) else {
             return base.font(.system(size: 19, weight: .semibold, design: .rounded))
         }
@@ -412,6 +425,7 @@ struct DictateView: View {
                 .disabled(listener.finishing)
                 PillButton(title: "Keep note") { keep() }
                     .keyboardShortcut("s", modifiers: .command)
+                    .help("Add it to today's glass-dictation file (⌘S)")
                     .disabled(note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || listening)
                 PillButton(title: "Copy") {
                     NSPasteboard.general.clearContents()
@@ -423,11 +437,13 @@ struct DictateView: View {
                     .disabled(note.isEmpty || listening)
                 Spacer()
                 if let savedTo {
-                    Button { NSWorkspace.shared.show(savedTo) } label: { Text(savedTo.lastPathComponent).underline() }
-                        .buttonStyle(.plain)
-                        .help("Show in Finder (Glass lists it with its transcripts)")
+                    Button { NSWorkspace.shared.show(savedTo) } label: {
+                        Text(savedTo.lastPathComponent).underline().lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show in Finder (Glass lists it with its transcripts)")
                 }
-                Text("\(words) words").monospacedDigit()
+                Text(counted(words, "word")).monospacedDigit()
             }
         }
         .onChange(of: listener.text) { heard in
@@ -515,7 +531,31 @@ final class TranscribeModel: ObservableObject {
                 self.progress = 1
             }
         }
-        job.start(url)
+        // A video's sound is taken out first (as Recordings does), so the transcriber reads plain audio.
+        guard UTType(filenameExtension: url.pathExtension.lowercased())?.conforms(to: .movie) == true else {
+            job.start(url)
+            return
+        }
+        Task {
+            do {
+                let audio = try await RecordingsModel.soundTrack(of: url)
+                guard self.job === job else {
+                    try? FileManager.default.removeItem(at: audio)
+                    return
+                }
+                let finish = job.onDone
+                job.onDone = { problem in
+                    try? FileManager.default.removeItem(at: audio)
+                    finish?(problem)
+                }
+                job.start(audio)
+            } catch {
+                guard self.job === job else { return }
+                self.running = false
+                self.job = nil
+                self.problem = error.localizedDescription
+            }
+        }
     }
 
     func stop() { job?.cancel() }
@@ -597,11 +637,15 @@ struct TranscribeView: View {
                 }
                 PillButton(title: "Copy") { model.copy() }.disabled(model.segments.isEmpty)
                 PillButton(title: ".txt") { model.export(.txt) }.disabled(model.segments.isEmpty)
+                    .help("Save it as plain text")
                 PillButton(title: ".srt") { model.export(.srt) }.disabled(model.segments.isEmpty)
+                    .help("Save it as SubRip subtitles")
                 PillButton(title: ".vtt") { model.export(.vtt) }.disabled(model.segments.isEmpty)
+                    .help("Save it as WebVTT subtitles")
                 Spacer()
                 if let last = model.segments.last {
-                    Text("\(model.segments.count) lines · \(Captions.clock(last.end))").monospacedDigit()
+                    Text(counted(model.segments.count, "line") + " · " + Captions.clock(last.end))
+                        .monospacedDigit()
                 }
             }
         }

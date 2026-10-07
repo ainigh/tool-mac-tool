@@ -111,8 +111,9 @@ final class Updater: ObservableObject {
 
     nonisolated static func findUpdate() throws -> Update? {
         let head = try Commit.decode(api("repos/\(repo)/commits/\(branch)"))
-        if let mine = currentCommit, head.sha.hasPrefix(mine) || mine.hasPrefix(head.sha) { return nil }
-        // A copy with no commit recorded (an early build) updates to whatever main has.
+        // A copy with no commit recorded (an early build, or an empty one: every sha starts with "")
+        // updates to whatever main has.
+        if let mine = currentCommit, !mine.isEmpty, head.sha.hasPrefix(mine) || mine.hasPrefix(head.sha) { return nil }
         let release = try? Release.decode(api("repos/\(repo)/releases/latest"))
         let prebuilt = release.flatMap { $0.target == head.sha && $0.asset(named: assetName) != nil ? $0 : nil }
         return Update(commit: head, release: prebuilt)
@@ -262,7 +263,8 @@ final class Updater: ObservableObject {
 
     nonisolated static func download(_ url: URL, to file: URL) throws {
         let (data, response) = try fetch(URLRequest(url: url))
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw Problem("download failed: \(url)") }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw Problem("download failed (GitHub answered \(status)): \(url)") }
         try data.write(to: file)
     }
 

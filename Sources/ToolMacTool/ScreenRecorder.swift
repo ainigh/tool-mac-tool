@@ -40,7 +40,8 @@ final class ScreenRecorder: ObservableObject {
         withAudio = audio
         guard Self.mayCapture() else { return }
         let go = { [weak self] in
-            guard let self else { return }
+            // Clicked twice while the microphone was being asked about: only one picker.
+            guard let self, self.state == .idle else { return }
             self.state = .picking
             // A moment for the menu bar's panel to go away first.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
@@ -269,6 +270,7 @@ struct RecordingBar: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))
                 .help(recorder.withAudio ? "Recording the microphone too" : "No sound")
+                .accessibilityLabel(recorder.withAudio ? "Recording the microphone too" : "No sound")
             GlassIcon(symbol: paused ? "play.fill" : "pause.fill", help: paused ? "Resume" : "Pause") {
                 paused ? recorder.resume() : recorder.pause()
             }
@@ -423,6 +425,8 @@ private final class PickerView: NSView {
         let size = s.size()
         var p = point
         if p.y < 4 { p.y = 4 }
+        // Kept on the screen when the box is against its right edge.
+        p.x = max(4, min(p.x, bounds.maxX - size.width - 16))
         let back = NSRect(x: p.x, y: p.y, width: size.width + 12, height: size.height + 6)
         NSColor.black.withAlphaComponent(0.6).setFill()
         NSBezierPath(roundedRect: back, xRadius: 6, yRadius: 6).fill()

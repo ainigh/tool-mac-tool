@@ -128,7 +128,7 @@ struct ChimeTile: View {
                 .frame(width: 40, height: 40)
                 .scaleEffect(hover ? 1.06 : 1)
                 .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hover)
-                Text(job?.name ?? (builtin == .dayChime ? "Day chime" : "Night watch"))
+                Text(job?.name ?? fallbackName)
                     .font(.system(size: 10.5, weight: hover ? .medium : .regular))
                     .foregroundStyle(hover ? AnyShapeStyle(color) : AnyShapeStyle(.primary))
                     .lineLimit(1)
@@ -159,6 +159,9 @@ struct ChimeTile: View {
         scheduler.setEnabled(job.id, !on)
     }
 
+    /// Its name before the scheduler has its job (it always should, but the tile still needs one).
+    private var fallbackName: String { builtin == .dayChime ? "Day chime" : "Night watch" }
+
     private func status(_ job: ScheduledJob?) -> String {
         guard let job, job.enabled else { return "Off" }
         guard let next = job.next else { return "On" }
@@ -169,8 +172,9 @@ struct ChimeTile: View {
         let what = builtin == .dayChime
             ? "A ding and a card every hour through the day, with hours since 6 AM and to 10 PM."
             : "A ding and a warning card every hour through the night, with the hours left before 6 AM."
-        let when = job.map { $0.when.describe(clock24: scheduler.prefs.settings.clock24) } ?? ""
-        return "\(job?.name ?? "") (a built-in schedule: \(when))\n\n\(what)\n\n\(on ? "On: click to turn it off (it asks first)." : "Off: click to turn it on (it asks first).") Right-click to change its hours in the Scheduler."
+        // Without its job there's no "when": leave it out rather than end on an empty ": )".
+        let when = job.map { ": " + $0.when.describe(clock24: scheduler.prefs.settings.clock24) } ?? ""
+        return "\(job?.name ?? fallbackName) (a built-in schedule\(when))\n\n\(what)\n\n\(on ? "On: click to turn it off (it asks first)." : "Off: click to turn it on (it asks first).") Right-click to change its hours in the Scheduler."
     }
 }
 
@@ -333,7 +337,7 @@ private struct TagBoardTile: View {
         }
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
-        .help("\(tag.help). \(count == 1 ? "1 note" : "\(count) notes"). Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
+        .help("\(tag.help). \(count == 0 ? "No notes yet" : count == 1 ? "1 note" : "\(count) notes"). Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
         .contextMenu {
             Button("Open \(tag.title)", action: open)
             Button(inMenuBar ? "Take out of the menu bar" : "Dock in the menu bar (beside the wrench)") { dock(!inMenuBar) }

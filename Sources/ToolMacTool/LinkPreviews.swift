@@ -27,7 +27,8 @@ final class LinkPreviews: ObservableObject {
     }
 
     @Published private(set) var info: [String: Info] = [:]
-    private var loading: Set<String> = []
+    /// Published so a note shows its spinner as soon as a fetch starts, not on its next redraw.
+    @Published private var loading: Set<String> = []
     private var saveTask: Task<Void, Never>?
     private let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/ToolMacTool/links.json")
@@ -239,8 +240,10 @@ struct LinkLine: View {
     @State private var hover = false
 
     var body: some View {
-        let host = (link.host ?? "").replacingOccurrences(of: "www.", with: "")
+        let raw = link.host ?? ""
+        let host = raw.hasPrefix("www.") ? String(raw.dropFirst(4)) : raw
         let title = info?.title ?? (loading ? "Getting the page…" : host)
+        let site = info?.site ?? host
         Button(action: open) {
             HStack(spacing: 6) {
                 icon
@@ -249,11 +252,13 @@ struct LinkLine: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(Color.black.opacity(0.78))
                     .lineLimit(1)
-                Text(info?.site ?? host)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.black.opacity(0.45))
-                    .lineLimit(1)
-                    .layoutPriority(-1)
+                if site != title {
+                    Text(site)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Color.black.opacity(0.45))
+                        .lineLimit(1)
+                        .layoutPriority(-1)
+                }
                 Spacer(minLength: 0)
                 if info?.youtube != nil {
                     Image(systemName: "play.fill")
@@ -268,6 +273,7 @@ struct LinkLine: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
         .help([info?.title, info?.summary, link.absoluteString].compactMap { $0 }.joined(separator: "\n\n"))
         .contextMenu {
             Button("Open in the browser") { NSWorkspace.shared.open(link) }
@@ -386,6 +392,8 @@ struct YouTubeWindowView: View {
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(title)
                 WindowDragArea()
                     .frame(maxWidth: .infinity)
                     .frame(height: 24)

@@ -378,9 +378,7 @@ final class BoardStore: ObservableObject {
     private func updateStatusItems() {
         for (id, item) in statusItems {
             guard let label = label(forDock: id), let button = item.button else { continue }
-            let tip = Self.note(fromDock: id) != nil
-                ? "\(label.name): open or close the note (right-click to take it out of the menu bar)"
-                : "\(label.name): open or close the board (right-click to take it out of the menu bar)"
+            let tip = Self.statusTip(id, name: label.name)
             if button.toolTip != tip { button.toolTip = tip }
             button.image = NSImage(systemSymbolName: label.symbol, accessibilityDescription: label.name)
             button.image?.isTemplate = true
@@ -388,6 +386,13 @@ final class BoardStore: ObservableObject {
     }
 
     // MARK: Boards docked in the menu bar
+
+    /// The tooltip on what's docked in the menu bar: the same words when it's put there and when
+    /// its name changes.
+    private static func statusTip(_ id: String, name: String) -> String {
+        let what = note(fromDock: id) != nil ? "note" : "board"
+        return "\(name): open or close the \(what) (right-click to take it out of the menu bar)"
+    }
 
     nonisolated static func dockID(_ tag: NoteTag) -> String { "tag-\(tag.rawValue)" }
     nonisolated static func tag(fromDock id: String) -> NoteTag? {
@@ -486,9 +491,7 @@ final class BoardStore: ObservableObject {
                 button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: name)
                 button.image?.isTemplate = true
                 button.identifier = MenuPanel.boardItem
-                button.toolTip = Self.note(fromDock: id) != nil
-                    ? "\(name): open or close the note (right-click to take it out of the menu bar)"
-                    : "\(name): open or close the board (right-click to take it out of the menu bar)"
+                button.toolTip = Self.statusTip(id, name: name)
                 button.target = target
                 button.action = #selector(StatusTarget.clicked(_:))
                 button.sendAction(on: [.leftMouseUp, .rightMouseUp])

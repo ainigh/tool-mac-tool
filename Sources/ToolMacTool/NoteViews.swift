@@ -201,6 +201,8 @@ struct TagBoardView: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
         }
+        // Kept off the panel's edges when it's narrow, so the hint wraps instead of running to them.
+        .padding(.horizontal, 40)
     }
 
     private var footer: some View {

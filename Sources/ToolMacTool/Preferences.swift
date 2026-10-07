@@ -34,7 +34,7 @@ final class Preferences: ObservableObject {
     }
 
     var ollama: Ollama {
-        Ollama(base: URL(string: settings.ollama.trimmingCharacters(in: .whitespaces))
+        Ollama(base: URL(string: settings.ollama.trimmingCharacters(in: .whitespacesAndNewlines))
             ?? URL(string: AppSettings.defaultOllama)!)
     }
 
@@ -49,8 +49,15 @@ final class Preferences: ObservableObject {
 
     func saveNow() {
         do {
-            settings = settings.tidied()
-            try settings.save(to: url)
+            let tidy = settings.tidied()
+            try tidy.save(to: url)
+            // A memory prompt cleared to write a new one is saved as the default but stays empty
+            // on screen; otherwise the default would pop back in under your typing.
+            var shown = tidy
+            if settings.memoryPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                shown.memoryPrompt = settings.memoryPrompt
+            }
+            settings = shown
             problem = nil
         } catch {
             problem = "Couldn't save settings: \(error.localizedDescription)"

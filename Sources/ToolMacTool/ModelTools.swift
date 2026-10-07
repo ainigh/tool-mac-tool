@@ -28,7 +28,8 @@ final class ModelTools {
         case .soundAlarm:
             let seconds = BuiltinTool.seconds(arg)
             Alarm.shared.sound(for: seconds)
-            return ("Done: the alarm is sounding for \(seconds) seconds (the user can stop it).", "Alarm, \(seconds) s")
+            return ("Done: the alarm is sounding for \(seconds == 1 ? "1 second" : "\(seconds) seconds") (the user can stop it).",
+                    "Alarm, \(seconds) s")
         case .openURL:
             guard let url = BuiltinTool.webURL(arg) else {
                 return ("That isn't a web address that can be opened (it must be http or https): \(arg)", "Open link (refused)")
@@ -37,7 +38,8 @@ final class ModelTools {
             return ("Done: \(url.absoluteString) is open in the user's browser.", "Opened \(url.host ?? url.absoluteString)")
         case .copyText:
             Clipboard.copy(arg)
-            return ("Done: the text is on the clipboard (\(arg.count) characters).", "Copied \(arg.count) characters")
+            let size = arg.count == 1 ? "1 character" : "\(arg.count) characters"
+            return ("Done: the text is on the clipboard (\(size)).", "Copied \(size)")
         case .closeWindow:
             // A moment later, so the reply can finish first.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.closeChat?() }
@@ -124,7 +126,7 @@ struct AlarmCard: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let left = alarm.endsAt.map { max(0, Int($0.timeIntervalSince(context.date).rounded())) } ?? 0
+            let left = alarm.endsAt.map { max(0, Int($0.timeIntervalSince(context.date).rounded(.up))) } ?? 0
             BigCard(size: size, symbol: "alarm.fill", accent: Color(red: 1, green: 0.55, blue: 0.5), name: "Alarm",
                     headline: "ALARM", line: alarm.sounding ? "\(left) s left" : "Finished: click OK", mood: .error,
                     close: { alarm.stop() }) {
@@ -143,11 +145,14 @@ struct AlarmCard: View {
 /// What this Mac is (model, chip, memory, cores, macOS) and when it started up, read once.
 enum MacFacts {
     private static var hardware: (model: String, chip: String)?
+    /// system_profiler is already running: asking again before it's done would start another.
+    private static var preparing = false
 
     /// Reads the marketing name and chip in the background (system_profiler is slow), so later
     /// messages have them.
     static func prepare() {
-        guard hardware == nil else { return }
+        guard hardware == nil, !preparing else { return }
+        preparing = true
         DispatchQueue.global(qos: .utility).async {
             let out = (try? Updater.run("/usr/sbin/system_profiler", ["SPHardwareDataType"])) ?? Data()
             var model = "", chip = ""
@@ -213,6 +218,8 @@ struct ModelToolsView: View {
     @ObservedObject var alarm: Alarm
     @State private var trial = ""
     @State private var seconds = 5.0
+    /// What the last Try it run did (as the chat would show it).
+    @State private var ran: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -225,7 +232,7 @@ struct ModelToolsView: View {
                     ForEach(prefs.settings.builtins) { t in
                         HStack {
                             Image(systemName: t.kind.symbol).frame(width: 20)
-                            Text(t.kind.title)
+                            Text(t.kind.title).lineLimit(1)
                             Spacer()
                             if !t.enabled { Text("off").foregroundStyle(.secondary) }
                         }
@@ -243,6 +250,7 @@ struct ModelToolsView: View {
         }
         .padding(18)
         .frame(minWidth: 700, minHeight: 440)
+        .onChange(of: focus.kind) { _ in ran = nil }
     }
 
     func editor(_ kind: BuiltinTool.Kind) -> some View {
@@ -266,6 +274,7 @@ struct ModelToolsView: View {
                 Button("Restore default") {
                     field(kind, \.description).wrappedValue = kind.defaultDescription
                 }
+                .disabled(field(kind, \.description).wrappedValue == kind.defaultDescription)
             }
             Divider()
             Text("Try it").font(.headline)
@@ -298,9 +307,12 @@ struct ModelToolsView: View {
                     default: arg = "text"
                     }
                     let tool = prefs.settings.builtins.first { $0.kind == kind } ?? BuiltinTool(kind: kind)
-                    _ = ModelTools.shared.run(tool, call: ToolCall(name: kind.rawValue, arguments: [arg: trial]))
+                    ran = ModelTools.shared.run(tool, call: ToolCall(name: kind.rawValue, arguments: [arg: trial])).shown
                 }
-                .disabled(trial.isEmpty)
+                .disabled(trial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let ran {
+                Text(ran).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
         }
     }

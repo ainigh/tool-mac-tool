@@ -114,6 +114,8 @@ final class Scheduler: ObservableObject {
         }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
+        // Started again: the old watcher goes, or every wake would be handled twice.
+        if let waking { NSWorkspace.shared.notificationCenter.removeObserver(waking) }
         waking = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil,
                                                                    queue: .main) { [weak self] _ in
             Task { @MainActor in self?.woke() }
@@ -346,6 +348,8 @@ final class Scheduler: ObservableObject {
         let job: ScheduledJob
         let context: Context
         let open: () -> Void
+        /// Where `open` goes, named on a card's button.
+        var place: ResultCard.Place = .scheduler
     }
 
     /// The job's action, with the job's arguments (their {{…}} filled in first).
@@ -380,10 +384,12 @@ final class Scheduler: ObservableObject {
         let job = caller.job
         switch step.kind {
         case .chime:
+            // In the time zone from Settings, like the chime's own card, so the two say the same hour.
+            let cal = Self.calendar(s)
             let at = caller.context.at ?? now
-            let hour = Calendar.current.dateInterval(of: .hour, for: at)?.start ?? at
+            let hour = cal.dateInterval(of: .hour, for: at)?.start ?? at
             timers?.chime(night: step.target == "night", at: hour, key: job.builtin ?? "job-\(job.id)", name: job.name)
-            return Outcome(ok: true, output: "Chimed for \(TimerText.hourLabel(Calendar.current.component(.hour, from: hour)))")
+            return Outcome(ok: true, output: "Chimed for \(TimerText.hourLabel(cal.component(.hour, from: hour)))")
         case .webhook:
             let target = step.target.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let url = URL(string: target), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
@@ -401,7 +407,8 @@ final class Scheduler: ObservableObject {
             if let crossing = caller.context.crossing {
                 ThresholdCard.show(title: job.name, metric: job.when.metric, count: crossing, limit: job.when.limit, text: shown)
             } else {
-                ResultCard.shared.show(title: job.name, symbol: step.kind.symbol, text: shown, ok: true, scheduler: self, open: caller.open)
+                ResultCard.shared.show(title: job.name, symbol: step.kind.symbol, text: shown, ok: true, scheduler: self, open: caller.open,
+                                       place: caller.place)
             }
             return Outcome(ok: true, output: shown)
         case .speak:
@@ -529,13 +536,13 @@ final class Scheduler: ObservableObject {
             let last = actionResults[id]?.output
             let given = arguments.map { ActionArgument(name: $0.name, value: fill($0.value, last: last, values: known, now: now)) }
             let outcome = await runSteps(id, arguments: given, context: known, last: last,
-                                         caller: Caller(job: job, context: Context(), open: open), now: now)
+                                         caller: Caller(job: job, context: Context(), open: open, place: .actions), now: now)
             runningActions.remove(id)
             actionResults[id] = outcome
             actionRanAt[id] = Date()
             if !outcome.ok || outcome.fresh {
                 ResultCard.shared.show(title: action.name, symbol: action.symbol, text: outcome.output, ok: outcome.ok,
-                                       scheduler: self, open: open)
+                                       scheduler: self, open: open, place: .actions)
             }
         }
     }
@@ -759,23 +766,37 @@ final class Scheduler: ObservableObject {
 final class ResultCard {
     static let shared = ResultCard()
 
+    /// The window a card's open button opens: a job's result goes to the Scheduler, an action run
+    /// by hand back to Actions (so the button shouldn't say Scheduler then).
+    enum Place {
+        case scheduler, actions
+
+        var title: String { self == .scheduler ? "Scheduler" : "Actions" }
+        var symbol: String { self == .scheduler ? "calendar.badge.clock" : "square.stack.3d.down.right" }
+        var help: String {
+            self == .scheduler ? "Open it in the Scheduler (the whole result and its history)" : "Open the action in Actions"
+        }
+    }
+
     /// A job's result: its open button opens the job in the Scheduler.
     func show(job: ScheduledJob, text: String, ok: Bool, scheduler: Scheduler) {
         show(title: job.name, symbol: scheduler.symbol(for: job), text: text, ok: ok, scheduler: scheduler,
              open: { SchedulerWindow.show(scheduler, select: job.id) })
     }
 
-    func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void) {
+    func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void,
+              place: Place = .scheduler) {
         let at = AppClock.now()
         if ModeCenter.shared.hold("result-\(UUID().uuidString)", { [weak self] in
-            self?.show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, at: at)
+            self?.show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, place: place, at: at)
         }) { return }
-        show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, at: at)
+        show(title: title, symbol: symbol, text: text, ok: ok, scheduler: scheduler, open: open, place: place, at: at)
     }
 
-    private func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void, at: Date) {
+    private func show(title: String, symbol: String, text: String, ok: Bool, scheduler: Scheduler, open: @escaping () -> Void,
+                      place: Place, at: Date) {
         StackedCards.shared.show(.topRight, level: .floating) { close in
-            ResultCardView(title: title, symbol: symbol, text: text, ok: ok, at: at,
+            ResultCardView(title: title, symbol: symbol, text: text, ok: ok, at: at, place: place,
                            say: { scheduler.speaker.say(text) },
                            open: {
                                close()
@@ -794,6 +815,7 @@ struct ResultCardView: View {
     let ok: Bool
     /// When it came (on the app's clock).
     var at = Date()
+    var place: ResultCard.Place = .scheduler
     let say: () -> Void
     let open: () -> Void
     let close: () -> Void
@@ -811,7 +833,8 @@ struct ResultCardView: View {
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Text(at.formatted(date: .omitted, time: .shortened))
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                    .fixedSize()
                     .foregroundStyle(.white.opacity(0.5))
                 GlassIcon(symbol: "xmark", help: "Close", action: close)
             }
@@ -823,13 +846,15 @@ struct ResultCardView: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
-                ActionChip(title: copied ? "Copied" : "Copy", symbol: "doc.on.doc", help: "Copy it") {
+                ActionChip(title: copied ? "Copied" : "Copy", symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy it") {
                     Clipboard.copy(text)
                     copied = true
+                    // Back to "Copy" after a moment, as the other copy buttons do, so a second copy shows too.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
                 }
                 ActionChip(title: "Say it", symbol: "speaker.wave.2", help: "Read it out loud", action: say)
                 Spacer()
-                ActionChip(title: "Scheduler", symbol: "calendar.badge.clock", help: "Open it in the Scheduler (the whole result and its history)", action: open)
+                ActionChip(title: place.title, symbol: place.symbol, help: place.help, action: open)
             }
         }
         .foregroundStyle(.white)

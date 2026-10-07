@@ -85,6 +85,8 @@ struct BatteryPanel: View {
         let steps = Battery.steps(b, now: now)
         let ink = Self.ink(level, set: set)
         let full = Battery.lastFull(b, entries: activity.log.entries)
+        // What VoiceOver says for the battery button (it's only an icon).
+        let spoken: String = set ? "Battery at \(Int(level.rounded(.up)))%" : "Battery, not set"
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Button { board.tapBattery() } label: {
@@ -96,6 +98,7 @@ struct BatteryPanel: View {
                 }
                 .buttonStyle(PressStyle())
                 .disabled(focus.isOn)
+                .accessibilityLabel(spoken)
                 .help(focus.isOn ? "Focus is on: the battery is its clock (focus goes on until it's empty), so it can't be set now."
                       : "Click to set it to 100, 80, 60, 40, 20 or 0% (one step each click); right-click to pick. It drains 20% an hour and stops at 0; the Timer log charts it.")
                 Text(set ? "\(Int(level.rounded(.up)))%" : "Not set")

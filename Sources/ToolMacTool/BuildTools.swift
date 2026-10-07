@@ -261,6 +261,7 @@ struct BuildToolsView: View {
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
                 }
+                .help("Copy every check and how it went, to paste into a message")
                 Button("Build log") { NSWorkspace.shared.show(Updater.logURL) }
                     .help(Updater.logURL.path)
             }
@@ -281,6 +282,9 @@ struct BuildToolsView: View {
                 switch state {
                 case .ok: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 case .missing: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                // A step that's waiting on you (an installer, Terminal) isn't spinning on its own.
+                case .working(let what) where what.hasPrefix("Apple's installer") || what.contains("Terminal"):
+                    Image(systemName: "hourglass").foregroundStyle(.orange)
                 case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 case .checking, .working: ProgressView().controlSize(.small)
                 case .unknown: Image(systemName: "circle").foregroundStyle(.secondary)
@@ -303,6 +307,7 @@ struct BuildToolsView: View {
             }
             if case .failed(let why) = state {
                 Button("Copy") { Clipboard.copy("\(item.title): \(why)") }
+                    .help("Copy what went wrong")
             }
         }
         .padding(10)

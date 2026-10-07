@@ -39,6 +39,8 @@ enum Windows {
     static func bringForward(_ w: NSWindow) {
         // A menu bar app isn't frontmost by itself: come forward, or the window opens behind others.
         NSApp.activate(ignoringOtherApps: true)
+        // Minimized to the Dock: back out of it, rather than staying there while "brought forward".
+        if w.isMiniaturized { w.deminiaturize(nil) }
         w.makeKeyAndOrderFront(nil)
     }
 }

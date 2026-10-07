@@ -127,6 +127,7 @@ struct BoardCard: View {
         }
         .buttonStyle(.plain)
         .help("\(board.name)'s icon: click to pick another")
+        .accessibilityLabel("\(board.name)'s icon")
         .popover(isPresented: $picking, arrowEdge: .trailing) {
             IconPicker(current: board.symbol, board: board, forBoard: true) { picked in
                 store.setIcon(picked, for: board)

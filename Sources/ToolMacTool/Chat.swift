@@ -257,7 +257,9 @@ final class ChatModel: ObservableObject {
                     problem = "Ollama has no models yet: run ollama pull llama3.2 in Terminal"
                 } else {
                     if !names.contains(model) { model = names[0] }
-                    if problem?.hasPrefix("Ollama") == true { problem = nil }
+                    // Ollama's back with models: a problem about it (or about having no model
+                    // picked, which this just fixed) no longer holds.
+                    if problem?.hasPrefix("Ollama") == true || problem?.hasPrefix("Pick a model") == true { problem = nil }
                 }
             } catch {
                 problem = ollama.notRunning
@@ -312,7 +314,9 @@ final class ChatModel: ObservableObject {
                 + "and never pretend you ran one.")
         }
         if memoryOn {
-            parts.append(MemoryStore.prompt(memory: memory.read(), instruction: s.memoryPrompt))
+            // Cleared on screen while a new one's written: the default, as is saved.
+            let blank = s.memoryPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            parts.append(MemoryStore.prompt(memory: memory.read(), instruction: blank ? MemoryStore.defaultInstruction : s.memoryPrompt))
         }
         parts.append(NowContext.describe(now, zone: s.zone, location: s.location, clock24: s.clock24))
         if s.shareMacInfo { parts.append(MacFacts.describe(now: now, zone: s.zone)) }
@@ -475,7 +479,8 @@ final class ChatModel: ObservableObject {
         alert.informativeText = input.isEmpty ? "The model wants to run it, with no input."
             : "The model wants to run it with:\n\n\(input.prefix(600))"
         alert.addButton(withTitle: "Run")
-        alert.addButton(withTitle: "Don't run")
+        // Esc says no, like Cancel would (NSAlert only gives Esc to a button titled Cancel).
+        alert.addButton(withTitle: "Don't run").keyEquivalent = "\u{1b}"
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertFirstButtonReturn
     }

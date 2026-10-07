@@ -62,6 +62,25 @@ struct SchedulerView: View {
     /// Which schedules the list shows.
     enum Filter: String, CaseIterable {
         case all = "All", on = "On", off = "Off", failed = "Failing"
+
+        var help: String {
+            switch self {
+            case .all: return "Every schedule"
+            case .on: return "The schedules that are on"
+            case .off: return "The schedules that are off"
+            case .failed: return "The schedules whose last run failed"
+            }
+        }
+
+        /// What the list says when this filter leaves nothing (and nothing is searched for).
+        var nothing: String {
+            switch self {
+            case .all: return "None match"
+            case .on: return "None are on"
+            case .off: return "None are off"
+            case .failed: return "None failing: every last run went fine"
+            }
+        }
     }
 
     /// The schedules the search and the filter leave.
@@ -175,7 +194,7 @@ struct SchedulerView: View {
                     let n = count(f)
                     PillButton(title: "\(f.rawValue) \(n)", prominent: filter == f) { filter = f }
                         .opacity(f == .failed && n == 0 && filter != f ? 0.5 : 1)
-                        .help(f == .failed ? "The schedules whose last run failed" : "Show \(f.rawValue.lowercased()) schedules")
+                        .help(f.help)
                 }
                 Spacer(minLength: 0)
             }
@@ -189,7 +208,9 @@ struct SchedulerView: View {
                             .contextMenu { menu(job) }
                     }
                     if shown.isEmpty {
-                        Text(scheduler.book.jobs.isEmpty ? "No schedules yet" : "None match")
+                        Text(scheduler.book.jobs.isEmpty ? "No schedules yet"
+                             : search.trimmingCharacters(in: .whitespaces).isEmpty ? filter.nothing
+                             : "No schedule matches \u{201C}\(search)\u{201D}")
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(0.45))
                             .padding(.top, 20)
@@ -271,7 +292,7 @@ struct JobRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
-            Image(systemName: action?.symbol ?? "questionmark")
+            Image(systemName: action?.symbol ?? "questionmark.circle")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
@@ -301,6 +322,8 @@ struct JobRow: View {
                         Image(systemName: "clock")
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text("Next in " + TimerText.left(next.timeIntervalSince(AppClock.time(at: context.date))))
+                                .monospacedDigit()
+                                .lineLimit(1)
                         }
                     } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
                         Image(systemName: job.when.event.symbol)
@@ -318,7 +341,8 @@ struct JobRow: View {
                 .foregroundStyle(.white.opacity(0.45))
             }
             Spacer(minLength: 4)
-            Toggle("", isOn: Binding(get: { job.enabled }, set: toggle))
+            // Its name as the label (hidden), so VoiceOver says which schedule the switch is for.
+            Toggle(job.name.isEmpty ? "Untitled" : job.name, isOn: Binding(get: { job.enabled }, set: toggle))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
                 .labelsHidden()
@@ -473,6 +497,7 @@ struct JobEditor: View {
             HStack(spacing: 10) {
                 if job.isBuiltin {
                     PillButton(title: action?.name ?? "Chime", prominent: true) {}
+                        .help("Built in: it always runs this (change its hours, or turn it off)")
                 } else {
                     MenuPill(title: action?.name ?? (job.actionID.isEmpty ? "Pick an action" : "Its action is gone: pick another"),
                              help: "The action it runs (make and change them in Actions)",
@@ -563,6 +588,8 @@ struct JobEditor: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let now = AppClock.time(at: context.date)
                         Text("Next: in " + TimerText.left(next.timeIntervalSince(now)) + " · " + AlarmTime.short(next, now: now))
+                            .monospacedDigit()
+                            .lineLimit(1)
                     }
                 } else if job.enabled, job.when.kind == .event, !job.when.event.isTimed {
                     Text("Waiting: " + job.when.describe(clock24: settings.clock24))
@@ -636,6 +663,8 @@ struct RunRow: View {
                 Image(systemName: run.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(run.ok ? Color.green.opacity(0.8) : Color.orange)
                 Text(run.at, format: .dateTime.weekday(.abbreviated).day().month(.abbreviated).hour().minute())
+                    .monospacedDigit()
+                    .lineLimit(1)
                 Spacer()
                 CopyButton(text: run.output)
             }
@@ -885,6 +914,7 @@ private struct DayChip: View {
                 .foregroundStyle(on || all ? Color.black.opacity(0.85) : Color.white.opacity(0.7))
                 .frame(width: width, height: 24)
                 .background(Capsule().fill(on ? Color.white.opacity(0.88) : all ? Color.white.opacity(0.45) : Color.white.opacity(0.1)))
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }

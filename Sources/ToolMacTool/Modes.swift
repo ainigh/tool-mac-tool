@@ -70,7 +70,8 @@ final class ModeCenter: ObservableObject {
         }
         var message = new.meaning
         if mode == .quiet && new != .quiet && heldCount > 0 {
-            message += "\n\nThe \(heldCount == 1 ? "pop-up" : "\(heldCount) pop-ups") held back in quiet mode pop up now."
+            message += heldCount == 1 ? "\n\nThe pop-up held back in quiet mode pops up now."
+                : "\n\nThe \(heldCount) pop-ups held back in quiet mode pop up now."
         }
         if mode == .test && new != .test {
             message += "\n\nLeaving test mode: the schedules are planned again from the real time, and timers and log entries made on the fast clock are cleared."
@@ -120,6 +121,9 @@ enum Confirm {
         alert.alertStyle = .informational
         alert.addButton(withTitle: ok)
         alert.addButton(withTitle: cancel)
+        // AppKit gives Esc only to a button titled "Cancel": the second button is the way out,
+        // whatever it's called ("Close", "No").
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
         alert.layout()
         alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
         return alert.runModal() == .alertFirstButtonReturn
@@ -164,6 +168,7 @@ struct ModeSwitch: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(m.title) mode")
                 // Strict focus: nothing may be sped up or held back.
                 .disabled(focus.isStrict && m != .normal)
                 .help(focus.isStrict && m != .normal ? "Strict focus is on: test and quiet mode are locked until it's over"

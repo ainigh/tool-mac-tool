@@ -148,13 +148,9 @@ struct BoardView: View {
             Text(board.name)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-            Text(board.isGrid ? (shown == 1 ? "1 board" : "\(shown) boards") + " · \(store.count(board)) in use"
-                              : (shown == 1 ? "1 box" : "\(shown) boxes") + " · \(store.count(board)) with text")
-                .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.5))
-            if let problem = model.problem ?? (board.isGrid ? store.catalogProblem : nil) {
-                Text(problem).font(.caption).foregroundStyle(Color(red: 1, green: 0.45, blue: 0.5)).lineLimit(1).help(problem)
-            }
+                .lineLimit(1)
+                .truncationMode(.tail)
+            BoardHeaderCount(store: store, board: board, shown: shown, problem: model.problem)
             WindowDragArea()
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
@@ -182,6 +178,7 @@ struct BoardView: View {
         }
         .buttonStyle(PressStyle())
         .help("\(board.name)'s icon: click to pick another")
+        .accessibilityLabel("\(board.name)'s icon")
         .popover(isPresented: $picking, arrowEdge: .bottom) {
             IconPicker(current: board.symbol, board: board, forBoard: true) { picked in
                 store.setIcon(picked, for: board)
@@ -241,15 +238,16 @@ struct BoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            if board.isGrid {
-                Text("Every board, as a card. Type its name (first line) and what it's for (second line); click its icon to pick another. The notes listed under them are the board's own (a click opens one). The board's button at the bottom opens it. Top middle: fewer, show the boards with notes, 2 rows, colors, more (a blank board to name). Double-click a card to change its color; drag it to move it, its corner to resize it. Boards with notes show at the top of the panel, the one opened last first.")
-                    .lineLimit(1)
-            } else {
-                notesHint
-            }
-            Spacer()
-            if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid") }
-            KeyHint(key: "⌘W", does: "close")
+            // One line, cut short to fit: the whole of it shows on hover.
+            let hint = board.isGrid ? Self.gridHint : Self.notesHint
+            Text(hint)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(hint)
+            Spacer(minLength: 8)
+            // The keys keep their words whole; the hint gives way.
+            if model.expanded != nil { KeyHint(key: "esc", does: "back to the grid").fixedSize() }
+            KeyHint(key: "⌘W", does: "close").fixedSize()
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .foregroundStyle(.white.opacity(0.5))
@@ -257,10 +255,9 @@ struct BoardView: View {
         .padding(.vertical, 10)
     }
 
-    private var notesHint: some View {
-        Text("Top middle: fewer, show the notes with text, 2 rows, colors, more. Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, the menu bar, dock it in the panel, or pin it to float on your screen. Above its bottom: its board, the notes it links to, and + to link another. Paste a web address to see its page (a YouTube video plays here).")
-            .lineLimit(1)
-    }
+    private static let gridHint = "Every board, as a card. Type its name (first line) and what it's for (second line); click its icon to pick another. The notes listed under them are the board's own (a click opens one). The board's button at the bottom opens it. Top middle: fewer, show the boards with notes, 2 rows, colors, more (a blank board to name). Double-click a card to change its color; drag it to move it, its corner to resize it. Boards with notes show at the top of the panel, the one opened last first."
+
+    private static let notesHint = "Top middle: fewer, show the notes with text, 2 rows, colors, more. Double-click a box to change its color. Drag it anywhere to move it (⌥-drag selects text), its bottom right corner to resize it. Down its left: its icon, and a timer or a due date (one per box). Top left: Daily (or only Mornings, Afternoons or Evenings), Weekly or Monthly (a reminder every hour until it's done; each day, week or month begins at 8 AM the day before). Bottom left: To do, Pending, Completed; bottom right: its tags. Down its top right: copy, open it, the menu bar, dock it in the panel, or pin it to float on your screen. Above its bottom: its board, the notes it links to, and + to link another. Paste a web address to see its page (a YouTube video plays here)."
 
     /// The shown boxes in their order, each in its place (a big one spanning blocks). Drag a box
     /// anywhere (its text too) to move it to another's place; drag its corner to resize it.
@@ -366,6 +363,34 @@ struct BoardView: View {
     }
 }
 
+/// "12 boxes · 4 with text" beside a board's name, and a problem saving if there is one. It
+/// watches the store itself: the notes are summed up a moment after each change to the board, so
+/// a view that only watched the board would show the count from before the last keystroke.
+private struct BoardHeaderCount: View {
+    @ObservedObject var store: BoardStore
+    let board: BoardStore.Kind
+    let shown: Int
+    let problem: String?
+
+    var body: some View {
+        let count = store.count(board)
+        Text(board.isGrid ? (shown == 1 ? "1 board" : "\(shown) boards") + " · \(count) in use"
+                          : (shown == 1 ? "1 box" : "\(shown) boxes") + " · \(count) with text")
+            .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.5))
+            .lineLimit(1)
+            .fixedSize()
+        if let problem = problem ?? (board.isGrid ? store.catalogProblem : nil) {
+            Text(problem)
+                .font(.caption)
+                .foregroundStyle(Color(red: 1, green: 0.45, blue: 0.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(problem)
+        }
+    }
+}
+
 /// What a box on the board's grid does when it's dragged anywhere (to another's place) or by its
 /// corner (to span more or fewer blocks).
 struct BoxArrange {
@@ -459,6 +484,9 @@ struct BoardBox: View {
     /// On a board's grid: dragged anywhere to move it, by its corner to resize it.
     var arrange: BoxArrange?
     @State private var copied = false
+    /// Puts the copy button's tick back; a second copy starts it over, so the tick stays its
+    /// full time after the last click.
+    @State private var copiedReset: Task<Void, Never>?
     /// A sound file is being dragged over it.
     @State private var dropping = false
     @ObservedObject private var focus = FocusCenter.shared
@@ -521,11 +549,13 @@ struct BoardBox: View {
             }
             // Down its right, from the top: copy, open to fill the board, the menu bar, dock, pin.
             VStack(spacing: 2) {
-                BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: "Copy the text") {
+                BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: copied ? "Copied" : "Copy the text") {
                     Clipboard.copy(box.text)
                     copied = true
-                    Task { @MainActor in
+                    copiedReset?.cancel()
+                    copiedReset = Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 1_200_000_000)
+                        guard !Task.isCancelled else { return }
                         copied = false
                     }
                 }
@@ -673,6 +703,7 @@ struct NoteLinkMenu: View {
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
         .help("Link a note from any board: it shows here, beside the notes it links to, a click away (pick it again to unlink)")
+        .accessibilityLabel("Link a note")
         .popover(isPresented: $open, arrowEdge: .bottom) {
             NoteLinkPicker(store: store, board: board, index: index, links: links)
         }
@@ -689,7 +720,8 @@ private struct NoteLinkPicker: View {
 
     var body: some View {
         let linked = Set(store.model(board).board.boxes.indices.contains(index) ? store.model(board).board.boxes[index].links : links)
-        let words = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let typed = search.trimmingCharacters(in: .whitespaces)
+        let words = typed.lowercased()
         let notes = store.linkable(from: board, index).filter { note in
             words.isEmpty || (note.title ?? "").lowercased().contains(words) || note.board.name.lowercased().contains(words)
         }
@@ -706,7 +738,7 @@ private struct NoteLinkPicker: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if notes.isEmpty {
-                        Text(words.isEmpty ? "No notes with a title yet" : "No note matches \u{201C}\(search)\u{201D}")
+                        Text(words.isEmpty ? "No notes with a title yet" : "No note matches \u{201C}\(typed)\u{201D}")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 8)
@@ -951,6 +983,7 @@ private struct NoteIconButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help("The note's icon: click to pick another")
+        .accessibilityLabel("The note's icon")
         .popover(isPresented: $open, arrowEdge: .trailing) {
             IconPicker(current: symbol, board: board) { picked in
                 store.setIcon(picked, board, index)
@@ -1069,6 +1102,8 @@ private struct TagButton: View {
         .onHover { hover = $0 }
         .help(on ? "\(tag.title): on (it's on the \(tag.title) board). Click to take it off."
                  : "\(tag.title): click to tag it (it shows on the \(tag.title) board)")
+        .accessibilityLabel(tag.title)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
     }
 }
 
@@ -1097,6 +1132,8 @@ private struct AlarmButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(Self.help(spec, on: on))
+        .accessibilityLabel(spec.name)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
         .popover(isPresented: $open, arrowEdge: .trailing) {
             if spec.kind == .deadline {
                 DuePicker(store: store, board: board, index: index, alarm: alarm) { open = false }
@@ -1114,7 +1151,7 @@ private struct AlarmButton: View {
         case .deadline: what = "counts down to a day and time you pick, days, months or years ahead"
         default: what = ""
         }
-        return "\(spec.name): \(what)." + (on ? " Running on this box: click to change or stop it." : " Click to set it (one timer per box).")
+        return (what.isEmpty ? "\(spec.name)." : "\(spec.name): \(what).") + (on ? " Running on this box: click to change or stop it." : " Click to set it (one timer per box).")
     }
 }
 
@@ -1286,6 +1323,7 @@ private struct BoxCountdown: View {
                 }
                 .buttonStyle(.plain)
                 .help(ringing ? "OK: stop the alarm" : "Stop \(spec.name)")
+                .accessibilityLabel(ringing ? "OK" : "Stop \(spec.name)")
             }
             .foregroundStyle(.white)
             .padding(.leading, 8)
@@ -1337,6 +1375,8 @@ struct BoxButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+        // Its name for VoiceOver: the tooltip up to its first colon or full stop ("Pin", "Dock").
+        .accessibilityLabel(String(help.prefix { $0 != ":" && $0 != "." }))
     }
 }
 

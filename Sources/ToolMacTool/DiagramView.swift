@@ -116,7 +116,8 @@ final class DiagramModel: ObservableObject {
             do {
                 let reply = try await ollama.reply(model: model, messages: turns, contextTokens: s.contextTokens,
                                                    temperature: 0.2, thinking: s.thinking)
-                guard !Task.isCancelled else { return done() }
+                // Stopped: stop() has tidied up already, and a newer request may be running now.
+                guard !Task.isCancelled else { return }
                 guard let mermaid = Diagram.extract(reply) else {
                     problem = "The reply had no diagram in it: \(reply.prefix(300))"
                     return done()
@@ -124,7 +125,8 @@ final class DiagramModel: ObservableObject {
                 pendingTurns = turns + [ChatTurn(role: "assistant", content: reply)]
                 draw(mermaid, kind: .reply)
             } catch {
-                if !Task.isCancelled && (error as? URLError)?.code != .cancelled {
+                guard !Task.isCancelled else { return }
+                if (error as? URLError)?.code != .cancelled {
                     problem = ollama.explain(error)
                 }
                 done()
@@ -293,6 +295,7 @@ struct DiagramView: View {
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Ink.prompt(ink).opacity(0.7))
                             .lineLimit(2)
+                            .truncationMode(.tail)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 7)
                             .background(Capsule().fill(.black.opacity(0.25)))
@@ -304,6 +307,7 @@ struct DiagramView: View {
                             Text(diagram.status)
                                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Ink.reply(ink))
+                                .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .allowsHitTesting(false)
@@ -374,7 +378,7 @@ struct DiagramView: View {
                 RoundButton(symbol: "stop.fill", help: "Stop (Esc)", enabled: true) { diagram.stop() }
             } else {
                 RoundButton(symbol: "arrow.up", help: "Draw (Return)",
-                            enabled: !diagram.input.trimmingCharacters(in: .whitespaces).isEmpty) { diagram.send() }
+                            enabled: !diagram.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { diagram.send() }
             }
         }
     }
@@ -404,6 +408,7 @@ struct DiagramView: View {
                 }
                 CopyButton(text: diagram.code)
                     .disabled(diagram.code.isEmpty)
+                    .opacity(diagram.code.isEmpty ? 0.4 : 1)
                 ActionChip(title: copiedSVG ? "Copied" : "Copy SVG", symbol: "photo", help: "Copy the drawing as SVG") {
                     canvas.svg { svg in
                         guard !svg.isEmpty else { return }
@@ -413,6 +418,7 @@ struct DiagramView: View {
                     }
                 }
                 .disabled(diagram.code.isEmpty)
+                .opacity(diagram.code.isEmpty ? 0.4 : 1)
             }
             .opacity(hovering ? 1 : 0)
             .allowsHitTesting(hovering)
@@ -443,7 +449,11 @@ struct DiagramView: View {
                     ActionChip(title: "Load failed one", symbol: "exclamationmark.triangle",
                                help: "Put the Mermaid that didn't draw here, to fix it") { editing = failed }
                 }
-                PillButton(title: "Draw this", prominent: editing != diagram.code) { diagram.apply(editing) }
+                let blank = editing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                PillButton(title: "Draw this", prominent: editing != diagram.code && !blank) { diagram.apply(editing) }
+                    .disabled(blank || diagram.busy)
+                    .opacity(blank || diagram.busy ? 0.4 : 1)
+                    .help("Draw the Mermaid as it is here")
             }
             TextEditor(text: $editing)
                 .font(.system(size: 12.5, design: .monospaced))
@@ -475,6 +485,7 @@ struct DiagramMic: View {
         }
         .buttonStyle(.plain)
         .padding(.bottom, 2)
+        .accessibilityLabel(listener.on ? "Stop listening" : "Say what to draw")
         .help(listener.problem ?? (listener.on ? "Listening: pause to send, click to stop" : "Say what to draw (it sends when you pause)"))
         .onChange(of: listener.text) { said in
             if listener.on && !listener.held { diagram.input = said }
@@ -506,6 +517,7 @@ struct DiagramProblem: View {
             }
             .buttonStyle(.plain)
             .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .font(.system(size: 12, weight: .medium, design: .rounded))
         .padding(.horizontal, 11)

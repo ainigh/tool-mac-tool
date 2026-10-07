@@ -123,6 +123,9 @@ final class RedactionStore: ObservableObject {
     /// The critical words still in a redacted text.
     func leaks(in text: String) -> [String] { Redaction.leaks(in: text, map: map) }
 
+    /// Clears an old problem once something else has been done, so it doesn't hide what came of it.
+    func clearProblem() { problem = nil }
+
     func markReviewed(_ ids: Set<UUID>? = nil) {
         for i in map.entries.indices where ids?.contains(map.entries[i].id) ?? true { map.entries[i].isNew = false }
     }
@@ -171,6 +174,7 @@ struct RedactView: View {
                 Button("Paste") {
                     input = NSPasteboard.general.string(forType: .string) ?? input
                     output = ""
+                    summary = nil
                 }
                 .help("Put what's on the clipboard in the box")
                 Button {
@@ -216,7 +220,7 @@ struct RedactView: View {
                 } else if let summary {
                     Text(summary).lineLimit(2)
                 } else {
-                    Text("\(store.map.pairs.count) words in the map (\(store.map.critical.count) critical). Names are found by the model on this Mac (Ollama); redacting is a plain swap through the map, and the result is checked for the critical ones.")
+                    Text("\(store.map.pairs.count) word\(store.map.pairs.count == 1 ? "" : "s") in the map (\(store.map.critical.count) critical). Names are found by the model on this Mac (Ollama); redacting is a plain swap through the map, and the result is checked for the critical ones.")
                         .foregroundStyle(.secondary)
                 }
                 if !added.isEmpty {
@@ -242,7 +246,8 @@ struct RedactView: View {
             HStack {
                 Text(title).font(.headline)
                 Spacer()
-                Text("\(text.wrappedValue.count) characters").font(.caption).foregroundStyle(.secondary)
+                let count = text.wrappedValue.count
+                Text("\(count) character\(count == 1 ? "" : "s")").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             TextEditor(text: text)
                 .font(.system(size: 13))
@@ -268,6 +273,7 @@ struct RedactView: View {
     }
 
     private func redact(keepSummary: Bool = false) {
+        if !keepSummary { store.clearProblem() }
         let r = store.redact(input)
         output = frontMatter ? Redaction.withFrontMatter(r) : r.text
         // The critical words are looked for again in what came out, anywhere in it.
@@ -282,6 +288,7 @@ struct RedactView: View {
     }
 
     private func restore() {
+        store.clearProblem()
         let r = store.restore(input)
         output = r.text
         leaks = []
@@ -385,7 +392,7 @@ struct RedactionMapView: View {
                     .frame(maxWidth: 280)
                     .onSubmit(addWord)
                 Toggle("Critical", isOn: $newCritical).toggleStyle(.checkbox)
-                Button("Add", action: addWord).disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add", action: addWord).disabled(newWord.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
                 Button("Move to Critical") { move(true) }
                     .disabled(everydaySelection.isEmpty)
@@ -398,7 +405,7 @@ struct RedactionMapView: View {
                     .help("Take the New mark off the selected words (or all of them)")
                 Button("Delete") { delete(selection) }.disabled(selection.isEmpty)
             }
-            Text("\(store.map.entries.count) words, \(store.map.critical.count) critical · both buckets are one map when redacting · kept in \(store.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) · new ones get Person<n> until you change them")
+            Text("\(store.map.entries.count) word\(store.map.entries.count == 1 ? "" : "s"), \(store.map.critical.count) critical · both buckets are one map when redacting · kept in \(store.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) · new ones get Person<n> until you change them")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let problem = store.problem {
@@ -447,6 +454,7 @@ struct RedactionMapView: View {
                 }
                 .buttonStyle(.plain)
                 .help(e.critical ? "Critical: click to move it to everything else" : "Click to move it to Critical")
+                .accessibilityLabel(e.critical ? "Move out of Critical" : "Move to Critical")
             }
             .width(18)
             TableColumn("") { e in
@@ -550,7 +558,7 @@ private struct LearnSheet: View {
                     Task {
                         guard let found = await store.find(in: text) else { return }
                         result = found.names.isEmpty ? "No names found."
-                            : "Found \(found.names.count); \(found.added.isEmpty ? "none new" : "new: \(found.added.joined(separator: ", "))")."
+                            : "Found \(found.names.count) name\(found.names.count == 1 ? "" : "s"); \(found.added.isEmpty ? "none new" : "new: \(found.added.joined(separator: ", "))")."
                         text = ""
                     }
                 }

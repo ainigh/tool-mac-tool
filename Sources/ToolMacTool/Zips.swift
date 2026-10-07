@@ -253,7 +253,8 @@ struct ZipRow: View {
                 HStack(alignment: .top, spacing: 8) {
                     ZipStatusIcon(status: item.status).frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(item.plan.zip.lastPathComponent).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(item.plan.zip.lastPathComponent).font(.system(size: 12, weight: .medium))
+                            .lineLimit(1).truncationMode(.middle)
                         Text(ZipModel.line(for: item.status, plan: item.plan, armed: armed))
                             .font(.caption)
                             .foregroundStyle(armed ? Color.accentColor : Color.secondary)
@@ -319,7 +320,8 @@ struct ZipWindow: View {
             if items.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "doc.zipper").font(.system(size: 30)).foregroundStyle(.tertiary)
-                    Text("No zips in Downloads from then").foregroundStyle(.secondary)
+                    Text("No zips downloaded in the last \(Self.spans.first(where: { $0.seconds == zips.span })?.name.lowercased() ?? "while")")
+                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -352,9 +354,10 @@ struct ZipCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ZipStatusIcon(status: item.status)
-                Text(plan.zip.lastPathComponent).font(.headline).lineLimit(1)
+                Text(plan.zip.lastPathComponent).font(.headline).lineLimit(1).truncationMode(.middle)
+                    .help(plan.zip.lastPathComponent)
                 Spacer()
-                Text(ZipModel.ago(plan.added)).font(.caption).foregroundStyle(.secondary)
+                Text(ZipModel.ago(plan.added)).font(.caption).foregroundStyle(.secondary).fixedSize()
             }
             ZipFacts(plan: plan)
             ZipOutcome(status: item.status)
@@ -397,7 +400,8 @@ struct ZipOutcome: View {
         switch status {
         case .done(let r):
             VStack(alignment: .leading, spacing: 2) {
-                Text("Done: \(r.added.count) added, \(r.replaced.count) replaced (the old ones are in the Trash)")
+                Text("Done: \(r.added.count) added, \(r.replaced.count) replaced"
+                     + (r.replaced.isEmpty ? "" : r.replaced.count == 1 ? " (the old one is in the Trash)" : " (the old ones are in the Trash)"))
                     .font(.callout)
                 if !r.replaced.isEmpty {
                     Text("Replaced: " + Self.few(r.replaced)).font(.caption).foregroundStyle(.secondary)
