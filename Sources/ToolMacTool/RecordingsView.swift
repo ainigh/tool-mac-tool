@@ -473,7 +473,7 @@ final class RecordingsModel: ObservableObject {
     }
 
     /// The sound of a video as an .m4a in the temporary folder.
-    private static func soundTrack(of url: URL) async throws -> URL {
+    static func soundTrack(of url: URL) async throws -> URL {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard !tracks.isEmpty else { throw Problem("This recording has no sound to transcribe") }

@@ -5,7 +5,9 @@ import ToolCore
 // The Scheduler's window: a glass panel as big as the diagram's, its jobs down the left (the
 // built-in chimes first) and the one you pick on the right: the action it runs (made in Actions)
 // and the values it gives that action's arguments, when it runs (or what it waits for), what
-// happens with the result, and what happened each time it ran.
+// happens with the result, and what happened each time it ran. The list can be searched and
+// narrowed to the ones on, off or failing; a schedule's next run can be skipped, and its next few
+// times are listed under when it runs. ⌘R runs the one picked, ⌘D copies it.
 
 @MainActor
 enum SchedulerWindow {
@@ -28,7 +30,13 @@ enum SchedulerWindow {
             let host = FirstClickHostingView(rootView: SchedulerView(scheduler: scheduler, focus: focus, close: close))
             host.sizingOptions = []
             panel.contentView = host
-            panel.commands = ["w": close, "n": { focus.selected = scheduler.add() }]
+            panel.commands = [
+                "w": close,
+                "n": { focus.selected = scheduler.add() },
+                // The schedule picked: run it now (its times stay as they are), or a copy of it.
+                "r": { if let id = focus.selected { scheduler.run(id, byHand: true) } },
+                "d": { if let id = focus.selected, let copy = scheduler.duplicate(id) { focus.selected = copy } },
+            ]
             panel.onEscape = {
                 close()
                 return true
@@ -47,7 +55,40 @@ struct SchedulerView: View {
     let close: () -> Void
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
+    @State private var search = ""
+    @State private var filter = Filter.all
     @Environment(\.controlActiveState) private var active
+
+    /// Which schedules the list shows.
+    enum Filter: String, CaseIterable {
+        case all = "All", on = "On", off = "Off", failed = "Failing"
+    }
+
+    /// The schedules the search and the filter leave.
+    var shown: [ScheduledJob] {
+        let words = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return scheduler.book.jobs.filter { job in
+            switch filter {
+            case .all: break
+            case .on: guard job.enabled else { return false }
+            case .off: guard !job.enabled else { return false }
+            case .failed: guard job.lastOK == false else { return false }
+            }
+            guard !words.isEmpty else { return true }
+            let action = scheduler.action(job.actionID)
+            return job.name.lowercased().contains(words) || (action?.name.lowercased().contains(words) ?? false)
+                || job.when.describe(clock24: scheduler.prefs.settings.clock24).lowercased().contains(words)
+        }
+    }
+
+    func count(_ f: Filter) -> Int {
+        switch f {
+        case .all: return scheduler.book.jobs.count
+        case .on: return scheduler.book.jobs.filter(\.enabled).count
+        case .off: return scheduler.book.jobs.filter { !$0.enabled }.count
+        case .failed: return scheduler.book.jobs.filter { $0.lastOK == false }.count
+        }
+    }
 
     var mood: GlassMood { scheduler.problem != nil ? .error : scheduler.running.isEmpty ? .idle : .thinking }
     var still: Bool { mood == .idle && active == .inactive }
@@ -73,6 +114,8 @@ struct SchedulerView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 28)
                     .help("Drag to move")
+                MenuPill(title: "All schedules", help: "Turn every schedule on or off at once (it asks first)",
+                         items: [("Turn every schedule off…", false, { all(false) }), ("Turn every schedule on…", false, { all(true) })])
                 PillButton(title: "Actions") { ActionsWindow.show(scheduler) }
                     .help("What schedules run: make and change actions there")
                 PillButton(title: "New schedule", prominent: true) { focus.selected = scheduler.add() }
@@ -107,6 +150,8 @@ struct SchedulerView: View {
                     .lineLimit(2)
                 Spacer()
                 KeyHint(key: "⌘N", does: "new")
+                KeyHint(key: "⌘R", does: "run")
+                KeyHint(key: "⌘D", does: "copy")
                 KeyHint(key: "esc", does: "close")
             }
             .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -123,22 +168,75 @@ struct SchedulerView: View {
     }
 
     var jobList: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(scheduler.book.jobs) { job in
-                    JobRow(job: job, action: scheduler.action(job.actionID), selected: focus.selected == job.id,
-                           running: scheduler.running.contains(job.id), clock24: scheduler.prefs.settings.clock24,
-                           toggle: { on in
-                               // Asks first, saying what turning it on or off means.
-                               guard Confirm.schedule(job, doing: scheduler.doing(job), on: on, clock24: scheduler.prefs.settings.clock24) else { return }
-                               var j = job
-                               j.enabled = on
-                               scheduler.update(j)
-                           })
-                        .onTapGesture { focus.selected = job.id }
+        VStack(spacing: 10) {
+            SearchField(text: $search, prompt: "Search the schedules")
+            HStack(spacing: 5) {
+                ForEach(Filter.allCases, id: \.self) { f in
+                    let n = count(f)
+                    PillButton(title: "\(f.rawValue) \(n)", prominent: filter == f) { filter = f }
+                        .opacity(f == .failed && n == 0 && filter != f ? 0.5 : 1)
+                        .help(f == .failed ? "The schedules whose last run failed" : "Show \(f.rawValue.lowercased()) schedules")
                 }
+                Spacer(minLength: 0)
             }
-            .padding(.vertical, 4)
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(shown) { job in
+                        JobRow(job: job, action: scheduler.action(job.actionID), selected: focus.selected == job.id,
+                               running: scheduler.running.contains(job.id), clock24: scheduler.prefs.settings.clock24,
+                               toggle: { on in toggle(job, on) })
+                            .onTapGesture { focus.selected = job.id }
+                            .contextMenu { menu(job) }
+                    }
+                    if shown.isEmpty {
+                        Text(scheduler.book.jobs.isEmpty ? "No schedules yet" : "None match")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.top, 20)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    /// On or off, asking first (saying what that means).
+    private func toggle(_ job: ScheduledJob, _ on: Bool) {
+        guard Confirm.schedule(job, doing: scheduler.doing(job), on: on, clock24: scheduler.prefs.settings.clock24) else { return }
+        var j = job
+        j.enabled = on
+        scheduler.update(j)
+    }
+
+    private func all(_ on: Bool) {
+        let n = scheduler.book.jobs.filter { $0.enabled != on }.count
+        guard n > 0 else { return }
+        guard Confirm.ask(on ? "Turn every schedule on?" : "Turn every schedule off?",
+                          on ? "\(n) schedule\(n == 1 ? "" : "s") that \(n == 1 ? "is" : "are") off will run at \(n == 1 ? "its" : "their") times again (the day chime and the night watch too)."
+                             : "\(n) schedule\(n == 1 ? "" : "s") won't run until \(n == 1 ? "it's" : "they're") turned on again (the chimes too).",
+                          ok: on ? "Turn them on" : "Turn them off") else { return }
+        scheduler.setAll(on)
+    }
+
+    /// Right-click on a schedule in the list.
+    @ViewBuilder func menu(_ job: ScheduledJob) -> some View {
+        Button("Run now") { scheduler.run(job.id, byHand: true) }
+            .disabled(scheduler.running.contains(job.id))
+        if job.enabled, job.next != nil {
+            Button("Skip the next run") { scheduler.skipNext(job.id) }
+        }
+        Button(job.enabled ? "Turn off…" : "Turn on…") { toggle(job, !job.enabled) }
+        Divider()
+        Button("Duplicate") { focus.selected = scheduler.duplicate(job.id) }
+        if let action = scheduler.action(job.actionID) {
+            Button("Open \u{201C}\(action.name)\u{201D} in Actions") { ActionsWindow.show(scheduler, select: action.id) }
+        }
+        if !job.isBuiltin {
+            Divider()
+            Button("Delete") {
+                if focus.selected == job.id { focus.selected = scheduler.book.jobs.first { $0.id != job.id }?.id }
+                scheduler.delete(job.id)
+            }
         }
     }
 
@@ -245,6 +343,8 @@ struct JobRow: View {
         case .webhook: return Color(red: 0.2, green: 0.62, blue: 0.62)
         case .chime: return Color(red: 0.9, green: 0.3, blue: 0.62)
         case .runAction: return Color(red: 0.45, green: 0.5, blue: 0.95)
+        case .addToNote: return Color(red: 0.85, green: 0.62, blue: 0.12)
+        case .wait: return Color(red: 0.5, green: 0.52, blue: 0.6)
         }
     }
 }
@@ -332,7 +432,12 @@ struct JobEditor: View {
                             }
                         }
                     }
-                    section("When") { WhenEditor(when: $job.when, clock24: settings.clock24) }
+                    section("When") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            WhenEditor(when: $job.when, clock24: settings.clock24)
+                            upcoming
+                        }
+                    }
                     if !scheduler.isChime(job) {
                         section("With the result") {
                             VStack(alignment: .leading, spacing: 6) {
@@ -401,6 +506,29 @@ struct JobEditor: View {
         .foregroundStyle(.white.opacity(0.8))
     }
 
+    /// Its next few times (from its next one, skips and all), to check the schedule at a glance.
+    @ViewBuilder var upcoming: some View {
+        if job.enabled, let next = job.next {
+            let later = job.when.upcoming(after: next, count: 4, calendar: Scheduler.calendar(settings))
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                let now = AppClock.time(at: context.date)
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar.badge.clock")
+                    Text("Next:")
+                    ForEach(Array(([next] + later).enumerated()), id: \.offset) { i, at in
+                        Text(AlarmTime.short(at, now: now))
+                            .font(.system(size: 11, weight: i == 0 ? .bold : .medium, design: .rounded).monospacedDigit())
+                            .padding(.horizontal, 7)
+                            .frame(height: 20)
+                            .background(Capsule().fill(.white.opacity(i == 0 ? 0.16 : 0.07)))
+                    }
+                }
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+    }
+
     static func isWebAddress(_ text: String) -> Bool {
         guard let u = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)), let scheme = u.scheme?.lowercased() else { return false }
         return (scheme == "https" || scheme == "http") && u.host?.isEmpty == false
@@ -412,7 +540,11 @@ struct JobEditor: View {
         HStack(spacing: 8) {
             PillButton(title: running ? "Running…" : "Run now", prominent: true) { scheduler.run(job.id, byHand: true) }
                 .disabled(running)
-                .help("Run it now (its schedule stays as it is)")
+                .help("Run it now (its schedule stays as it is) · ⌘R")
+            if job.enabled, job.next != nil {
+                PillButton(title: "Skip next") { scheduler.skipNext(job.id) }
+                    .help("Skip its next run: it runs the time after")
+            }
             PillButton(title: "Duplicate") { select(scheduler.duplicate(job.id)) }
             if job.isBuiltin {
                 PillButton(title: "Reset") { scheduler.reset(job.id) }
@@ -451,6 +583,12 @@ struct JobEditor: View {
                 Text("History")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.7))
+                if !runs.isEmpty {
+                    let failed = runs.filter { !$0.ok }.count
+                    Text(failed == 0 ? "\(runs.count) · all fine" : "\(runs.count) · \(failed) failed")
+                        .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                        .foregroundStyle(failed == 0 ? Color.green.opacity(0.7) : Color.orange.opacity(0.9))
+                }
                 Spacer()
                 if !runs.isEmpty {
                     ActionChip(title: "Clear", symbol: "trash", help: "Forget this schedule's runs") { scheduler.clearHistory(job.id) }
@@ -580,6 +718,14 @@ struct WhenEditor: View {
                              })
                     Text("starting from now")
                         .foregroundStyle(.white.opacity(0.45))
+                }
+                HStack(spacing: 6) {
+                    ForEach([15, 30, 60, 120, 240, 1440], id: \.self) { m in
+                        PillButton(title: m < 60 ? "\(m) min" : m < 1440 ? "\(m / 60) h" : "1 day", prominent: when.minutes == m) {
+                            when.minutes = m
+                            when.start = AppClock.now()
+                        }
+                    }
                 }
             case .daily:
                 HStack(spacing: 8) {

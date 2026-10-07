@@ -142,6 +142,12 @@ public struct ScheduledJob: Codable, Equatable, Identifiable {
         return next <= now
     }
 
+    /// Its next run skipped: it runs the time after (a one-off skipped won't run at all).
+    public mutating func skipNext(calendar: Calendar = .current) {
+        guard enabled, let at = next else { return }
+        next = when.next(after: at, calendar: calendar)
+    }
+
     /// After it ran at `now`: what's next. A one-off is done and turns itself off.
     public mutating func ran(at now: Date, ok: Bool, result: String, calendar: Calendar = .current) {
         lastRun = now
@@ -284,6 +290,18 @@ public struct Schedule: Codable, Equatable {
             }
             return nil
         }
+    }
+
+    /// The next `count` times after `date` it runs (fewer when it stops, none when it waits for
+    /// something to happen).
+    public func upcoming(after date: Date, count: Int, calendar: Calendar = .current) -> [Date] {
+        var out: [Date] = []
+        var from = date
+        while out.count < count, let at = next(after: from, calendar: calendar), at > from {
+            out.append(at)
+            from = at
+        }
+        return out
     }
 
     /// "Every 15 minutes", "Every 2 hours", "Every day at 09:00", "Mon, Wed, Fri at 18:30",

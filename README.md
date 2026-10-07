@@ -97,8 +97,8 @@ Strict focus started in test mode ends when test mode does, so it can be tried o
 
 ## Pinned groups
 
-Any group in the panel (Boards, Files, Automate, Voice, Record, Glass, Model tools, Timers, Tags)
-has a pin at the right of its title. Pinned, the group floats on your screen in a window of its
+Any group in the panel (Boards, Files, the Battery, Automate, Voice, Record, Glass, Model tools,
+Timers, Tags) has a pin at the right of its title. Pinned, the group floats on your screen in a window of its
 own, above other windows, its tiles working as they do in the panel. Drag anywhere on it to move
 it; the pin (or ⌘W) puts it away. Pinned groups come back where you left them after a relaunch.
 
@@ -299,18 +299,30 @@ action** (⌘N) adds one. Each action has:
     log's signals had (below), so a worker written for those keeps working. What the address
     answers is the result (a 2xx is a success).
   - **Chime**: a ding and a card, the day chime's or the night watch's.
+  - **Add to a note**: the text goes at the end of a note you pick (any note with a title, on any
+    board), on a line of its own: a log, a journal, the model's answers kept. **Open it** opens
+    the note. What it gives back is what it added.
+  - **Wait**: so many seconds (5 s, 30 s, 1, 5 or 15 min, or any number up to an hour; 60 times
+    faster in test mode) before the next step. What the step before gave back goes on through it.
   - **Run an action**: another action runs, given values for its arguments (which can hold
     `{{…}}` too: pass `{{last}}` to hand on what the step before gave back, or one of this action's
     own arguments). What it gives back is this step's. **An action can run several others**, one
     step each. A called action sees only what it's given, not the caller's arguments.
+- **Each step has a switch**: off, it's skipped when the action runs (kept, dimmed and dashed, to
+  turn on again; the list says how many are off). **⧉** puts a copy of a step right after it.
 - What it gives back is its last step's. The first step that fails stops it, and says which step.
   An action that would come round to itself (A runs B, which runs A) is flagged in red and stops
   with an error when it gets there; so do actions running each other more than 8 deep.
-- **Run it now**, with values for its arguments: what it gives back (or what went wrong) comes up
-  on a card, and shows beside the button.
+- **Run it now** (⌘R), with values for its arguments: what it gives back (or what went wrong) comes
+  up on a card, and shows beside the button with how long ago it ran and a copy button. The list
+  shows how each action's last run went too.
 - **Used by**: the schedules that run it (a click opens one) and the actions that run it.
   **Schedule it…** makes a schedule for it (off, at 9:00 every day, to set up). **Duplicate**, and
   **Delete** (it says first what runs it: those fail until they're given another).
+
+**Search** the actions at the top of the list (by name, step, argument or what a step says), and
+**right-click** one to run it, copy it, schedule it or (when nothing runs it) delete it. ⌘D copies
+the action picked. The status at the top counts the actions nothing runs.
 
 **Built in**: the **Day chime** and **Night watch** actions, what the built-in schedules run, with
 a lock: other schedules can run them too, but they can't be changed or deleted.
@@ -363,8 +375,16 @@ schedule** (⌘N) adds one, and **Actions** opens Actions. Each schedule has:
   a web address answered; a reminder or a spoken step was already shown or said): show it on a
   card, say it out loud, or both. Cards come up at the top right with **Copy**,
   **Say it** and **Scheduler**; a failure always gets a card.
-- **Run now**, **Duplicate**, **Delete**, and a **history** of every run: when, whether it worked,
+- **Its next times**, under When: the next run and the four after it, to check the schedule at a
+  glance. **Every** has quick picks too (15 or 30 min, 1, 2 or 4 h, a day).
+- **Run now** (⌘R), **Skip next** (its next run is skipped: it runs the time after), **Duplicate**
+  (⌘D), **Delete**, and a **history** of every run (with how many failed): when, whether it worked,
   the tools it used and what it gave back.
+
+**Search** the schedules at the top of the list, and show **All**, the ones **On**, **Off** or
+**Failing** (the last run failed), each with how many. **Right-click** a schedule to run it, skip
+its next run, turn it on or off, copy it, open its action or delete it. **All schedules** (at the
+top) turns every schedule off, or on, at once (it asks first).
 
 **Built in**: the **Day chime** and the **Night watch** (below) are schedules that come on, at
 the top of the list with a lock. They can be turned off and their hours changed (**Reset** puts
@@ -584,12 +604,13 @@ first.
 **Across the very top of the panel**, always first, the **Daily plan** and the **Boards** button
 (below), then **the boards that have notes**, each tile in its own darker color, **the one you
 opened most lately first** (up to ten; the rest are a click away on the Boards grid). A board with
-no notes isn't listed here. Click one to open it; right-click to dock it in the menu bar.
+no notes isn't listed here. **Each tile counts its notes** at its top right (the Boards button,
+the boards in use); the Docked notes row says how many are docked. Click one to open it; right-click to dock it in the menu bar.
 
 Under them: the **Unzip to Desktop** tile, then the battery across the rest of the row. The zips
 downloaded lately are listed under it.
 
-- **Battery**: a make-believe battery. Click its icon to set it to 100, 80, 60, 40, 20 or 0% (one
+- **Battery** (its pin floats it on your screen, as a group's does): a make-believe battery. Click its icon to set it to 100, 80, 60, 40, 20 or 0% (one
   step a click; right-click to pick one). It drains 20% an hour and stops at 0. The panel shows the
   level now, a gauge with a tick every 10% and a mark at the next step, **when it reaches that next
   step** (and how long until then), when it's empty, **when it was last at 100%**, and the steps
@@ -706,7 +727,11 @@ but its cards are the boards themselves:
 Boards grid. It's like any other board, and it **opens by itself at 6 AM, 9 AM and 12 PM every
 day** (with a ding; up to an hour late if the Mac was asleep at the time, and in quiet mode once
 quiet mode ends). The notes fill the panel, the gutter between them narrowing as there are more. **A note's
-first line is twice the size of the rest**: its title; **its second line is halfway between**.
+first line is twice the size of the rest**: its title; **its second line is halfway between**, and
+**once there's a third line, a rule is drawn under the second** by itself (the title and what it's
+about, above the rest). **A line starting `- `** (a point) is a little smaller than the nearest
+line above it that isn't one, so points sit under their heading (a point under a point stays the
+same size; spaces before the `-` are fine).
 Web addresses in a note are underlined: click one to open it in your browser.
 
 **Click the board's icon** (top left, by its name) to pick another for the board: on its tile,
@@ -778,12 +803,25 @@ player window of its own (✕ or ⌘W closes it and stops it).
 - **Above its bottom**, always (on its board, pinned, on a tag's board): **its board's button**,
   the board's icon and name. Pinned or on a tag's board, a click opens the board with the note
   opened; on its own board it shows the board's grid. Then the notes it links to, and the **+**.
-  - **Link**: the **+** at the end of that row lists the notes with a title on every board (a menu
-    for each board): pick one, and it shows in the row, its icon on its color and its title. Pick
-    more to link more. **A click on one opens its board with that note opened to fill it**;
+  - **Its board's button counts the board's notes** (those with a title), as the boards' tiles at
+    the top of the panel do (the Boards button counts the boards in use), and so does the top of
+    a board.
+  - **Link**: the **+** (dark, in a ring) at the end of that row lists the notes with a title on
+    every board, by board, with a field to search them: click one, and it shows in the row, its
+    icon on its color and its title (ticked in the list). Click more to link more. **A click on one opens its board with that note opened to fill it**;
     right-click to unlink it (or pick it in the + again).
 - **Down its top right**, one under another: copy its text; open it to fill the board (lit while
-  it's open; Esc or click again to go back); put it **in the menu bar**; **dock** it; and **pin** it.
+  it's open; Esc or click again to go back); put it **in the menu bar**; **dock** it; **pin** it;
+  and under the pin, **the mic** and **the waveform**.
+  - **The mic**: click it and talk; click it again (or ■ on the red strip along the note's bottom,
+    which shows what you're saying as you say it) and **what you said is added at the end of the
+    note**, on a line of its own. It's written down on this Mac, by the same model as Dictate (the
+    first time, it's downloaded). One note listens at a time: the mic on another note stops this
+    one first (its words still go into it).
+  - **The waveform** (on a note tall enough; or **drop sound or video files anywhere on a note**):
+    what's said in them is written down and added at the end of the note, one file after
+    another, a purple strip showing how far along it is (✕ stops it). A video's sound is taken
+    out first. Something that went wrong shows on an orange strip until you close it.
   - **In the menu bar**: the note's icon sits in the menu bar beside the wrench (it follows the
     note's icon, and says its title). A click there opens the note by itself just under it, as if
     pinned (drag it anywhere, type in it); another click, ⌘W or Esc puts it away; right-click

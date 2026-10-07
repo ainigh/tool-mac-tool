@@ -69,7 +69,7 @@ struct BoardCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 // Its bottom: the board's button (it opens the board, showing its grid).
                 HStack(spacing: 4) {
-                    OpenBoardButton(board: board, help: "Open the \(board.name) board, showing its grid") {
+                    OpenBoardButton(board: board, help: "Open the \(board.name) board, showing its grid", count: notes.count) {
                         store.show(board.id, grid: true)
                     }
                     Spacer(minLength: 4)

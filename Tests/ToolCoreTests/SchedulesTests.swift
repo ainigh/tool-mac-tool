@@ -29,6 +29,26 @@ final class SchedulesTests: XCTestCase {
         XCTAssertEqual(s.next(after: at(10, 59), calendar: calendar), at(11))
     }
 
+    func testUpcomingListsTheNextTimes() {
+        let every = Schedule(kind: .every, minutes: 30, start: at(9))
+        XCTAssertEqual(every.upcoming(after: at(9, 10), count: 3, calendar: calendar), [at(9, 30), at(10), at(10, 30)])
+        let once = Schedule(kind: .once, at: at(14))
+        XCTAssertEqual(once.upcoming(after: at(9), count: 5, calendar: calendar), [at(14)])
+        XCTAssertEqual(Schedule(kind: .event, event: .alarmRang).upcoming(after: at(9), count: 3, calendar: calendar), [])
+    }
+
+    func testSkippingTheNextRun() {
+        var job = ScheduledJob(name: "Stand-up", when: Schedule(kind: .every, minutes: 60, start: at(9)))
+        job.plan(from: at(9, 30), calendar: calendar)
+        XCTAssertEqual(job.next, at(10))
+        job.skipNext(calendar: calendar)
+        XCTAssertEqual(job.next, at(11))
+        var once = ScheduledJob(name: "Once", when: Schedule(kind: .once, at: at(14)))
+        once.plan(from: at(9), calendar: calendar)
+        once.skipNext(calendar: calendar)
+        XCTAssertNil(once.next)
+    }
+
     func testDailyAtATime() {
         let s = Schedule(kind: .daily, hour: 9, minute: 30)
         XCTAssertEqual(s.next(after: at(8), calendar: calendar), at(9, 30))
