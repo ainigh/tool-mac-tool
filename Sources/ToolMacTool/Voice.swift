@@ -110,6 +110,11 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     func say(_ text: String) {
         let parts = SpokenText.sentences(text)
         guard !parts.isEmpty else { return }
+        // Starting afresh: what was said last time isn't shown while the first sentence is made.
+        if !speaking {
+            current = ""
+            word = nil
+        }
         speaking = true
         // Kokoro once it's there (and the Mac's voice isn't part way through something).
         if !Neural.shared.voices.isReady || !queued.isEmpty {
@@ -545,8 +550,10 @@ final class Listener: ObservableObject {
         lock.unlock()
         let l = Self.level(buffer)
         DispatchQueue.main.async {
+            // A buffer that arrives after the mic was closed leaves the level at 0.
+            guard self.on else { return }
             self.level = self.level * 0.5 + l * 0.5
-            guard self.on, !self.held else { return }
+            guard !self.held else { return }
             for phrase in self.cutter.add(samples) {
                 self.enqueue(phrase.samples, send: phrase.paused && self.pauseToEnd != nil)
             }

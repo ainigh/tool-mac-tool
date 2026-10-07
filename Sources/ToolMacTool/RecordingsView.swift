@@ -94,6 +94,7 @@ final class AudioRecorder: ObservableObject {
         recorder.stop()
         recorder.deleteRecording()
         end()
+        elapsed = 0                                     // nothing was kept, so the clock doesn't show its length
     }
 
     private func end() {
@@ -182,13 +183,16 @@ struct AudioRecorderView: View {
                         clock.ripple(x: 0.5, y: 0.5, hue: 150)
                     }
                     PillButton(title: "Discard") { recorder.discard() }
+                        .help("Stop and throw this recording away")
                 }
                 PillButton(title: "Recordings") { recordings() }
                 Spacer()
                 if let saved = recorder.lastSaved, recorder.state == .idle {
-                    Button { NSWorkspace.shared.show(saved) } label: { Text(saved.lastPathComponent).underline() }
-                        .buttonStyle(.plain)
-                        .help("Show in Finder")
+                    Button { NSWorkspace.shared.show(saved) } label: {
+                        Text(saved.lastPathComponent).underline().lineLimit(1).truncationMode(.middle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show \(saved.lastPathComponent) in Finder")
                 } else {
                     KeyHint(key: "⌘R", does: recorder.state == .idle ? "record" : recorder.state == .paused ? "resume" : "pause")
                 }
@@ -504,6 +508,7 @@ final class RecordingsModel: ObservableObject {
         let fm = FileManager.default
         do {
             try fm.trashItem(at: item.url, resultingItemURL: nil)
+            problems[item.id] = nil
             if fm.fileExists(atPath: item.transcript.path) { try? fm.trashItem(at: item.transcript, resultingItemURL: nil) }
         } catch {
             problems[item.id] = "Couldn't move it to the Trash: \(error.localizedDescription)"
@@ -644,11 +649,13 @@ struct RecordingsView: View {
             HStack(spacing: 9) {
                 StatusDot(kind: model.problem != nil ? .trouble : model.transcribing != nil ? .thinking : .ready, hue: ink)
                 Text(status)
+                    .monospacedDigit()
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(status)
             }
             .font(.system(size: 13, weight: .medium, design: .rounded))
-            .foregroundStyle(.white.opacity(0.72))
+            .foregroundStyle(model.problem != nil ? Color(red: 1, green: 0.7, blue: 0.75) : .white.opacity(0.72))
             .padding(.leading, 8)
             WindowDragArea()
                 .frame(maxWidth: .infinity)
@@ -712,7 +719,9 @@ struct RecordingsView: View {
                 AudioRecorderWindow.show(app.audioRecorder) { RecordingsWindow.show(app) }
             }
             if !model.waiting.isEmpty {
-                Text("\(model.waiting.count) waiting to be transcribed").monospacedDigit()
+                Text("\(model.waiting.count) waiting to be transcribed")
+                    .monospacedDigit()
+                    .lineLimit(1)
             }
             Spacer()
             KeyHint(key: "esc", does: model.selected == nil ? "close" : "back")
@@ -742,6 +751,7 @@ struct RecordingTile: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .help(item.name)
             Text(RecordingTile.when(item))
                 .font(.system(size: 11, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.45))
@@ -763,7 +773,7 @@ struct RecordingTile: View {
         .contextMenu {
             Button("Play") { model.select(item) }
             Button(model.hasTranscript(item) ? "Transcribe again" : "Transcribe") { model.transcribe(item) }
-                .disabled(info?.hasSound == false || model.isTranscribing(item))
+                .disabled(info?.hasSound == false || model.isTranscribing(item) || model.isWaiting(item))
             if model.hasTranscript(item) {
                 Button("Open the transcript") { NSWorkspace.shared.open(item.transcript) }
             }
@@ -842,12 +852,17 @@ struct RecordingTile: View {
         }
     }
 
-    static func when(_ item: Recordings.Item) -> String {
+    /// Made once: a formatter is costly to make, and every tile asks on every redraw.
+    private static let dates: DateFormatter = {
         let f = DateFormatter()
         f.dateStyle = .medium
         f.timeStyle = .short
+        return f
+    }()
+
+    static func when(_ item: Recordings.Item) -> String {
         let size = ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)
-        return "\(f.string(from: item.date)) · \(size)"
+        return "\(dates.string(from: item.date)) · \(size)"
     }
 }
 
@@ -859,7 +874,7 @@ struct Badge: View {
     var body: some View {
         HStack(spacing: 4) {
             if let symbol { Image(systemName: symbol) }
-            Text(text).monospacedDigit()
+            Text(text).monospacedDigit().lineLimit(1)
         }
         .font(.system(size: 10.5, weight: .semibold, design: .rounded))
         .foregroundStyle(.white.opacity(0.92))
@@ -913,6 +928,7 @@ struct RecordingDetail: View {
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(item.name)
                 Spacer()
                 ActionChip(title: "Finder", symbol: "folder", help: "Show it in Finder") { NSWorkspace.shared.show(item.url) }
             }
@@ -949,6 +965,7 @@ struct RecordingDetail: View {
             HStack(spacing: 6) {
                 Text(live ? "Transcribing… \(Int(model.progress * 100))%" : "Transcript")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
                     .foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 if live {
@@ -957,7 +974,8 @@ struct RecordingDetail: View {
                     ActionChip(title: "Waiting…", symbol: "clock", help: "Waiting its turn: click to take it out") { model.cancel(item) }
                 } else if hasSound {
                     ActionChip(title: model.hasTranscript(item) ? "Again" : "Transcribe", symbol: "text.bubble",
-                               help: "Write down what's said into \(item.transcript.lastPathComponent)") { model.transcribe(item) }
+                               help: model.hasTranscript(item) ? "Transcribe it again, replacing \(item.transcript.lastPathComponent)"
+                                                               : "Write down what's said into \(item.transcript.lastPathComponent)") { model.transcribe(item) }
                 }
                 if model.hasTranscript(item), !live {
                     ActionChip(title: "Copy", symbol: "doc.on.doc", help: "Copy the transcript") { model.copyTranscript() }
@@ -970,25 +988,33 @@ struct RecordingDetail: View {
                 Text(problem)
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
                     .foregroundStyle(Color(red: 1, green: 0.7, blue: 0.75))
+                    .lineLimit(4)
                     .textSelection(.enabled)
             }
-            ScrollView {
-                Group {
-                    if live {
-                        Text(model.segments.isEmpty ? "…" : model.segments.map(\.text).joined(separator: " "))
-                    } else if model.hasTranscript(item) {
-                        Text(model.transcriptText.isEmpty ? "(Nothing was said.)" : model.transcriptText)
-                    } else {
-                        Text(hasSound ? "Not transcribed yet. Transcribe writes down what's said into \(item.transcript.lastPathComponent), beside the recording."
-                                      : "This recording has no sound, so there's nothing to transcribe.")
-                            .foregroundColor(.white.opacity(0.45))
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Group {
+                        if live {
+                            Text(model.segments.isEmpty ? "…" : model.segments.map(\.text).joined(separator: " "))
+                        } else if model.hasTranscript(item) {
+                            Text(model.transcriptText.isEmpty ? "(Nothing was said.)" : model.transcriptText)
+                        } else {
+                            Text(hasSound ? "Not transcribed yet. Transcribe writes down what's said into \(item.transcript.lastPathComponent), beside the recording."
+                                          : "This recording has no sound, so there's nothing to transcribe.")
+                                .foregroundColor(.white.opacity(0.45))
+                        }
                     }
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundColor(Ink.prompt(ink))
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Color.clear.frame(height: 1).id("end")
                 }
-                .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundColor(Ink.prompt(ink))
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // While it's being written down, the newest words stay in sight.
+                .onChange(of: model.segments.count) { _ in
+                    if live { proxy.scrollTo("end", anchor: .bottom) }
+                }
             }
         }
         .padding(14)

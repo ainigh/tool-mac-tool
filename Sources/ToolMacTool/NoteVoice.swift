@@ -39,6 +39,9 @@ final class NoteVoice: ObservableObject {
     private var queue: [(url: URL, target: Target)] = []
     private var busy = false
     private var job: FileTranscriber?
+    /// The note whose file was stopped while a video's sound was still being taken out (no job
+    /// to cancel yet): it's dropped as soon as that's done.
+    private var stopping: String?
 
     private struct Target {
         let store: BoardStore
@@ -180,7 +183,9 @@ final class NoteVoice: ObservableObject {
         let key = Self.key(board, i)
         queue.removeAll { $0.target.key == key }
         waiting[key] = nil
-        if transcribing[key] != nil { job?.cancel() }
+        if transcribing[key] != nil {
+            if let job { job.cancel() } else { stopping = key }
+        }
     }
 
     private func next() {
@@ -197,6 +202,10 @@ final class NoteVoice: ObservableObject {
                 // A video's sound is taken out first, so the transcriber reads plain audio.
                 let video = UTType(filenameExtension: url.pathExtension.lowercased())?.conforms(to: .movie) == true
                 let audio = video ? try await RecordingsModel.soundTrack(of: url) : url
+                if stopping == key {
+                    if video { try? FileManager.default.removeItem(at: audio) }
+                    return done(target, problem: nil)
+                }
                 run(url, audio: audio, temporary: video, target: target)
             } catch {
                 done(target, problem: "\(url.lastPathComponent): \(error.localizedDescription)")
@@ -227,6 +236,7 @@ final class NoteVoice: ObservableObject {
 
     private func done(_ target: Target, problem: String?) {
         job = nil
+        stopping = nil
         busy = false
         file = nil
         transcribing[target.key] = nil
@@ -297,7 +307,9 @@ struct NoteVoiceStrip: View {
                 strip(color: Color(red: 0.45, green: 0.32, blue: 0.9)) {
                     Image(systemName: "waveform")
                     Text("\(voice.file ?? "Sound") · \(Int(progress * 100))%" + ((voice.waiting[key] ?? 0) > 0 ? " · \(voice.waiting[key] ?? 0) more" : ""))
+                        .monospacedDigit()
                         .truncationMode(.middle)
+                        .help(voice.file ?? "Sound")
                     Spacer(minLength: 2)
                     button("xmark", help: "Stop writing it down") { voice.cancel(board, index) }
                 }
@@ -313,11 +325,16 @@ struct NoteVoiceStrip: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                     Text(problem).help(problem)
                     Spacer(minLength: 2)
-                    button("xmark", help: "OK") { voice.problems[key] = nil }
+                    button("xmark", help: "Dismiss") { voice.problems[key] = nil }
                 }
             }
         }
+        // Every strip slides in and out, not only the listening one.
         .animation(.easeInOut(duration: 0.2), value: voice.listening)
+        .animation(.easeInOut(duration: 0.2), value: voice.finishing)
+        .animation(.easeInOut(duration: 0.2), value: voice.transcribing[key] == nil)
+        .animation(.easeInOut(duration: 0.2), value: voice.waiting[key] == nil)
+        .animation(.easeInOut(duration: 0.2), value: voice.problems[key])
     }
 
     private func strip<Content: View>(color: Color, @ViewBuilder _ content: () -> Content) -> some View {
@@ -343,5 +360,6 @@ struct NoteVoiceStrip: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
