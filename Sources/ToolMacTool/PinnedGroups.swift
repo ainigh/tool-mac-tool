@@ -3,7 +3,7 @@ import SwiftUI
 import ToolCore
 
 // Any group of the panel (Boards, Files, the Battery, Automate, Voice, Record, Glass, Model tools,
-// Timers, Tags) can be pinned, as a note can: it floats on the screen in a window of its own, above other
+// Privacy, Timers, Tags) can be pinned, as a note can: it floats on the screen in a window of its own, above other
 // windows, with the same tiles working as they do in the panel. The pin is at the right of each
 // group's title; the pinned ones come back after a relaunch.
 
@@ -80,8 +80,10 @@ struct PinnedGroupView: View {
     var body: some View {
         Group {
             if id == PinnedGroups.boardsID {
+                // As wide as in the panel (its 14-point margins aside), so the Daily plan, the Boards
+                // button and the most boards it shows keep the same size there and here.
                 BoardsRow(store: app.boards, groups: groups)
-                    .frame(width: 10 * 74 + 9 * MenuView.gap)
+                    .frame(width: MenuView.width - 28)
             } else if id == PinnedGroups.batteryID {
                 BatteryPanel(board: app.timers, activity: app.activity, color: Tools.batteryColor, groups: groups)
                     .frame(width: 430)
@@ -118,6 +120,7 @@ struct GroupPinButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .accessibilityLabel(on ? "Unpin this group" : "Pin this group on the screen")
         .help(on ? "Unpin: put this group's floating window away (⌘W on it does too)"
                  : "Pin: float this group on your screen, above other windows (drag it anywhere to move it)")
     }

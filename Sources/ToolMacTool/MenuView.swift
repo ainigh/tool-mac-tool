@@ -340,6 +340,7 @@ struct BottomBar: View {
                     .foregroundStyle(.orange)
                     .frame(width: 26, height: 24)
                     .help("Strict focus is on: Quit is locked until the battery is empty")
+                    .accessibilityLabel("Quit is locked: strict focus is on")
             } else {
                 IconButton(symbol: "power", help: "Quit") { NSApp.terminate(nil) }
             }
@@ -383,8 +384,8 @@ struct BottomBar: View {
                 MenuPanel.close()
                 BuildToolsWindow.show()
             }
-                .controlSize(.small)
-                .help("Check and install what building updates here needs")
+            .controlSize(.small)
+            .help("Check and install what building updates here needs")
         case .upToDate, .idle:
             IconButton(symbol: "arrow.clockwise", help: "Check for updates") { updater.check(userInitiated: true) }
             Text(updater.state == .upToDate ? "Up to date · \(version)" : version)
@@ -423,5 +424,7 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help(help)
+        // Only an icon shows, so VoiceOver reads the tooltip's first line instead of the symbol's name.
+        .accessibilityLabel(help.components(separatedBy: "\n").first ?? help)
     }
 }
