@@ -777,7 +777,7 @@ final class BoardStore: ObservableObject {
         sounds.play(.ding, for: key, maxSeconds: nil)
         let m = model(board)
         cards.show(key, at: .center, onEscape: { [weak self] in self?.hideRoutineCard(board, i) }) { [weak self] size in
-            NoteReminderCard(size: size, model: m, board: board, index: i, hour: hour,
+            NoteReminderCard(size: size, model: m, board: board, index: i, hour: hour, store: self,
                              pending: { self?.answer(.pending, board, i) },
                              completed: { self?.answer(.completed, board, i) },
                              open: { self?.show(board.id, focus: i) },

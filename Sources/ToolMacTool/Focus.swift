@@ -270,7 +270,7 @@ final class FocusCenter: ObservableObject {
             // Time's up waits for an answer; anything else can be put away.
             if self?.session?.phase != .ringing { BigCards.shared.hide(Self.cardID) }
         }) { [weak self] size in
-            if let self { FocusCard(size: size, focus: self, model: model, board: here) }
+            if let self { FocusCard(size: size, focus: self, model: model, board: here, store: self.boards) }
         }
     }
 }
@@ -284,6 +284,8 @@ struct FocusCard: View {
     @ObservedObject var focus: FocusCenter
     @ObservedObject var model: BoardModel
     let board: BoardStore.Kind
+    /// For the note's mic on the card.
+    var store: BoardStore?
 
     var body: some View {
         let h = max(34, size.height * 0.09)
@@ -295,7 +297,8 @@ struct FocusCard: View {
                     name: name(s, note: note), headline: headline(s, now: now), line: line(s, note: note),
                     mood: s?.phase == .ringing ? .error : .idle, close: closeAction(s)) {
                 VStack(spacing: size.height * 0.02) {
-                    BoxNote(text: $model.board.boxes[note].text, height: size.height * 0.2, fontSize: max(13, size.height * 0.032))
+                    BoxNote(text: $model.board.boxes[note].text, height: size.height * 0.2, fontSize: max(13, size.height * 0.032),
+                            store: store, board: board, index: note)
                     if focus.needsText {
                         Text("Type something in the note first (here, or on the pinned note), then click Completed.")
                             .font(.system(size: max(12, size.height * 0.03), weight: .semibold, design: .rounded))
