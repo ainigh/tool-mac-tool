@@ -150,7 +150,8 @@ struct MemoryBar: View {
             .font(.system(size: 13, weight: .medium, design: .rounded))
             .foregroundStyle(failed ? Color(red: 1, green: 0.7, blue: 0.75) : .white.opacity(0.72))
             .padding(.leading, 8)
-            .help(message ?? "")
+            .help(dirty ? "Not saved yet (⌘S saves)" : message ?? "MEMORY.md, as saved")
+            .animation(.easeOut(duration: 0.15), value: status)
             WindowDragArea()
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
@@ -158,10 +159,12 @@ struct MemoryBar: View {
             PillButton(title: "Revert", action: revert)
                 .disabled(!dirty)
                 .opacity(dirty ? 1 : 0.4)
+                .help("Drop your edits and load the file as it is")
             PillButton(title: "Save", prominent: dirty, action: save)
                 .keyboardShortcut("s")
                 .disabled(!dirty)
                 .opacity(dirty ? 1 : 0.4)
+                .help("Save (⌘S)")
             GlassIcon(symbol: "xmark", help: "Close (⌘W)", action: close)
                 .padding(.leading, 2)
         }
@@ -173,9 +176,11 @@ struct MemoryBar: View {
 struct MemoryFooter: View {
     let store: MemoryStore
     let text: String
+    @State private var hover = false
 
     var body: some View {
         let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let tokens = MemoryStore.tokens(text)
         HStack(spacing: 10) {
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([store.url])
@@ -183,16 +188,21 @@ struct MemoryFooter: View {
                 Label(store.url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), systemImage: "doc.text")
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .foregroundStyle(.white.opacity(hover ? 0.75 : 0.42))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Show in Finder")
+            .onHover { hover = $0 }
+            .animation(.easeOut(duration: 0.12), value: hover)
+            .help("Show in Finder: \(store.url.path)")
             WindowDragArea()
                 .frame(maxWidth: .infinity)
                 .frame(height: 18)
             KeyHint(key: "⌘S", does: "save")
-            Text("\(words) words · ~\(MemoryStore.tokens(text)) tokens with every message")
+            Text("\(words) \(words == 1 ? "word" : "words") · ~\(tokens) \(tokens == 1 ? "token" : "tokens") with every message")
                 .monospacedDigit()
                 .lineLimit(1)
+                .fixedSize()
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .foregroundStyle(.white.opacity(0.42))

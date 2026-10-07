@@ -234,7 +234,8 @@ struct VoiceChatView: View {
                 .frame(maxHeight: .infinity)
             GlowLine(clock: clock, mood: mood, paused: false)
                 .padding(.horizontal, 26)
-                .scaleEffect(x: 1, y: 1 + CGFloat(listener.level) * 2)
+                // Held while it talks: the line doesn't pulse to its own voice.
+                .scaleEffect(x: 1, y: 1 + CGFloat(listener.held ? 0 : listener.level) * 2)
             hearing
                 .padding(.horizontal, 26)
                 .padding(.top, 14)
@@ -243,7 +244,7 @@ struct VoiceChatView: View {
             ChatControls(chat: chat, link: link, ink: ink, show: hovering, collapsed: nil, voiceStatus: status,
                          close: close, pin: pin)
                 .onHover { reveal.hold($0) }
-                .padding(.leading, 14)
+                .padding(.leading, 18)          // the light lines up with the typing chat's
                 .padding(.trailing, 14)
                 .padding(.bottom, 10)
         }
@@ -254,6 +255,8 @@ struct VoiceChatView: View {
         .onTapGesture { link.interrupt() }
         .padding(ChatWindow.margin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .opacity(active == .inactive ? 0.94 : 1)
+        .animation(.easeInOut(duration: 0.25), value: active)
         .environment(\.colorScheme, .dark)
         .onAppear { resize(Self.size) }
         .onChange(of: listener.level) { level in
@@ -329,6 +332,7 @@ struct VoiceProblem: View {
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+                .help(text)
             Spacer(minLength: 4)
             CopyErrorButton(text: text)
             if text.contains("System Settings") {
@@ -373,20 +377,24 @@ struct MicButton: View {
     @ObservedObject var link: VoiceLink
     @ObservedObject var listener: Listener
     let ink: Double
+    @State private var hover = false
 
     var body: some View {
         Button { link.toggleMic() } label: {
             Image(systemName: listener.on ? "mic.fill" : "mic")
                 .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(listener.on ? Color.black : Color.white.opacity(0.8))
+                .foregroundStyle(listener.on ? Color.black : Color.white.opacity(hover ? 0.95 : 0.8))
                 .frame(width: 30, height: 30)
-                .background(Circle().fill(listener.on ? Color.hsl(ink + 180, 0.9, 0.83) : Color.white.opacity(0.1)))
+                .background(Circle().fill(listener.on ? Color.hsl(ink + 180, 0.9, 0.83) : Color.white.opacity(hover ? 0.16 : 0.1)))
                 .overlay(Circle().stroke(Color.hsl(ink + 180, 0.9, 0.83).opacity(listener.on ? 0.6 : 0), lineWidth: 2)
                     .scaleEffect(1 + CGFloat(listener.held ? 0 : listener.level) * 0.5))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.08), value: listener.level)
+        .animation(.easeOut(duration: 0.12), value: hover)
         .help(listener.on ? "Listening: pause to send, click to stop" : "Talk instead of typing (it sends when you pause)")
+        .accessibilityLabel(Text(listener.on ? "Stop listening" : "Talk"))
     }
 }

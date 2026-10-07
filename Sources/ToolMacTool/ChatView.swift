@@ -275,13 +275,17 @@ struct ChatControls: View {
             if let voiceStatus {
                 HStack(spacing: 9) {
                     StatusDot(kind: voiceStatus.0, hue: ink)
-                    Text(voiceStatus.1).lineLimit(1)
+                    Text(voiceStatus.1)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: 230, alignment: .leading)
                 }
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.66))
                 .padding(.leading, 8)
                 .padding(.trailing, 4)
                 .fixedSize()
+                .help(voiceStatus.1)
             } else {
                 ChatStatus(chat: chat, ink: ink, showName: show)
             }
@@ -845,6 +849,7 @@ struct CodeBlock: View {
                     .font(.system(size: 8.5, weight: .semibold))
                 Text(language.isEmpty ? "code" : language.lowercased())
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
                 Spacer()
                 CopyButton(text: code)
             }
@@ -925,6 +930,8 @@ struct ReplyActions: View {
                     Label(note == "stopped" ? "Stopped" : "Didn't finish",
                           systemImage: note == "stopped" ? "stop.circle" : "exclamationmark.circle")
                         .foregroundStyle(.white.opacity(0.42))
+                        .help(note == "stopped" ? "Stopped before the reply was done"
+                                                : "The reply broke off partway (Retry asks for it again)")
                 }
                 if let last = exchange.notes.last {
                     MemoryNote(chat: chat, note: last, all: exchange.notes)
@@ -969,6 +976,7 @@ struct Pager: View {
         .disabled(target < 0 || target >= pages)
         .opacity(target < 0 || target >= pages ? 0.3 : 1)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -989,21 +997,26 @@ struct JumpDownButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
         .help("Jump to the end")
+        .accessibilityLabel("Jump to the end")
     }
 }
 
 struct CopyButton: View {
     let text: String
     @State private var copied = false
+    /// Counts copies, so an earlier one's timer doesn't take "Copied" away from a later one early.
+    @State private var copies = 0
 
     var body: some View {
         ActionChip(title: copied ? "Copied" : "Copy", symbol: copied ? "checkmark" : "doc.on.doc",
                    help: "Copy to the clipboard") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            Clipboard.copy(text)
             copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+            copies += 1
+            let mine = copies
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { if mine == copies { copied = false } }
         }
     }
 }
@@ -1101,6 +1114,7 @@ struct ChatProblem: View {
             }
             .buttonStyle(.plain)
             .help("Dismiss")
+            .accessibilityLabel("Dismiss")
         }
         .font(.system(size: 11.5, weight: .medium, design: .rounded))
         .padding(.leading, 11)
@@ -1246,6 +1260,7 @@ struct RoundButton: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.15), value: enabled)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -1267,13 +1282,16 @@ struct ListenerProblem: View {
 struct CopyErrorButton: View {
     let text: String
     @State private var copied = false
+    @State private var copies = 0
     @State private var hover = false
 
     var body: some View {
         Button {
             Clipboard.copy(text)
             copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+            copies += 1
+            let mine = copies
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { if mine == copies { copied = false } }
         } label: {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(.system(size: 10, weight: .semibold))
@@ -1283,6 +1301,8 @@ struct CopyErrorButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: hover)
         .help(copied ? "Copied" : "Copy the error")
+        .accessibilityLabel("Copy the error")
     }
 }
