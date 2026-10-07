@@ -316,7 +316,8 @@ struct DayChimeCard: View {
                     Capsule().fill(.white.opacity(0.12))
                     Capsule().fill(LinearGradient(colors: [look.accent.opacity(0.7), look.accent],
                                                   startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(10, g.size.width * text.progress))
+                        // Kept inside the track: a sliver at the start of the day, never past its end.
+                        .frame(width: min(g.size.width, max(10, g.size.width * min(1, max(0, text.progress)))))
                 }
             }
             .frame(height: max(8, size.height * 0.03))
@@ -342,6 +343,8 @@ struct NightChimeCard: View {
                 Text("Wrap up and get some sleep.")
                     .font(.system(size: max(13, size.height * 0.045), weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
                 Spacer()
                 BigButton(title: "OK", prominent: true, height: h, action: ok)
             }

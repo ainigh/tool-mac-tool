@@ -260,7 +260,8 @@ struct ActionRow: View {
                         if let last, let ranAt {
                             Image(systemName: last.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                                 .foregroundStyle(last.ok ? Color.green.opacity(0.8) : Color.orange)
-                            Text(ranAt, style: .relative)
+                            (Text(ranAt, style: .relative) + Text(" ago"))
+                                .monospacedDigit()
                                 .lineLimit(1)
                                 .help(last.ok ? "Last run by hand went fine" : "Last run by hand failed: \(last.output)")
                         }
@@ -374,7 +375,9 @@ struct ActionEditor: View {
                     TextField("(empty)", text: Binding(get: { action.parameters.indices.contains(i) ? action.parameters[i].value : "" },
                                                        set: { if action.parameters.indices.contains(i) { action.parameters[i].value = $0 } }))
                         .textFieldStyle(.roundedBorder)
-                    GlassIcon(symbol: "minus.circle", help: "Take this argument away") { action.parameters.remove(at: i) }
+                    GlassIcon(symbol: "minus.circle", help: "Take this argument away") {
+                        if action.parameters.indices.contains(i) { action.parameters.remove(at: i) }
+                    }
                 }
             }
             HStack(spacing: 8) {
@@ -383,9 +386,12 @@ struct ActionEditor: View {
                     while action.parameters.contains(where: { $0.name == "value\(n == 1 ? "" : "\(n)")" }) { n += 1 }
                     action.parameters.append(ActionArgument(name: "value\(n == 1 ? "" : "\(n)")"))
                 }
-                if !action.parameters.isEmpty {
-                    Text("Use them in the steps as " + action.parameters.filter { !$0.name.isEmpty }.map(\.token).joined(separator: ", "))
+                let named = action.parameters.filter { !$0.name.isEmpty }
+                if !named.isEmpty {
+                    Text((named.count == 1 ? "Use it in the steps as " : "Use them in the steps as ") + named.map(\.token).joined(separator: ", "))
                         .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
         }
@@ -451,7 +457,7 @@ struct ActionEditor: View {
                             .foregroundStyle(.white.opacity(0.65))
                         if let at = scheduler.actionRanAt[action.id] {
                             (Text("Ran ") + Text(at, style: .relative) + Text(" ago"))
-                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
                                 .foregroundStyle(.white.opacity(0.4))
                         }
                     }
@@ -591,7 +597,7 @@ struct StepCard: View {
                         .background(Capsule().fill(.white.opacity(0.1)))
                 }
                 Spacer()
-                Toggle("", isOn: Binding(get: { !step.off }, set: { step.off = !$0 }))
+                Toggle("Step \(number) on", isOn: Binding(get: { !step.off }, set: { step.off = !$0 }))
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .labelsHidden()
@@ -871,9 +877,11 @@ struct SearchField: View {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.white.opacity(0.5))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("Clear the search")
+                .accessibilityLabel("Clear the search")
             }
         }
         .padding(.horizontal, 10)
