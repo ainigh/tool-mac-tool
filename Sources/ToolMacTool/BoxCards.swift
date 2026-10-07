@@ -44,7 +44,7 @@ struct BoxAlarmCard: View {
                     line: line(AppClock.time(at: context.date)), mood: mood, close: box.ok) {
                 VStack(spacing: size.height * 0.025) {
                     BoxNote(text: $model.board.boxes[box.index].text, height: size.height * 0.24,
-                            fontSize: max(13, size.height * 0.034))
+                            fontSize: max(13, size.height * 0.034), store: box.store, board: box.board, index: box.index)
                     HStack(spacing: 10) {
                         Button {
                             box.store.show(box.board.id, focus: box.index)
@@ -158,29 +158,77 @@ struct BoxAlarmCard: View {
     }
 }
 
-/// The box's text on a card: white on the glass, to edit as you would in the box.
+/// The box's text on a card: white on the glass, to edit as you would in the box. Given its note
+/// (`store`, `board`, `index`), it has the note's mic at its bottom right too: speak into the note
+/// right from the card, and what you said is added at its end, as with the mic under its pin.
 struct BoxNote: View {
     @Binding var text: String
     let height: CGFloat
     let fontSize: CGFloat
+    var store: BoardStore?
+    var board: BoardStore.Kind?
+    var index: Int?
 
     var body: some View {
-        BoxEditor(text: $text, fontSize: fontSize, ink: NSColor(white: 1, alpha: 0.92),
-                  linkInk: NSColor(red: 0.55, green: 0.8, blue: 1, alpha: 1))
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.08)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
-            .overlay(alignment: .topTrailing) {
-                if text.isEmpty {
-                    Text("The box is empty: type here")
-                        .font(.system(size: fontSize * 0.8, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .padding(10)
-                        .allowsHitTesting(false)
+        VStack(spacing: 6) {
+            BoxEditor(text: $text, fontSize: fontSize, ink: NSColor(white: 1, alpha: 0.92),
+                      linkInk: NSColor(red: 0.55, green: 0.8, blue: 1, alpha: 1))
+                .padding(8)
+                .frame(maxWidth: .infinity)
+                .frame(height: height)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.08)))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
+                .overlay(alignment: .topTrailing) {
+                    if text.isEmpty {
+                        Text(store == nil ? "The box is empty: type here" : "The box is empty: type here, or click the mic and talk")
+                            .font(.system(size: fontSize * 0.8, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .padding(10)
+                            .allowsHitTesting(false)
+                    }
                 }
-            }
+                .overlay(alignment: .bottomTrailing) {
+                    if let store, let board, let index {
+                        CardMic(store: store, board: board, index: index, size: max(26, fontSize * 1.7))
+                            .padding(6)
+                    }
+                }
+            // Speaking into it (what's said so far), or a sound file being written down into it.
+            if let board, let index { NoteVoiceStrip(board: board, index: index) }
+        }
+    }
+}
+
+/// The note's mic on a card's glass: click, talk, click again, and what you said is added at the
+/// end of the note (the same as the mic under the note's pin; one note listens at a time).
+private struct CardMic: View {
+    @ObservedObject var voice = NoteVoice.shared
+    let store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let size: CGFloat
+    @State private var hover = false
+
+    var body: some View {
+        let on = voice.isListening(board, index)
+        let finishing = voice.isFinishing(board, index)
+        let help = on ? "Listening: click to stop, and what you said is added to the end of this note"
+            : finishing ? "Writing down the last words…"
+            : "Speak into this note: click, talk, click again, and what you said is added at its end (on this Mac)"
+        Button { voice.toggle(store, board, index) } label: {
+            Image(systemName: on ? "mic.fill" : finishing ? "ellipsis" : "mic")
+                .font(.system(size: size * 0.45, weight: .semibold))
+                .foregroundStyle(.white.opacity(on || hover ? 1 : 0.7))
+                .frame(width: size, height: size)
+                .background(Circle().fill(on ? AnyShapeStyle(Color(red: 0.86, green: 0.22, blue: 0.28))
+                                             : AnyShapeStyle(Color.white.opacity(hover ? 0.22 : 0.12))))
+                .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(help)
+        .accessibilityLabel(on ? "Stop listening" : "Speak into this note")
     }
 }
 
@@ -196,6 +244,8 @@ struct NoteReminderCard: View {
     let board: BoardStore.Kind
     let index: Int
     let hour: Date
+    /// For the note's mic on the card.
+    var store: BoardStore?
     let pending: () -> Void
     let completed: () -> Void
     let open: () -> Void
@@ -212,7 +262,8 @@ struct NoteReminderCard: View {
                 line: "\(hour.formatted(date: .omitted, time: .shortened)) · \(Self.line(repeats, status: box.status))",
                 close: close) {
             VStack(spacing: size.height * 0.025) {
-                BoxNote(text: $model.board.boxes[index].text, height: size.height * 0.2, fontSize: max(13, size.height * 0.032))
+                BoxNote(text: $model.board.boxes[index].text, height: size.height * 0.2, fontSize: max(13, size.height * 0.032),
+                        store: store, board: board, index: index)
                 HStack(spacing: 10) {
                     Button(action: open) {
                         Label("Open \(board.name)", systemImage: "square.grid.2x2")

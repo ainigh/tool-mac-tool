@@ -818,6 +818,9 @@ player window of its own (✕ or ⌘W closes it and stops it).
     note**, on a line of its own. It's written down on this Mac, by the same model as Dictate (the
     first time, it's downloaded). One note listens at a time: the mic on another note stops this
     one first (its words still go into it).
+    The cards that show a note's text (its **Note reminder**, the **Focus** card, its timer's
+    cards) have the same mic at the bottom right of the text: speak into the note right from the
+    card, without opening it.
   - **The waveform** (on a note tall enough; or **drop sound or video files anywhere on a note**):
     what's said in them is written down and added at the end of the note, one file after
     another, a purple strip showing how far along it is (✕ stops it). A video's sound is taken
