@@ -32,6 +32,8 @@ final class Scheduler: ObservableObject {
     /// The actions running by hand now (by id), and how each last went.
     @Published private(set) var runningActions: Set<String> = []
     @Published private(set) var actionResults: [String: Outcome] = [:]
+    /// When each action was last run by hand.
+    @Published private(set) var actionRanAt: [String: Date] = [:]
 
     let prefs = Preferences.shared
     let url = ScheduleBook.defaultURL()
@@ -280,6 +282,21 @@ final class Scheduler: ObservableObject {
 
     // MARK: Running
 
+    /// Its next run skipped: it runs the time after.
+    func skipNext(_ id: String) {
+        guard let i = book.jobs.firstIndex(where: { $0.id == id }) else { return }
+        book.jobs[i].skipNext(calendar: Self.calendar(prefs.settings))
+    }
+
+    /// Every schedule on or off at once (built-in ones too).
+    func setAll(_ on: Bool) {
+        let now = AppClock.now()
+        for i in book.jobs.indices where book.jobs[i].enabled != on {
+            book.jobs[i].enabled = on
+            book.jobs[i].plan(from: now)
+        }
+    }
+
     /// Runs it now. On its schedule, it then moves on to its next time; run by hand, its
     /// schedule stays as it was.
     func run(_ id: String, now: Date = AppClock.now(), byHand: Bool = false, context: Context = Context()) {
@@ -412,7 +429,35 @@ final class Scheduler: ObservableObject {
             return outcome
         case .runAction:
             return .failed("Run an action is the runner's to do.")
+        case .addToNote:
+            guard let link = step.note, let board = BoardStore.kind(link.board), let boards else {
+                return .failed("Pick the note it adds to.")
+            }
+            let added = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !added.isEmpty else { return .failed("Nothing to add: write what goes in the note.") }
+            guard boards.model(board).board.boxes.indices.contains(link.box) else { return .failed("That note is gone: pick another.") }
+            boards.append(added, board, link.box)
+            return Outcome(ok: true, output: added, tools: [boards.noteName(link)])
+        case .wait:
+            // On the app's clock: a minute is a second in test mode.
+            let seconds = Double(step.seconds) / max(AppClock.speed, 1)
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return Outcome(ok: true, output: "Waited \(ActionStep.span(step.seconds))")
         }
+    }
+
+    // MARK: Notes, for the steps that add to one
+
+    /// The notes a step can add to: every note with a title, by board.
+    func noteChoices() -> [BoardStore.Note] { boards?.notes.filter { $0.title != nil } ?? [] }
+
+    /// Opens the note a step adds to, on its board.
+    func openNote(_ link: NoteLink) { boards?.open(link) }
+
+    /// "Goals · Plan the launch": the note a step adds to.
+    func noteName(_ link: NoteLink?) -> String? {
+        guard let link, let boards else { return nil }
+        return boards.noteName(link)
     }
 
     // MARK: Actions
@@ -465,6 +510,7 @@ final class Scheduler: ObservableObject {
     func deleteAction(_ id: String) {
         actions.actions.removeAll { $0.id == id && !$0.isBuiltin }
         actionResults[id] = nil
+        actionRanAt[id] = nil
     }
 
     /// Runs an action by hand, with these arguments: as a job would, but for nobody's schedule. Its
@@ -486,6 +532,7 @@ final class Scheduler: ObservableObject {
                                          caller: Caller(job: job, context: Context(), open: open), now: now)
             runningActions.remove(id)
             actionResults[id] = outcome
+            actionRanAt[id] = Date()
             if !outcome.ok || outcome.fresh {
                 ResultCard.shared.show(title: action.name, symbol: action.symbol, text: outcome.output, ok: outcome.ok,
                                        scheduler: self, open: open)

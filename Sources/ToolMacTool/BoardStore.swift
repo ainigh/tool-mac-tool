@@ -212,6 +212,12 @@ final class BoardStore: ObservableObject {
         return b.order.compactMap { mine[$0] }
     }
 
+    /// What a board's buttons count: its notes with a title (the Boards grid: the boards in use).
+    func count(_ board: Kind) -> Int {
+        if board.isGrid { return Self.gridKinds.filter { !isBlank($0) }.count }
+        return notes.filter { $0.board == board && $0.title != nil }.count
+    }
+
     /// A board on the Boards grid with nothing on it: no notes with a title, and no name of its own.
     func isBlank(_ board: Kind) -> Bool {
         guard let info = Self.catalog.info(board.id) else { return true }
@@ -280,6 +286,12 @@ final class BoardStore: ObservableObject {
     /// A note linked to: its summary (nil when it's gone, or has nothing to show).
     func note(_ link: NoteLink) -> Note? { notes.first { $0.board.id == link.board && $0.index == link.box } }
 
+    /// "Goals · Plan the launch": a note, by its board and title.
+    func noteName(_ link: NoteLink) -> String {
+        guard let kind = Self.kind(link.board) else { return "A note that's gone" }
+        return "\(kind.name) · \(note(link)?.title ?? "box \(link.box + 1)")"
+    }
+
     /// Every note it could link to: the ones with a title, from all the boards, not itself.
     func linkable(from board: Kind, _ i: Int) -> [Note] {
         notes.filter { $0.title != nil && !($0.board.id == board.id && $0.index == i) }
@@ -322,6 +334,15 @@ final class BoardStore: ObservableObject {
     }
 
     func toggle(_ tag: NoteTag, _ board: Kind, _ i: Int) { model(board).board.boxes[i].toggle(tag) }
+
+    /// Text added at the end of a note, on a line of its own (what was said into it, a sound file
+    /// written down, an action's step).
+    func append(_ text: String, _ board: Kind, _ i: Int) {
+        let m = model(board)
+        guard m.board.boxes.indices.contains(i) else { return }
+        let new = NoteText.appending(text, to: m.board.boxes[i].text)
+        if new != m.board.boxes[i].text { m.board.boxes[i].text = new }
+    }
 
     /// In the row along the bottom of the panel, or out of it.
     func setDocked(_ on: Bool, _ board: Kind, _ i: Int) { model(board).board.boxes[i].docked = on }

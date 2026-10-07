@@ -18,7 +18,7 @@ struct TopRow: View {
                     ToolTile(tool: Tools.unzip, color: files.color) { model.open(Tools.unzip) }
                 }
                 .frame(width: MenuView.tile)
-                BatteryPanel(board: model.timers, activity: model.activity, color: Tools.batteryColor)
+                BatteryPanel(board: model.timers, activity: model.activity, color: Tools.batteryColor, groups: model.groups)
                     .frame(maxWidth: .infinity)
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -27,16 +27,19 @@ struct TopRow: View {
     }
 }
 
-/// A panel in the top row: its title, then a rounded card in its color.
+/// A panel in the top row: its title (with a pin to float it, given `groups`), then a rounded
+/// card in its color.
 private struct RowCard<Content: View>: View {
     let title: String
     let color: Color
+    var groups: PinnedGroups?
+    var pinID: String?
     @ViewBuilder let content: () -> Content
     @State private var hover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(title: title, color: color)
+            SectionHeader(title: title, color: color, groups: groups, pinID: pinID)
             content()
                 .padding(.horizontal, 11)
                 .padding(.vertical, 9)
@@ -52,15 +55,17 @@ private struct RowCard<Content: View>: View {
 
 /// The battery in detail: its level now (a gauge with a mark at the next 10% step), when it gets
 /// there and when it's empty, when it was last full, and the steps after that. Click the battery
-/// to set the next level (100, 80 … 0); right-click to pick one.
+/// to set the next level (100, 80 … 0); right-click to pick one. The pin at the right of its
+/// title floats it on the screen, as a group can be.
 struct BatteryPanel: View {
     @ObservedObject var board: TimerBoard
     @ObservedObject var activity: ActivityStore
     @ObservedObject private var focus = FocusCenter.shared
     let color: Color
+    var groups: PinnedGroups?
 
     var body: some View {
-        RowCard(title: TimerBoard.batteryName, color: color) {
+        RowCard(title: TimerBoard.batteryName, color: color, groups: groups, pinID: PinnedGroups.batteryID) {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 content(now: AppClock.time(at: context.date))
             }

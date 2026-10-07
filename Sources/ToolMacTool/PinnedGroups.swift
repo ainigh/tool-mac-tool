@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 import ToolCore
 
-// Any group of the panel (Boards, Files, Automate, Voice, Record, Glass, Model tools, Timers,
-// Tags) can be pinned, as a note can: it floats on the screen in a window of its own, above other
+// Any group of the panel (Boards, Files, the Battery, Automate, Voice, Record, Glass, Model tools,
+// Timers, Tags) can be pinned, as a note can: it floats on the screen in a window of its own, above other
 // windows, with the same tiles working as they do in the panel. The pin is at the right of each
 // group's title; the pinned ones come back after a relaunch.
 
@@ -16,6 +16,7 @@ final class PinnedGroups: ObservableObject {
     private var panels: [String: GlassPanel] = [:]
     private static let key = "pinnedGroups"
     static let boardsID = "Boards"
+    static let batteryID = "Battery"
 
     init(app: AppModel) {
         self.app = app
@@ -23,7 +24,7 @@ final class PinnedGroups: ObservableObject {
     }
 
     /// Every group that can be pinned.
-    static var ids: [String] { [boardsID] + Tools.sections.map(\.id) }
+    static var ids: [String] { [boardsID, batteryID] + Tools.sections.map(\.id) }
 
     func isPinned(_ id: String) -> Bool { pinned.contains(id) }
 
@@ -81,6 +82,9 @@ struct PinnedGroupView: View {
             if id == PinnedGroups.boardsID {
                 BoardsRow(store: app.boards, groups: groups)
                     .frame(width: 10 * 74 + 9 * MenuView.gap)
+            } else if id == PinnedGroups.batteryID {
+                BatteryPanel(board: app.timers, activity: app.activity, color: Tools.batteryColor, groups: groups)
+                    .frame(width: 430)
             } else if let section = Tools.sections.first(where: { $0.id == id }) {
                 SectionGrid(section: section, model: app, groups: groups)
                     .frame(width: section.style == .stack ? MenuView.bigTile : MenuView.columnWidth, alignment: .leading)

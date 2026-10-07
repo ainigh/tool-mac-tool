@@ -3,7 +3,8 @@ import Foundation
 // Actions: what a schedule does, kept apart from when it runs. An action is a name, the
 // arguments it takes (each with a value it has when nothing is given), and its steps, run in
 // turn: ask the model, remind, say it, run a model tool or a shortcut, call a web address, chime,
-// or run another action (with arguments of its own). A step's text can use {{name}} for an
+// add to a note, wait a while, or run another action (with arguments of its own). A step can be
+// turned off (skipped) without taking it away. A step's text can use {{name}} for an
 // argument, and {{last}} for what the step before it gave back. A schedule picks an action and
 // gives its arguments; the Actions window makes and runs them by hand.
 
@@ -47,6 +48,10 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         case chime
         /// Another action (`target`: its id), given `arguments`; what it gives back is this step's.
         case runAction
+        /// The text is added at the end of a note (`target`: "<board id>#<box>", `ActionStep.note`).
+        case addToNote
+        /// Waits a while (`target`: how many seconds) before the next step; {{last}} goes on through it.
+        case wait
 
         public var title: String {
             switch self {
@@ -58,6 +63,8 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
             case .webhook: return "Call a web address"
             case .chime: return "Chime"
             case .runAction: return "Run an action"
+            case .addToNote: return "Add to a note"
+            case .wait: return "Wait"
             }
         }
 
@@ -71,6 +78,8 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
             case .webhook: return "paperplane"
             case .chime: return "bell.and.waves.left.and.right"
             case .runAction: return "arrow.turn.down.right"
+            case .addToNote: return "note.text.badge.plus"
+            case .wait: return "hourglass"
             }
         }
 
@@ -79,7 +88,10 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         public var hasResult: Bool { self == .askModel || self == .shortcut || self == .webhook }
 
         /// It has text of its own (a chime doesn't; another action is given arguments instead).
-        public var hasText: Bool { self != .chime && self != .runAction }
+        public var hasText: Bool { self != .chime && self != .runAction && self != .wait }
+
+        /// What the step before gave back goes on through it, as {{last}} and as the action's result.
+        public var passesLast: Bool { self == .wait }
     }
 
     public var id: String
@@ -95,9 +107,11 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
     public var secret: String
     /// Run an action: the values it gives that action's arguments (they can hold {{…}} too).
     public var arguments: [ActionArgument]
+    /// Turned off: skipped when the action runs (kept, to turn on again).
+    public var off: Bool
 
     public init(id: String = UUID().uuidString, kind: Kind = .remind, target: String = "", text: String = "",
-                useTools: Bool = true, secret: String = "", arguments: [ActionArgument] = []) {
+                useTools: Bool = true, secret: String = "", arguments: [ActionArgument] = [], off: Bool = false) {
         self.id = id
         self.kind = kind
         self.target = target
@@ -105,9 +119,10 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         self.useTools = useTools
         self.secret = secret
         self.arguments = arguments
+        self.off = off
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, target, text, useTools, secret, arguments }
+    enum CodingKeys: String, CodingKey { case id, kind, target, text, useTools, secret, arguments, off }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -118,7 +133,21 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         useTools = try c.decodeIfPresent(Bool.self, forKey: .useTools) ?? true
         secret = try c.decodeIfPresent(String.self, forKey: .secret) ?? ""
         arguments = (try? c.decodeIfPresent([ActionArgument].self, forKey: .arguments)) ?? []
+        off = try c.decodeIfPresent(Bool.self, forKey: .off) ?? false
     }
+
+    /// Wait: how many seconds (1 to an hour; 5 when it isn't a number).
+    public var seconds: Int { min(3600, max(1, Int(target.trimmingCharacters(in: .whitespaces)) ?? 5)) }
+
+    /// Add to a note: the note it adds to.
+    public var note: NoteLink? {
+        guard let hash = target.lastIndex(of: "#"), let box = Int(target[target.index(after: hash)...]), box >= 0 else { return nil }
+        let board = String(target[..<hash])
+        return board.isEmpty ? nil : NoteLink(board: board, box: box)
+    }
+
+    /// The target that adds to `note`.
+    public static func target(_ note: NoteLink) -> String { "\(note.board)#\(note.box)" }
 
     /// What it does, in a few words, for a confirmation ("say its text out loud").
     public func doing(actionName: (String) -> String?) -> String {
@@ -131,7 +160,17 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         case .webhook: return "call \(URL(string: target)?.host ?? "its web address")"
         case .chime: return target == "night" ? "ding and show the night watch's warning card" : "ding and show the day chime's card"
         case .runAction: return "run \(actionName(target).map { "\u{201C}\($0)\u{201D}" } ?? "another action")"
+        case .addToNote: return "add its text to a note"
+        case .wait: return "wait \(Self.span(seconds))"
         }
+    }
+
+    /// "5 seconds", "2 minutes", "1 minute 30 seconds".
+    public static func span(_ seconds: Int) -> String {
+        func unit(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+        let m = seconds / 60, s = seconds % 60
+        if m == 0 { return unit(s, "second") }
+        return s == 0 ? unit(m, "minute") : unit(m, "minute") + " " + unit(s, "second")
     }
 }
 
@@ -186,14 +225,20 @@ public struct SavedAction: Codable, Equatable, Identifiable, Sendable {
         builtin = try c.decodeIfPresent(String.self, forKey: .builtin)
     }
 
+    /// The steps that run (the ones turned off are skipped).
+    public var live: [ActionStep] { steps.filter { !$0.off } }
+
     /// Its icon: its one step's, or a stack for several.
     public var symbol: String {
-        steps.count == 1 ? steps[0].kind.symbol : steps.isEmpty ? "bolt.slash" : "square.stack.3d.down.right"
+        live.count == 1 ? live[0].kind.symbol : live.isEmpty ? "bolt.slash" : "square.stack.3d.down.right"
     }
 
-    /// Its steps, in a few words ("Ask the model, then Say it").
+    /// Its steps, in a few words ("Ask the model, then Say it"; the ones turned off left out).
     public var summary: String {
-        steps.isEmpty ? "No steps yet" : steps.map(\.kind.title).joined(separator: ", then ")
+        if steps.isEmpty { return "No steps yet" }
+        if live.isEmpty { return "Every step is turned off" }
+        let off = steps.count - live.count
+        return live.map(\.kind.title).joined(separator: ", then ") + (off > 0 ? " (\(off) off)" : "")
     }
 
     /// The only step is a chime (a chime missed while the Mac slept waits for the next hour, and
@@ -326,12 +371,14 @@ public enum ActionRunner {
             return .failed("Actions run each other more than \(maxDepth) deep (at \u{201C}\(action.name)\u{201D}).")
         }
         guard !action.steps.isEmpty else { return .failed("\u{201C}\(action.name)\u{201D} has no steps yet: add one in Actions.") }
+        guard !action.live.isEmpty else { return .failed("Every step of \u{201C}\(action.name)\u{201D} is turned off: turn one on in Actions.") }
         var values = context
         values.merge(action.values(given: arguments)) { $1 }
         var previous = last
         var tools: [String] = []
-        var outcome = Outcome(ok: true, output: "")
-        for (n, s) in action.steps.enumerated() {
+        var result = Outcome(ok: true, output: "")
+        for (n, s) in action.steps.enumerated() where !s.off {
+            let outcome: Outcome
             if s.kind == .runAction {
                 let given = s.arguments.map { ActionArgument(name: $0.name, value: fill($0.value, previous, values)) }
                 outcome = await run(s.target, arguments: given, context: context, last: previous, book: book,
@@ -344,8 +391,12 @@ public enum ActionRunner {
                 let at = action.steps.count > 1 ? "\(action.name), step \(n + 1) (\(s.kind.title)): " : ""
                 return Outcome(ok: false, output: at + outcome.output, tools: tools)
             }
-            previous = outcome.output
+            // A wait gives back nothing of its own: what came before goes on through it.
+            if !s.kind.passesLast {
+                result = outcome
+                previous = outcome.output
+            }
         }
-        return Outcome(ok: true, output: outcome.output, tools: tools, fresh: outcome.fresh)
+        return Outcome(ok: true, output: result.output, tools: tools, fresh: result.fresh)
     }
 }

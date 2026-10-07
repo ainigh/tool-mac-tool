@@ -5,9 +5,11 @@ import ToolCore
 // The Actions window: what schedules run, made here. A glass panel like the Scheduler's, the
 // actions down the left (the built-in chimes first) and the one you pick on the right: its name,
 // the arguments it takes (each with the value it has when none is given), its steps in order (ask
-// the model, remind, say it, a model tool, a shortcut, a web address, a chime, or another action
-// with arguments of its own), running it by hand, and what uses it. A step's text can use
-// {{name}} for an argument and {{last}} for what the step before gave back.
+// the model, remind, say it, a model tool, a shortcut, a web address, a chime, add to a note, wait,
+// or another action with arguments of its own), running it by hand, and what uses it. A step's
+// text can use {{name}} for an argument and {{last}} for what the step before gave back. A step can
+// be turned off (skipped) or copied; the list can be searched; ⌘R runs the action picked, ⌘D
+// copies it.
 
 @MainActor
 enum ActionsWindow {
@@ -31,7 +33,13 @@ enum ActionsWindow {
             let host = FirstClickHostingView(rootView: ActionsView(scheduler: scheduler, focus: focus, close: close))
             host.sizingOptions = []
             panel.contentView = host
-            panel.commands = ["w": close, "n": { focus.selected = scheduler.addAction() }]
+            panel.commands = [
+                "w": close,
+                "n": { focus.selected = scheduler.addAction() },
+                // The action picked: run it (its arguments' own values), or a copy of it.
+                "r": { if let id = focus.selected { scheduler.runAction(id, arguments: []) } },
+                "d": { if let id = focus.selected, let copy = scheduler.duplicateAction(id) { focus.selected = copy } },
+            ]
             panel.onEscape = {
                 close()
                 return true
@@ -50,6 +58,7 @@ struct ActionsView: View {
     let close: () -> Void
     @State private var clock = GlassClock()
     @State private var ink = Double.random(in: 0..<360)
+    @State private var search = ""
     @Environment(\.controlActiveState) private var active
 
     var mood: GlassMood { scheduler.problem != nil ? .error : scheduler.runningActions.isEmpty ? .idle : .thinking }
@@ -58,7 +67,20 @@ struct ActionsView: View {
     var status: String {
         if let problem = scheduler.problem { return problem }
         if !scheduler.runningActions.isEmpty { return "Running \(scheduler.runningActions.count)…" }
-        return "Actions · \(scheduler.actions.actions.count)"
+        let unused = scheduler.actions.actions.filter { !$0.isBuiltin && scheduler.book.jobs(running: $0.id).isEmpty
+            && scheduler.actions.callers(of: $0.id).isEmpty }.count
+        return "Actions · \(scheduler.actions.actions.count)" + (unused > 0 ? " · \(unused) not run by anything" : "")
+    }
+
+    /// The actions the search finds (by name, step, argument or what a step says).
+    var shown: [SavedAction] {
+        let words = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !words.isEmpty else { return scheduler.actions.actions }
+        return scheduler.actions.actions.filter { a in
+            a.name.lowercased().contains(words) || a.summary.lowercased().contains(words)
+                || a.parameters.contains { $0.name.lowercased().contains(words) }
+                || a.steps.contains { $0.text.lowercased().contains(words) || $0.target.lowercased().contains(words) }
+        }
     }
 
     var body: some View {
@@ -109,6 +131,8 @@ struct ActionsView: View {
                     .lineLimit(2)
                 Spacer()
                 KeyHint(key: "⌘N", does: "new")
+                KeyHint(key: "⌘R", does: "run")
+                KeyHint(key: "⌘D", does: "copy")
                 KeyHint(key: "esc", does: "close")
             }
             .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -125,16 +149,46 @@ struct ActionsView: View {
     }
 
     var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(scheduler.actions.actions) { action in
-                    ActionRow(action: action, selected: focus.selected == action.id,
-                              running: scheduler.runningActions.contains(action.id),
-                              uses: scheduler.book.jobs(running: action.id).count)
-                        .onTapGesture { focus.selected = action.id }
+        VStack(spacing: 10) {
+            SearchField(text: $search, prompt: "Search the actions")
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(shown) { action in
+                        ActionRow(action: action, selected: focus.selected == action.id,
+                                  running: scheduler.runningActions.contains(action.id),
+                                  uses: scheduler.book.jobs(running: action.id).count,
+                                  last: scheduler.actionResults[action.id], ranAt: scheduler.actionRanAt[action.id])
+                            .onTapGesture { focus.selected = action.id }
+                            .contextMenu { menu(action) }
+                    }
+                    if shown.isEmpty {
+                        Text(search.isEmpty ? "No actions yet" : "No action matches \u{201C}\(search)\u{201D}")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.top, 20)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+        }
+    }
+
+    /// Right-click on an action in the list.
+    @ViewBuilder func menu(_ action: SavedAction) -> some View {
+        Button("Run now") { scheduler.runAction(action.id, arguments: []) }
+            .disabled(scheduler.runningActions.contains(action.id) || action.live.isEmpty)
+        Button("Duplicate") { focus.selected = scheduler.duplicateAction(action.id) }
+        Button("Schedule it…") {
+            let id = scheduler.add(ScheduledJob(name: action.name, enabled: false, when: Schedule(kind: .daily, hour: 9, minute: 0)),
+                                   action: action.id)
+            SchedulerWindow.show(scheduler, select: id)
+        }
+        if !action.isBuiltin, scheduler.book.jobs(running: action.id).isEmpty, scheduler.actions.callers(of: action.id).isEmpty {
+            Divider()
+            Button("Delete") {
+                if focus.selected == action.id { focus.selected = scheduler.actions.actions.first { $0.id != action.id && !$0.isBuiltin }?.id }
+                scheduler.deleteAction(action.id)
+            }
         }
     }
 
@@ -157,12 +211,15 @@ struct ActionsView: View {
     }
 }
 
-/// An action in the list: its icon, name, steps in a few words, and how many schedules run it.
+/// An action in the list: its icon, name, steps in a few words, how many schedules run it, and
+/// how its last run by hand went.
 struct ActionRow: View {
     let action: SavedAction
     let selected: Bool
     let running: Bool
     let uses: Int
+    var last: ActionRunner.Outcome?
+    var ranAt: Date?
     @State private var hover = false
 
     var body: some View {
@@ -200,6 +257,13 @@ struct ActionRow: View {
                         }
                         Image(systemName: "calendar")
                         Text(uses == 0 ? "No schedule" : uses == 1 ? "1 schedule" : "\(uses) schedules")
+                        if let last, let ranAt {
+                            Image(systemName: last.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .foregroundStyle(last.ok ? Color.green.opacity(0.8) : Color.orange)
+                            Text(ranAt, style: .relative)
+                                .lineLimit(1)
+                                .help(last.ok ? "Last run by hand went fine" : "Last run by hand failed: \(last.output)")
+                        }
                     }
                 }
                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
@@ -339,6 +403,7 @@ struct ActionEditor: View {
                                        set: { new in if let i = action.steps.firstIndex(where: { $0.id == step.id }) { action.steps[i] = new } }),
                          scheduler: scheduler, actionID: action.id, parameters: action.parameters, shortcuts: shortcuts, ink: ink,
                          move: { by in move(step.id, by: by) },
+                         copy: { copyStep(step.id) },
                          remove: { action.steps.removeAll { $0.id == step.id } })
             }
             MenuPill(title: "Add a step", help: "Another step, done after the ones above",
@@ -346,6 +411,14 @@ struct ActionEditor: View {
                          (kind.title, false, { action.steps.append(StepCard.fresh(kind, settings: scheduler.prefs.settings, scheduler: scheduler, not: action.id)) })
                      })
         }
+    }
+
+    /// A copy of a step, right after it.
+    private func copyStep(_ id: String) {
+        guard let i = action.steps.firstIndex(where: { $0.id == id }) else { return }
+        var copy = action.steps[i]
+        copy.id = UUID().uuidString
+        withAnimation(.easeInOut(duration: 0.15)) { action.steps.insert(copy, at: i + 1) }
     }
 
     private func move(_ id: String, by: Int) {
@@ -366,15 +439,23 @@ struct ActionEditor: View {
                 PillButton(title: running ? "Running…" : "Run now", prominent: true) {
                     scheduler.runAction(action.id, arguments: runWith)
                 }
-                .disabled(running || action.steps.isEmpty)
-                .help("Run it now, with these values (what it gives back, or what went wrong, comes up on a card)")
+                .disabled(running || action.live.isEmpty)
+                .help("Run it now, with these values (what it gives back, or what went wrong, comes up on a card) · ⌘R")
                 if let last = scheduler.actionResults[action.id] {
                     Image(systemName: last.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(last.ok ? Color.green.opacity(0.8) : Color.orange)
-                    Text(last.output)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                        .foregroundStyle(.white.opacity(0.65))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(last.output)
+                            .lineLimit(3)
+                            .textSelection(.enabled)
+                            .foregroundStyle(.white.opacity(0.65))
+                        if let at = scheduler.actionRanAt[action.id] {
+                            (Text("Ran ") + Text(at, style: .relative) + Text(" ago"))
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                    }
+                    CopyButton(text: last.output)
                 }
             }
         }
@@ -478,6 +559,7 @@ struct StepCard: View {
     let shortcuts: [String]
     let ink: Double
     let move: (Int) -> Void
+    let copy: () -> Void
     let remove: () -> Void
 
     var settings: AppSettings { scheduler.prefs.settings }
@@ -489,7 +571,7 @@ struct StepCard: View {
                     .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.white)
                     .frame(width: 22, height: 22)
-                    .background(Circle().fill(JobRow.color(step.kind).opacity(0.85)))
+                    .background(Circle().fill(JobRow.color(step.kind).opacity(step.off ? 0.25 : 0.85)))
                 MenuPill(title: step.kind.title, help: Self.help(step.kind),
                          items: ActionStep.Kind.allCases.map { kind -> (String, Bool, () -> Void) in
                              (kind.title, step.kind == kind, {
@@ -500,11 +582,25 @@ struct StepCard: View {
                                  step.arguments = []
                              })
                          })
+                if step.off {
+                    Text("Off: skipped")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .padding(.horizontal, 7)
+                        .frame(height: 18)
+                        .background(Capsule().fill(.white.opacity(0.1)))
+                }
                 Spacer()
+                Toggle("", isOn: Binding(get: { !step.off }, set: { step.off = !$0 }))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .help(step.off ? "Off: it's skipped when the action runs. Click to turn it on." : "On: click to skip it (it's kept, to turn on again)")
                 GlassIcon(symbol: "chevron.up", help: "Do it earlier") { move(-1) }
                     .disabled(number == 1)
                 GlassIcon(symbol: "chevron.down", help: "Do it later") { move(1) }
                     .disabled(number == count)
+                GlassIcon(symbol: "plus.square.on.square", help: "A copy of this step, right after it", action: copy)
                 GlassIcon(symbol: "trash", help: "Take this step away", action: remove)
             }
             target
@@ -518,9 +614,11 @@ struct StepCard: View {
         }
         .font(.system(size: 12, weight: .medium, design: .rounded))
         .foregroundStyle(.white.opacity(0.8))
+        .opacity(step.off ? 0.55 : 1)
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.1), lineWidth: 0.5))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(step.off ? 0.02 : 0.05)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .stroke(.white.opacity(0.1), style: StrokeStyle(lineWidth: 0.5, dash: step.off ? [4, 3] : [])))
     }
 
     // MARK: What it does it with
@@ -577,8 +675,52 @@ struct StepCard: View {
             }
         case .runAction:
             runAction
+        case .addToNote:
+            noteTarget
+        case .wait:
+            waitTarget
         case .remind, .speak:
             EmptyView()
+        }
+    }
+
+    /// The note it adds to: picked from the notes with a title, by board.
+    var noteTarget: some View {
+        let notes = scheduler.noteChoices()
+        var items: [(String, Bool, () -> Void)] = []
+        for kind in BoardStore.kinds where notes.contains(where: { $0.board == kind }) {
+            items.append((MenuPill.heading + kind.name, false, {}))
+            for note in notes where note.board == kind {
+                let link = NoteLink(board: kind.id, box: note.index)
+                items.append((note.title ?? note.place, step.note == link, { step.target = ActionStep.target(link) }))
+            }
+        }
+        return HStack(spacing: 10) {
+            MenuPill(title: scheduler.noteName(step.note) ?? "Pick a note", help: "The note its text is added to (at the end, on a line of its own)",
+                     items: items)
+            if let link = step.note {
+                ActionChip(title: "Open it", symbol: "arrow.up.right", help: "Open the note on its board") {
+                    scheduler.openNote(link)
+                }
+            }
+            if notes.isEmpty { Text("No notes with a title yet").foregroundStyle(.white.opacity(0.5)) }
+        }
+    }
+
+    /// How long it waits: a few to pick from, or any number of seconds up to an hour.
+    var waitTarget: some View {
+        HStack(spacing: 8) {
+            Text("Wait")
+            TextField("", value: Binding(get: { step.seconds }, set: { step.target = "\(min(3600, max(1, $0)))" }), format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+            Text("seconds")
+            ForEach([5, 30, 60, 300, 900], id: \.self) { n in
+                PillButton(title: n < 60 ? "\(n) s" : "\(n / 60) min", prominent: step.seconds == n) { step.target = "\(n)" }
+            }
+            Text("then the next step (in test mode, 60 times faster)")
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(1)
         }
     }
 
@@ -672,7 +814,8 @@ struct StepCard: View {
             }
         case .shortcut: return "The shortcut's input (it can be empty)"
         case .webhook: return "Empty: what happened, as JSON. Or write your own, e.g. {\"text\": \"{{event}}\", \"battery\": \"{{battery}}\"}"
-        case .chime, .runAction: return ""
+        case .addToNote: return "What goes in the note, e.g. {{date}} {{time}}: {{last}}"
+        case .chime, .runAction, .wait: return ""
         }
     }
 
@@ -686,6 +829,8 @@ struct StepCard: View {
         case .webhook: return "The text is POSTed to a web address (a Cloudflare worker, say). Empty, what happened goes as JSON."
         case .chime: return "A ding and a card, like the day chime's or the night watch's."
         case .runAction: return "Another action runs, given values for its arguments; what it gives back is this step's."
+        case .addToNote: return "The text is added at the end of a note you pick, on a line of its own (a log, a journal, answers kept)."
+        case .wait: return "Waits a while before the next step; what the step before gave back goes on through it."
         }
     }
 
@@ -695,10 +840,45 @@ struct StepCard: View {
         case .tool: return ActionStep(kind: kind, target: BuiltinTool.Kind.soundAlarm.rawValue)
         case .shortcut: return ActionStep(kind: kind, target: settings.shortcuts.first?.shortcut ?? "")
         case .chime: return ActionStep(kind: kind, target: "day")
+        case .wait: return ActionStep(kind: kind, target: "30")
+        case .addToNote:
+            let note = scheduler.noteChoices().first
+            return ActionStep(kind: kind, target: note.map { ActionStep.target(NoteLink(board: $0.board.id, box: $0.index)) } ?? "",
+                              text: "{{time}}: {{last}}")
         case .runAction:
             let other = scheduler.actions.actions.first { $0.id != actionID && !$0.isBuiltin }
             return ActionStep(kind: kind, target: other?.id ?? "", arguments: other?.arguments(keeping: []) ?? [])
         default: return ActionStep(kind: kind)
         }
+    }
+}
+
+/// A field to search a list with: a magnifying glass, the text, and a ✕ to clear it.
+struct SearchField: View {
+    @Binding var text: String
+    let prompt: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.5))
+            TextField("", text: $text, prompt: Text(prompt).foregroundColor(.white.opacity(0.35)))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.9))
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+                .help("Clear the search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.white.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 0.5))
     }
 }

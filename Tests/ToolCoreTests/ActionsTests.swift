@@ -37,6 +37,52 @@ final class ActionsTests: XCTestCase {
         XCTAssertFalse(out.fresh)   // the last step said it already
     }
 
+    func testStepsTurnedOffAreSkipped() async {
+        let a = SavedAction(name: "A", steps: [ActionStep(kind: .remind, text: "one"),
+                                                ActionStep(kind: .speak, text: "two", off: true),
+                                                ActionStep(kind: .remind, text: "three {{last}}")])
+        let (out, done) = await run(a.id, ActionBook(actions: [a]))
+        XCTAssertEqual(done, ["one", "three remind:one"])
+        XCTAssertEqual(out.output, "remind:three remind:one")
+        XCTAssertEqual(a.summary, "Remind me, then Remind me (1 off)")
+        let none = SavedAction(name: "None", steps: [ActionStep(kind: .remind, off: true)])
+        let (failed, nothing) = await run(none.id, ActionBook(actions: [none]))
+        XCTAssertFalse(failed.ok)
+        XCTAssertTrue(nothing.isEmpty)
+    }
+
+    func testAWaitPassesTheLastOnThrough() async {
+        let a = SavedAction(name: "A", steps: [ActionStep(kind: .askModel, text: "q"),
+                                                ActionStep(kind: .wait, target: "2"),
+                                                ActionStep(kind: .remind, text: "got {{last}}"),
+                                                ActionStep(kind: .wait, target: "1")])
+        let (out, done) = await run(a.id, ActionBook(actions: [a]))
+        XCTAssertEqual(done, ["q", "", "got askModel:q", ""])
+        XCTAssertEqual(out.output, "remind:got askModel:q")
+        XCTAssertFalse(out.fresh)
+    }
+
+    func testWaitAndNoteTargets() {
+        XCTAssertEqual(ActionStep(kind: .wait, target: "90").seconds, 90)
+        XCTAssertEqual(ActionStep(kind: .wait, target: "soon").seconds, 5)
+        XCTAssertEqual(ActionStep(kind: .wait, target: "99999").seconds, 3600)
+        XCTAssertEqual(ActionStep.span(90), "1 minute 30 seconds")
+        XCTAssertEqual(ActionStep.span(1), "1 second")
+        let link = NoteLink(board: "goals", box: 3)
+        XCTAssertEqual(ActionStep(kind: .addToNote, target: ActionStep.target(link)).note, link)
+        XCTAssertNil(ActionStep(kind: .addToNote, target: "goals").note)
+        XCTAssertNil(ActionStep(kind: .addToNote, target: "#2").note)
+    }
+
+    func testOldStepsLoadTurnedOn() throws {
+        let json = #"{"id": "s", "kind": "remind", "text": "hi"}"#
+        let step = try JSONDecoder().decode(ActionStep.self, from: Data(json.utf8))
+        XCTAssertFalse(step.off)
+        let again = try JSONDecoder().decode(ActionStep.self, from: JSONEncoder().encode(ActionStep(kind: .wait, target: "3", off: true)))
+        XCTAssertTrue(again.off)
+        XCTAssertEqual(again.kind, .wait)
+    }
+
     func testArgumentsTakeTheirDefaultsWhenNotGiven() async {
         let a = SavedAction(name: "Greet", parameters: [ActionArgument(name: "who", value: "you"), ActionArgument(name: "how", value: "Hi")],
                             steps: [ActionStep(kind: .remind, text: "{{how}} {{who}} at {{time}}")])

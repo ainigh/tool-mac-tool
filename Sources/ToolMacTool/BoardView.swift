@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ToolCore
+import UniformTypeIdentifiers
 
 /// The boards (the Daily plan, the ten the app comes with and the ones named on the Boards grid):
 /// each a big glass panel of boxes (notes) to type into, kept in
@@ -147,7 +148,8 @@ struct BoardView: View {
             Text(board.name)
                 .font(.system(size: 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
-            Text(board.isGrid ? (shown == 1 ? "1 board" : "\(shown) boards") : shown == 1 ? "1 box" : "\(shown) boxes")
+            Text(board.isGrid ? (shown == 1 ? "1 board" : "\(shown) boards") + " · \(store.count(board)) in use"
+                              : (shown == 1 ? "1 box" : "\(shown) boxes") + " · \(store.count(board)) with text")
                 .font(.system(size: 13, weight: .medium, design: .rounded).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.5))
             if let problem = model.problem ?? (board.isGrid ? store.catalogProblem : nil) {
@@ -432,7 +434,9 @@ struct ResizeGrip: View {
 
 /// A box: a thin column down its left (its icon, a click to change it; its timers; its tags at
 /// the bottom), its text (the first line twice the size, as its title), the countdown of the timer
-/// it runs at its top middle, and copy, open (to fill the board), dock and pin down its top right. A
+/// it runs at its top middle, and copy, open (to fill the board), dock and pin down its top right,
+/// with the mic and the waveform under the pin (speak into it, or write down sound files: a sound
+/// file dropped anywhere on it does that too). A
 /// double-click steps it through the light colors. Above its bottom: its board's button (always,
 /// on its board's grid too), the notes it links to and + to link another. Pinned, it floats in a
 /// window of its own (a drag anywhere on it moves it).
@@ -455,18 +459,21 @@ struct BoardBox: View {
     /// On a board's grid: dragged anywhere to move it, by its corner to resize it.
     var arrange: BoxArrange?
     @State private var copied = false
+    /// A sound file is being dragged over it.
+    @State private var dropping = false
     @ObservedObject private var focus = FocusCenter.shared
 
     var body: some View {
         GeometryReader { g in
-            content(wide: g.size.width >= 340, roomy: g.size.width >= 300 && g.size.height >= 330, width: g.size.width)
+            content(wide: g.size.width >= 340, roomy: g.size.width >= 300 && g.size.height >= 330, width: g.size.width,
+                    tall: g.size.height >= 190)
                 .frame(width: g.size.width, height: g.size.height)
         }
     }
 
     /// `wide`: room for the buttons' words (else their first letters or icons); `roomy`: room to
-    /// play a YouTube video in the box.
-    private func content(wide: Bool, roomy: Bool, width: CGFloat) -> some View {
+    /// play a YouTube video in the box; `tall`: room for every button down its right.
+    private func content(wide: Bool, roomy: Bool, width: CGFloat, tall: Bool) -> some View {
         let box = model.board.boxes[index]
         let t = Board.tints[box.tint]
         let fill = Color(red: t.red, green: t.green, blue: t.blue)
@@ -488,8 +495,10 @@ struct BoardBox: View {
                 .padding(.horizontal, 3)
                 .padding(.top, 2)
                 BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, arrange: arrange,
-                          onDoubleClick: cycle)
+                          onDoubleClick: cycle, onDropSounds: dropped, onDragOver: { dropping = $0 })
                     .padding([.horizontal], 4)
+                // Speaking into it, or a sound file being written down into it.
+                NoteVoiceStrip(board: board, index: index)
                 LinkStrip(text: box.text, roomy: roomy, width: width - 40)
                     .padding(.horizontal, 4)
                 // The row above the bottom: its board (a click opens it), the notes it links to,
@@ -539,6 +548,8 @@ struct BoardBox: View {
                           tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
                     store.setPinned(!box.pinned, board, index)
                 }
+                // Under the pin: speak into the note, or write down sound files into it.
+                NoteVoiceButtons(store: store, board: board, index: index, both: tall)
             }
             .padding(.top, 2)
             .padding(.trailing, 3)
@@ -561,7 +572,26 @@ struct BoardBox: View {
         }
         .background(shape.fill(fill))
         .overlay(shape.strokeBorder(Color.black.opacity(0.08)))
+        .overlay {
+            // A sound file over it: let go to write it down into the note.
+            if dropping {
+                shape.fill(Color(red: 0.45, green: 0.32, blue: 0.9).opacity(0.12))
+                    .overlay(shape.strokeBorder(Color(red: 0.45, green: 0.32, blue: 0.9), style: StrokeStyle(lineWidth: 2.5, dash: [7, 5])))
+                    .overlay(Label("Drop to add what's said in it", systemImage: "waveform")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(Capsule().fill(Color(red: 0.45, green: 0.32, blue: 0.9))))
+                    .allowsHitTesting(false)
+            }
+        }
         .clipShape(shape)
+        // A sound file dropped on its edges (the text takes its own: `BoxEditor`).
+        .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
+            Self.fileURLs(providers) { urls in dropped(urls) }
+            return true
+        }
         // On a board's grid, a drag anywhere on it (its text too: `BoxEditor`) moves it to
         // another's place; its buttons and corner keep their own clicks and drags.
         .contentShape(shape)
@@ -574,6 +604,31 @@ struct BoardBox: View {
     private func cycle() {
         let tint = arrange?.nextTint() ?? Board.nextTint(after: model.board.boxes[index].tint)
         withAnimation(.easeInOut(duration: 0.2)) { model.board.boxes[index].tint = tint }
+    }
+
+    /// Sound files dropped on it: written down, and added at its end.
+    private func dropped(_ urls: [URL]) {
+        NoteVoice.shared.transcribe(urls, into: store, board, index)
+    }
+
+    /// The file addresses a drop carries, on the main thread once they're all read.
+    nonisolated static func fileURLs(_ providers: [NSItemProvider], done: @escaping ([URL]) -> Void) {
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for p in providers where p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            group.enter()
+            p.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url = (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) } ?? (item as? URL)
+                if let url {
+                    lock.lock()
+                    urls.append(url)
+                    lock.unlock()
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { done(urls) }
     }
 }
 
@@ -594,48 +649,121 @@ struct PinnedBox: View {
 }
 
 /// The + at the end of the row above a note's bottom: pick a note from any board to link to (it
-/// goes in that row, a click away).
+/// goes in that row, a click away). Dark on the light note, in a ring, so it's easy to see; the
+/// notes to pick from come up in a list to search.
 struct NoteLinkMenu: View {
     @ObservedObject var store: BoardStore
     let board: BoardStore.Kind
     let index: Int
-    /// What it links to now (ticked in the menu).
+    /// What it links to now (ticked in the list).
     let links: [NoteLink]
     @State private var hover = false
+    @State private var open = false
 
     var body: some View {
-        let linked = Set(links)
-        let notes = store.linkable(from: board, index)
-        Menu {
-            ForEach(BoardStore.kinds.filter { k in notes.contains { $0.board == k } }) { kind in
-                let onBoard = notes.filter { $0.board.id == kind.id }
-                if !onBoard.isEmpty {
-                    Menu(kind.name) {
-                        ForEach(onBoard) { note in
+        Button { open.toggle() } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(open ? Color.white : Color.black.opacity(hover ? 0.85 : 0.65))
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(open ? AnyShapeStyle(board.color) : AnyShapeStyle(Color.black.opacity(hover ? 0.14 : 0.08))))
+                .overlay(Circle().strokeBorder(Color.black.opacity(open ? 0 : 0.22), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressStyle())
+        .onHover { hover = $0 }
+        .help("Link a note from any board: it shows here, beside the notes it links to, a click away (pick it again to unlink)")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            NoteLinkPicker(store: store, board: board, index: index, links: links)
+        }
+    }
+}
+
+/// The notes a note can link to, from every board, to search: a click links one (or unlinks it).
+private struct NoteLinkPicker: View {
+    @ObservedObject var store: BoardStore
+    let board: BoardStore.Kind
+    let index: Int
+    let links: [NoteLink]
+    @State private var search = ""
+
+    var body: some View {
+        let linked = Set(store.model(board).board.boxes.indices.contains(index) ? store.model(board).board.boxes[index].links : links)
+        let words = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let notes = store.linkable(from: board, index).filter { note in
+            words.isEmpty || (note.title ?? "").lowercased().contains(words) || note.board.name.lowercased().contains(words)
+        }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Link a note").font(.headline)
+                Spacer()
+                Text(linked.isEmpty ? "None linked yet" : linked.count == 1 ? "1 linked" : "\(linked.count) linked")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            TextField("Search the notes", text: $search)
+                .textFieldStyle(.roundedBorder)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    if notes.isEmpty {
+                        Text(words.isEmpty ? "No notes with a title yet" : "No note matches \u{201C}\(search)\u{201D}")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    }
+                    ForEach(BoardStore.kinds.filter { k in notes.contains { $0.board == k } }) { kind in
+                        Label(kind.name, systemImage: kind.symbol)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(kind.color)
+                            .padding(.top, 6)
+                        ForEach(notes.filter { $0.board == kind }) { note in
                             let link = NoteLink(board: kind.id, box: note.index)
-                            Button {
+                            NoteLinkPickerRow(note: note, on: linked.contains(link)) {
                                 if linked.contains(link) { store.removeLink(link, board, index) } else { store.addLink(link, board, index) }
-                            } label: {
-                                Label((linked.contains(link) ? "✓ " : "") + (note.title ?? note.place), systemImage: note.icon)
                             }
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if notes.isEmpty { Text("No notes with a title yet") }
-        } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(hover ? 0.75 : 0.4))
-                .frame(width: 22, height: 18)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Color.black.opacity(hover ? 0.08 : 0)))
-                .contentShape(Rectangle())
+            .frame(height: 260)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .padding(12)
+        .frame(width: 300)
+    }
+}
+
+/// A note to link to: its icon on its color, its title, and a tick when it's linked.
+private struct NoteLinkPickerRow: View {
+    let note: BoardStore.Note
+    let on: Bool
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        let look = NoteLook.colors(tint: note.tint, board: note.board)
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: note.icon)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(look.ink)
+                    .frame(width: 18, height: 18)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(look.fill))
+                Text(note.title ?? note.place)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: on ? "checkmark.circle.fill" : "plus.circle")
+                    .foregroundStyle(on ? Color.green : Color.secondary)
+            }
+            .font(.system(size: 12.5, weight: on ? .semibold : .regular))
+            .padding(.horizontal, 6)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(hover ? 0.08 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .help("Link a note from any board: it shows here, beside the notes it links to, a click away (pick it again to unlink)")
+        .help(on ? "Linked: click to unlink it" : "Click to link it")
     }
 }
 
@@ -673,7 +801,7 @@ private struct NoteLinksRow: View {
         HStack(spacing: 5) {
             OpenBoardButton(board: board, help: onOwnBoard ? "On \(board.name): click to show its grid"
                                                          : "Open the \(board.name) board, with this note opened",
-                            action: openBoard)
+                            count: store.count(board), action: openBoard)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 5) {
                     ForEach(links, id: \.self) { link in
@@ -732,10 +860,13 @@ private struct NoteLinkChip: View {
     }
 }
 
-/// "⊞ Goals": the board a box belongs to (or, on the Boards grid, the board itself).
+/// "⊞ Goals 4": the board a box belongs to (or, on the Boards grid, the board itself), and how
+/// many notes it has.
 struct OpenBoardButton: View {
     let board: BoardStore.Kind
     var help: String?
+    /// Its notes with a title (nil: not shown).
+    var count: Int?
     let action: () -> Void
     @State private var hover = false
 
@@ -746,6 +877,15 @@ struct OpenBoardButton: View {
                     .foregroundStyle(board.color)
                 Text(board.name)
                     .lineLimit(1)
+                if let count, count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 9.5, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 15, minHeight: 14)
+                        .background(Capsule().fill(board.color))
+                        .help(count == 1 ? "1 note on \(board.name)" : "\(count) notes on \(board.name)")
+                }
             }
             .font(.system(size: 11, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.black.opacity(hover ? 0.8 : 0.55))
@@ -1202,8 +1342,10 @@ struct BoxButton: View {
 
 /// Text to type in, that says when it's double-clicked (SwiftUI's TextEditor keeps its clicks to
 /// itself), with its first line twice the size of the rest (the note's title), its second line
-/// halfway between the two, and its web addresses
-/// underlined: a click on one opens it in your browser. Dark on the light boxes; `ink` sets it
+/// halfway between the two (a rule under it once there's a third), a line starting "- " a little
+/// smaller than the nearest line above it that isn't one, and its web addresses
+/// underlined: a click on one opens it in your browser. A sound file dropped on it is handed to
+/// `onDropSounds` (to be written down and added to the note). Dark on the light boxes; `ink` sets it
 /// (white on the glass cards). With `dragsWindow` (a floating note), a press that moves drags the
 /// window; with `arrange` (a note on a board's grid), it drags the note to another's place. Either
 /// way a click still puts the caret there, and ⌥-drag selects.
@@ -1217,11 +1359,19 @@ struct BoxEditor: NSViewRepresentable {
     var dragsWindow = false
     var arrange: BoxArrange?
     var onDoubleClick: () -> Void = {}
+    /// Sound (or video) files dropped on the text; nil: a drop goes in as usual.
+    var onDropSounds: (([URL]) -> Void)?
+    /// A sound file is being dragged over it (true), or not any more.
+    var onDragOver: ((Bool) -> Void)?
 
     final class TextView: NSTextView {
         var onDoubleClick: (() -> Void)?
         var dragsWindow = false
         var arrange: BoxArrange?
+        var onDropSounds: (([URL]) -> Void)?
+        var onDragOver: ((Bool) -> Void)?
+        /// The rule under the second line.
+        var ruleColor = NSColor(white: 0, alpha: 0.18)
         /// The press became a drag of the note: what follows goes to the board, not the text.
         private var movingNote = false
 
@@ -1300,6 +1450,75 @@ struct BoxEditor: NSViewRepresentable {
             if let pasted = NSPasteboard.general.string(forType: .string) { LinkPreviews.shared.pasted(pasted) }
             pasteAsPlainText(sender)
         }
+
+        // MARK: The rule under the second line
+
+        override func drawBackground(in rect: NSRect) {
+            super.drawBackground(in: rect)
+            guard let y = ruleY() else { return }
+            let inset = textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 0)
+            ruleColor.setFill()
+            NSRect(x: inset, y: y, width: max(0, bounds.width - 2 * inset), height: 1).fill()
+        }
+
+        /// Halfway between the bottom of the second line and the top of the third (nil when
+        /// there's no third line).
+        private func ruleY() -> CGFloat? {
+            guard let lm = layoutManager, let storage = textStorage else { return nil }
+            let s = string as NSString
+            let lines = BoxEditor.lineRanges(s)
+            guard lines.count >= 3 else { return nil }
+            // The second line's break: its last line fragment, and how tall its text is.
+            let br = lines[1].location + lines[1].length
+            guard br < s.length else { return nil }
+            let brGlyph = lm.glyphIndexForCharacter(at: br)
+            let second = lm.lineFragmentRect(forGlyphAt: brGlyph, effectiveRange: nil)
+            let font = (storage.attribute(.font, at: lines[1].length > 0 ? br - 1 : br, effectiveRange: nil) as? NSFont)
+                ?? .systemFont(ofSize: 13)
+            let bottom = second.minY + lm.defaultLineHeight(for: font)
+            // The third line's top (an empty last line is the extra fragment).
+            let top: CGFloat
+            if lines[2].location < s.length {
+                top = lm.lineFragmentRect(forGlyphAt: lm.glyphIndexForCharacter(at: lines[2].location), effectiveRange: nil).minY
+            } else {
+                top = lm.extraLineFragmentRect.minY
+            }
+            let y = top > bottom ? (bottom + top) / 2 : top
+            return (y + textContainerOrigin.y).rounded()
+        }
+
+        // MARK: Sound files dropped on it
+
+        /// The sound and video files being dragged, if there are any.
+        private func sounds(_ info: NSDraggingInfo) -> [URL]? {
+            guard onDropSounds != nil else { return nil }
+            let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
+                                                           options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+            let found = urls.filter(NoteVoice.isSound)
+            return found.isEmpty ? nil : found
+        }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard sounds(sender) != nil else { return super.draggingEntered(sender) }
+            onDragOver?(true)
+            return .copy
+        }
+
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            sounds(sender) != nil ? .copy : super.draggingUpdated(sender)
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            onDragOver?(false)
+            super.draggingExited(sender)
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            onDragOver?(false)
+            guard let found = sounds(sender), let onDropSounds else { return super.performDragOperation(sender) }
+            onDropSounds(found)
+            return true
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1330,57 +1549,66 @@ struct BoxEditor: NSViewRepresentable {
 
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    /// How long the first line is (up to its line break), in UTF-16 units.
-    static func titleLength(_ string: NSString) -> Int {
-        let br = string.rangeOfCharacter(from: .newlines)
-        return br.location == NSNotFound ? string.length : br.location
+    /// Each line's range (up to its line break), in UTF-16 units: as many as `NoteText.lines`.
+    static func lineRanges(_ string: NSString) -> [NSRange] {
+        var out: [NSRange] = []
+        var start = 0
+        while true {
+            let br = string.range(of: "\n", options: [], range: NSRange(location: start, length: string.length - start))
+            guard br.location != NSNotFound else {
+                out.append(NSRange(location: start, length: string.length - start))
+                return out
+            }
+            out.append(NSRange(location: start, length: br.location - start))
+            start = br.location + 1
+        }
     }
 
-    /// The second line: from after the first line's break up to its own (nil when there's no
-    /// second line yet).
-    static func secondLine(_ string: NSString) -> NSRange? {
-        let first = titleLength(string)
-        guard first < string.length else { return nil }
-        let start = first + 1
-        let rest = NSRange(location: start, length: string.length - start)
-        let br = string.rangeOfCharacter(from: .newlines, options: [], range: rest)
-        return NSRange(location: start, length: (br.location == NSNotFound ? string.length : br.location) - start)
+    /// Each line's range and font: the title semibold, the second line medium, the rest regular,
+    /// each its size (`NoteText.scales`: a "- " line a little smaller than the line it's under).
+    static func lineFonts(_ string: NSString, size: CGFloat, titleScale: CGFloat) -> [(range: NSRange, font: NSFont)] {
+        let ranges = lineRanges(string)
+        let scales = NoteText.scales(ranges.map { string.substring(with: $0) }, titleScale: Double(titleScale))
+        return ranges.indices.map { i in
+            (ranges[i], .systemFont(ofSize: max(8, (size * CGFloat(scales[i])).rounded()),
+                                    weight: i == 0 ? .semibold : i == 1 ? .medium : .regular))
+        }
     }
 
-    static func fonts(_ size: CGFloat, _ scale: CGFloat) -> (body: NSFont, title: NSFont, second: NSFont) {
-        (.systemFont(ofSize: size), .systemFont(ofSize: (size * scale).rounded(), weight: .semibold),
-         .systemFont(ofSize: (size * (1 + scale) / 2).rounded(), weight: .medium))
-    }
-
-    /// The whole text in its look: the first line big, the rest the size of the box, every web
-    /// address a link (and nothing else, whatever was pasted or dropped in).
+    /// The whole text in its look: the first line big, the second a little smaller (and a rule
+    /// under it once there's a third), the rest the size of the box ("- " lines a little smaller),
+    /// every web address a link (and nothing else, whatever was pasted or dropped in).
     static func style(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
         guard let storage = tv.textStorage else { return }
-        let f = fonts(size, titleScale)
         let all = NSRange(location: 0, length: storage.length)
-        let title = titleLength(storage.string as NSString)
+        let lines = lineFonts(storage.string as NSString, size: size, titleScale: titleScale)
         storage.beginEditing()
-        storage.setAttributes([.font: f.body, .foregroundColor: ink], range: all)
-        if title > 0 { storage.addAttribute(.font, value: f.title, range: NSRange(location: 0, length: title)) }
-        if let second = secondLine(storage.string as NSString), second.length > 0 { storage.addAttribute(.font, value: f.second, range: second) }
+        storage.setAttributes([.font: NSFont.systemFont(ofSize: size), .foregroundColor: ink], range: all)
+        for line in lines where line.range.length > 0 { storage.addAttribute(.font, value: line.font, range: line.range) }
+        if lines.count >= 3 {
+            // Room under the second line for its rule.
+            let room = NSMutableParagraphStyle()
+            room.paragraphSpacing = (size * 0.7).rounded()
+            let second = lines[1].range
+            storage.addAttribute(.paragraphStyle, value: room, range: NSRange(location: second.location, length: second.length + 1))
+        }
         if let detector {
             for match in detector.matches(in: storage.string, range: all) {
                 if let url = match.url { storage.addAttribute(.link, value: url, range: match.range) }
             }
         }
         storage.endEditing()
+        tv.needsDisplay = true
         matchTyping(tv, size: size, titleScale: titleScale, ink: ink)
     }
 
     /// What's typed next takes the size of the line the caret is on.
     static func matchTyping(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
-        let f = fonts(size, titleScale)
         let at = tv.selectedRange().location
-        let string = tv.string as NSString
-        let onTitle = at <= titleLength(string)
-        let onSecond = secondLine(string).map { at >= $0.location && at <= $0.location + $0.length } ?? false
+        let lines = lineFonts(tv.string as NSString, size: size, titleScale: titleScale)
+        let line = lines.last { $0.range.location <= at } ?? lines[0]
         var attributes = tv.typingAttributes
-        attributes[.font] = onTitle ? f.title : onSecond ? f.second : f.body
+        attributes[.font] = line.font
         attributes[.foregroundColor] = ink
         attributes[.link] = nil
         tv.typingAttributes = attributes
@@ -1395,6 +1623,8 @@ struct BoxEditor: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         let tv = TextView(frame: .zero)
+        // The rule under the second line is drawn from the layout manager's lines (TextKit 1).
+        _ = tv.layoutManager
         tv.minSize = .zero
         tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         tv.isVerticallyResizable = true
@@ -1421,6 +1651,9 @@ struct BoxEditor: NSViewRepresentable {
         tv.onDoubleClick = onDoubleClick
         tv.dragsWindow = dragsWindow
         tv.arrange = arrange
+        tv.onDropSounds = onDropSounds
+        tv.onDragOver = onDragOver
+        tv.ruleColor = ink.withAlphaComponent(0.2)
         scroll.documentView = tv
         context.coordinator.fontSize = fontSize
         Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink)
@@ -1433,6 +1666,8 @@ struct BoxEditor: NSViewRepresentable {
         tv.onDoubleClick = onDoubleClick
         tv.dragsWindow = dragsWindow
         tv.arrange = arrange
+        tv.onDropSounds = onDropSounds
+        tv.onDragOver = onDragOver
         var restyle = false
         if tv.string != text {
             tv.string = text

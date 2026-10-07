@@ -32,7 +32,7 @@ struct BoardsRow: View {
     }
 
     private func tile(_ kind: BoardStore.Kind, color: Color? = nil, help: String? = nil) -> some View {
-        BoardTile(kind: kind, color: color ?? kind.color, help: help, inMenuBar: store.isInMenuBar(kind.id),
+        BoardTile(kind: kind, color: color ?? kind.color, help: help, count: store.count(kind), inMenuBar: store.isInMenuBar(kind.id),
                   open: {
                       MenuPanel.close()
                       store.show(kind.id)
@@ -41,15 +41,23 @@ struct BoardsRow: View {
     }
 }
 
-/// A board: its icon and name on its own color. Right-click to dock it in the menu bar.
+/// A board: its icon and name on its own color, and how many notes it has (on the Boards button,
+/// how many boards). Right-click to dock it in the menu bar.
 private struct BoardTile: View {
     let kind: BoardStore.Kind
     let color: Color
     let help: String?
+    /// Its notes with a title (the Boards button: the boards in use).
+    let count: Int
     let inMenuBar: Bool
     let open: () -> Void
     let dock: (Bool) -> Void
     @State private var hover = false
+
+    private var countText: String {
+        if kind.isGrid { return count == 1 ? "1 board in use." : "\(count) boards in use." }
+        return count == 0 ? "No notes yet." : count == 1 ? "1 note." : "\(count) notes."
+    }
 
     var body: some View {
         Button(action: open) {
@@ -68,6 +76,9 @@ private struct BoardTile: View {
             .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(color.gradient))
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(.white.opacity(hover ? 0.45 : 0.12), lineWidth: 1))
             .overlay(alignment: .topTrailing) {
+                if count > 0 { CountBadge(count: count, color: color).padding(4) }
+            }
+            .overlay(alignment: .topLeading) {
                 if inMenuBar {
                     Image(systemName: "menubar.rectangle")
                         .font(.system(size: 8, weight: .bold))
@@ -82,7 +93,7 @@ private struct BoardTile: View {
         }
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
-        .help("\(help ?? "\(kind.name): a board of notes.") Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
+        .help("\(help ?? "\(kind.name): a board of notes.") \(countText) Right-click to \(inMenuBar ? "take it out of" : "dock it in") the menu bar.")
         .contextMenu {
             Button("Open \(kind.name)", action: open)
             Button(inMenuBar ? "Take out of the menu bar" : "Dock in the menu bar (beside the wrench)") { dock(!inMenuBar) }
@@ -343,7 +354,7 @@ struct DockRow: View {
             VStack(alignment: .leading, spacing: 0) {
                 Divider()
                 VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: "Docked notes", color: Tools.dockColor)
+                    SectionHeader(title: "Docked notes · \(notes.count)", color: Tools.dockColor)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 66, maximum: 80), spacing: 6)], alignment: .leading, spacing: 6) {
                         ForEach(notes) { note in
                             DockedNoteTile(note: note, timer: store.upcoming.first { $0.id == note.id }?.spec,
@@ -414,5 +425,22 @@ private struct DockedNoteTile: View {
             Divider()
             Button("Undock", action: undock)
         }
+    }
+}
+
+/// How many things a board holds: a small white capsule with the number, in the board's color.
+struct CountBadge: View {
+    let count: Int
+    let color: Color
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 9.5, weight: .bold, design: .rounded).monospacedDigit())
+            .foregroundStyle(color)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 15)
+            .background(Capsule().fill(.white))
+            .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.18), radius: 1.5, y: 0.5)
     }
 }
