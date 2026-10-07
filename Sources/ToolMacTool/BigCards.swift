@@ -94,7 +94,9 @@ final class BigCards {
         panel.setFrameOrigin(spot.origin(for: size, in: v))
         let mine = (shown[id] ?? 0) + 1
         shown[id] = mine
-        panel.alphaValue = 0
+        // Already up (shown again, or fading out): carry on from where it is rather than blinking
+        // out and back in.
+        if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.25
@@ -196,6 +198,7 @@ struct BigCard<Extra: View>: View {
                     .font(.system(size: max(13, h * 0.04), weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer(minLength: 8)
                 if let close { GlassIcon(symbol: "xmark", help: "Close (Esc)", action: close) }
             }

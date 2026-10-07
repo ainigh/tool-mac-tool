@@ -362,7 +362,7 @@ struct FocusCard: View {
             switch s.phase {
             case .ringing:
                 if s.canSnooze {
-                    BigButton(title: "Snooze 3 min", symbol: "zzz", height: h) { focus.snooze() }
+                    BigButton(title: "Snooze \(TimerText.duration(FocusSession.snooze))", symbol: "zzz", height: h) { focus.snooze() }
                         .help("Quiet for 3 minutes, then it rings again (once a round)")
                 }
                 BigButton(title: "Pending", symbol: "clock", height: h) { focus.pending() }
@@ -371,8 +371,11 @@ struct FocusCard: View {
                     .help("Done: it's unpinned, the next note is pinned, and a 3-minute rest starts")
             case .snoozed:
                 BigButton(title: "Pending", symbol: "clock", height: h) { focus.pending() }
+                    .help("Not done yet: a 3-minute rest, then another round on this note")
                 BigButton(title: "Completed", symbol: "checkmark", height: h) { focus.complete() }
+                    .help("Done: it's unpinned, the next note is pinned, and a 3-minute rest starts")
                 BigButton(title: "OK", prominent: true, height: h) { BigCards.shared.hide(FocusCenter.cardID) }
+                    .help("Put the card away: it rings again when the snooze is over")
             case .focus:
                 BigButton(title: "Completed", symbol: "checkmark", height: h) { focus.complete() }
                     .help("Done already: the next note is pinned and the rest starts now")
@@ -516,6 +519,7 @@ struct FocusBar: View {
                         }
                         .buttonStyle(.plain)
                         .help("Completed: the next note is pinned and the rest starts")
+                        .accessibilityLabel("Completed")
                     }
                 }
                 .foregroundStyle(.white)

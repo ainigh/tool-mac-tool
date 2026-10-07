@@ -231,6 +231,10 @@ struct GlassCard: View {
             GlassLayers(frame: f, swell: swell, radius: radius)
         }
         .scaleEffect(swell ? 1.03 : 1)
+        // Puffs up with a little bounce and settles slowly (as Chat asks for it), so a swell set
+        // without an animation (Voice chat's) doesn't jump in size while the rest of it eases.
+        .animation(swell ? Animation.spring(response: 0.6, dampingFraction: 0.55) : Animation.timingCurve(0.45, 0, 0.2, 1, duration: 2.6),
+                   value: swell)
     }
 }
 
@@ -358,6 +362,7 @@ struct GlassIcon: View {
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.12), value: hover)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 

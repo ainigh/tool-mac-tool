@@ -261,10 +261,14 @@ struct PermissionsView: View {
                 }
                 Spacer(minLength: 12)
                 Button(action: close) {
+                    // A bigger target than the little cross itself.
                     Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Close")
+                .accessibilityLabel("Close")
             }
             ForEach(Permissions.Item.allCases) { item in
                 row(item)
