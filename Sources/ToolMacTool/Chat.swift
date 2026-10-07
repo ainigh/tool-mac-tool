@@ -314,7 +314,9 @@ final class ChatModel: ObservableObject {
                 + "and never pretend you ran one.")
         }
         if memoryOn {
-            parts.append(MemoryStore.prompt(memory: memory.read(), instruction: s.memoryPrompt))
+            // Cleared on screen while a new one's written: the default, as is saved.
+            let blank = s.memoryPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            parts.append(MemoryStore.prompt(memory: memory.read(), instruction: blank ? MemoryStore.defaultInstruction : s.memoryPrompt))
         }
         parts.append(NowContext.describe(now, zone: s.zone, location: s.location, clock24: s.clock24))
         if s.shareMacInfo { parts.append(MacFacts.describe(now: now, zone: s.zone)) }

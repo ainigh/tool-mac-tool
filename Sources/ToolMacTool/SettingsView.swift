@@ -36,6 +36,7 @@ struct SettingsView: View {
                         ForEach(modelChoices(including: prefs.settings.model), id: \.self) { Text($0.isEmpty ? "None yet" : $0).tag($0) }
                     }
                     Button("Look again", action: loadModels)
+                        .help("Ask Ollama for its models again")
                 }
                 Picker("Diagram model", selection: $prefs.settings.diagramModel) {
                     Text("Same as the chat").tag("")
@@ -45,12 +46,12 @@ struct SettingsView: View {
                     ErrorLine(text: modelProblem)
                 }
                 Picker("Context window", selection: $prefs.settings.contextTokens) {
-                    ForEach(Self.contexts, id: \.self) { n in Text("\(n / 1024)K tokens").tag(n) }
+                    ForEach(contextChoices, id: \.self) { n in Text("\(n / 1024)K tokens").tag(n) }
                 }
                 LabeledContent("Temperature") {
                     HStack {
                         Slider(value: $prefs.settings.temperature, in: 0...1.5, step: 0.05)
-                        Text(String(format: "%.2f", prefs.settings.temperature)).monospacedDigit().frame(width: 40)
+                        Text(String(format: "%.2f", prefs.settings.temperature)).monospacedDigit().frame(width: 40, alignment: .trailing)
                     }
                 }
                 Picker("Thinking (reasoning models)", selection: $prefs.settings.thinking) {
@@ -73,7 +74,7 @@ struct SettingsView: View {
                 HStack {
                     Picker("System prompt", selection: $prefs.settings.promptID) {
                         ForEach(Array(prefs.settings.prompts.enumerated()), id: \.element.id) { i, p in
-                            Text("\(p.name)  ⌘\(i + 1)").tag(p.id)
+                            Text("\(p.name.isEmpty ? "Untitled" : p.name)  ⌘\(i + 1)").tag(p.id)
                         }
                     }
                     Button("Edit…") { PromptsWindow.show() }
@@ -103,6 +104,8 @@ struct SettingsView: View {
                     ForEach(NeuralVoice.all, id: \.id) { v in Text(VoiceSettings.label(v)).tag(v.id) }
                 }
                 .onChange(of: voice) { id in
+                    // Already the voice when it was picked in the Personas tab: no second preview.
+                    guard VoiceSettings.voice.id != id else { return }
                     VoiceSettings.voice = NeuralVoice.named(id)
                     Speaker.preview()
                 }
@@ -110,7 +113,7 @@ struct SettingsView: View {
                     HStack {
                         Slider(value: $speed, in: 0.6...1.6, step: 0.05)
                             .onChange(of: speed) { VoiceSettings.speed = $0 }
-                        Text(String(format: "%.2f×", speed)).monospacedDigit().frame(width: 48)
+                        Text(String(format: "%.2f×", speed)).monospacedDigit().frame(width: 48, alignment: .trailing)
                     }
                 }
             }
@@ -165,12 +168,23 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 500, minHeight: 500)
         .onAppear(perform: loadModels)
+        // The voice can also be picked in the Personas tab, which says so through prefs.
+        .onReceive(prefs.objectWillChange) { _ in
+            if voice != VoiceSettings.voice.id { voice = VoiceSettings.voice.id }
+        }
         .alert("Reset all settings?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive) { prefs.reset() }
             Button("Cancel", role: .cancel) {}
+                .keyboardShortcut(.defaultAction)
         } message: {
             Text("Prompts, personas, the memory prompt and the chat's defaults go back to how they started. The address and model stay, and MEMORY.md isn't touched.")
         }
+    }
+
+    /// The usual sizes, plus the one in the settings file when it's another (so the picker isn't blank).
+    var contextChoices: [Int] {
+        let current = prefs.settings.contextTokens
+        return Self.contexts.contains(current) ? Self.contexts : (Self.contexts + [current]).sorted()
     }
 
     func modelChoices(including current: String) -> [String] {
@@ -271,6 +285,8 @@ struct SystemPromptsPane: View {
                     ForEach(Array(prompts.enumerated()), id: \.element.id) { i, p in
                         HStack {
                             Text(p.name.isEmpty ? "Untitled" : p.name)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                             Spacer()
                             if p.id == prefs.settings.promptID {
                                 Image(systemName: "star.fill").foregroundStyle(.yellow).help("Used in new chats")
@@ -286,18 +302,21 @@ struct SystemPromptsPane: View {
                     Button { add(SystemPrompt(name: "New prompt", text: "You are Glass, a helpful assistant.")) } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Add a prompt")
                     .disabled(prompts.count >= SystemPrompt.limit)
                     .help(prompts.count >= SystemPrompt.limit ? "Nine is the most (one for each of ⌘1 to ⌘9)" : "Add a prompt")
                     Button { remove() } label: { Image(systemName: "minus") }
                         .disabled(selected == nil || prompts.count <= 1)
-                        .help("Delete the selected prompt")
+                        .help(prompts.count <= 1 ? "There has to be at least one prompt" : "Delete the selected prompt")
+                        .accessibilityLabel("Delete the selected prompt")
                     Button {
                         if let p = current { add(SystemPrompt(name: p.name + " copy", text: p.text)) }
                     } label: { Image(systemName: "plus.square.on.square") }
                         .disabled(current == nil || prompts.count >= SystemPrompt.limit)
-                        .help("Duplicate it")
+                        .help("Duplicate the selected prompt")
+                        .accessibilityLabel("Duplicate the selected prompt")
                     Spacer()
-                    Text("\(prompts.count) of \(SystemPrompt.limit)").font(.caption).foregroundStyle(.secondary)
+                    Text("\(prompts.count) of \(SystemPrompt.limit)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 }
                 Button("Restore the default prompts…") { confirmRestore = true }
                     .controlSize(.small)
@@ -337,6 +356,7 @@ struct SystemPromptsPane: View {
                 selected = prefs.settings.promptID
             }
             Button("Cancel", role: .cancel) {}
+                .keyboardShortcut(.defaultAction)
         } message: {
             Text("Your own prompts and edits are replaced by the six that came with the app.")
         }
@@ -408,6 +428,8 @@ struct PersonasPane: View {
                 ForEach(NeuralVoice.all, id: \.id) { v in
                     HStack {
                         Text(Persona.for(v.id, in: prefs.settings.personas).name)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Spacer()
                         Text(v.female ? "woman" : "man").foregroundStyle(.secondary)
                         if v == VoiceSettings.voice {
@@ -433,14 +455,16 @@ struct PersonasPane: View {
                 HStack {
                     Text("Used \(scope).").font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Use this voice") {
+                    Button(VoiceSettings.voice.id == selected ? "The voice in use" : "Use this voice") {
                         VoiceSettings.voice = NeuralVoice.named(selected)
                         prefs.objectWillChange.send()
                         Speaker.preview()
                     }
+                    .disabled(VoiceSettings.voice.id == selected)
                     Button("Restore default") {
                         if let d = Persona.defaults.first(where: { $0.voice == selected }) { set(d) }
                     }
+                    .disabled(Persona.defaults.first(where: { $0.voice == selected }).map { $0 == Persona.for(selected, in: prefs.settings.personas) } ?? true)
                 }
             }
         }

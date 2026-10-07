@@ -122,7 +122,7 @@ struct ToolsView: View {
                                 Image(systemName: t.enabled ? "checkmark.circle.fill" : "circle")
                                     .foregroundStyle(t.enabled ? Color.accentColor : .secondary)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(t.shortcut)
+                                    Text(t.shortcut).lineLimit(1).truncationMode(.middle)
                                     Text(t.returnsText ? "text in, text back" : "one way")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
@@ -155,6 +155,7 @@ struct ToolsView: View {
                         Button { remove() } label: { Image(systemName: "minus") }
                             .disabled(selected == nil)
                             .help("Take the selected shortcut out (the shortcut itself stays)")
+                            .accessibilityLabel("Take the selected shortcut out")
                         Spacer()
                         Button("Open Shortcuts") {
                             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Shortcuts.app"))
@@ -216,6 +217,9 @@ struct ToolEditor: View {
     @State private var result: String?
     @State private var failed = false
     @State private var running = false
+    /// The tool the run under way is for (nil once another is picked), so its result isn't shown
+    /// under a different one.
+    @State private var trying: String?
 
     var tool: ShortcutTool { prefs.settings.shortcuts.first { $0.id == id } ?? ShortcutTool(shortcut: "") }
 
@@ -285,7 +289,11 @@ struct ToolEditor: View {
             }
             .padding(.trailing, 6)
         }
-        .onChange(of: id) { _ in result = nil }
+        .onChange(of: id) { _ in
+            result = nil
+            failed = false
+            trying = nil
+        }
     }
 
     func binding<T>(_ key: WritableKeyPath<ShortcutTool, T>) -> Binding<T> {
@@ -298,17 +306,25 @@ struct ToolEditor: View {
     }
 
     func tryIt() {
+        // Return in the box runs it too, so the button's disabled state isn't enough.
+        guard !running, !tool.shortcut.isEmpty else { return }
         let t = tool
         running = true
+        trying = t.id
         Task {
+            let got: String, bad: Bool
             do {
-                result = try await ShortcutRunner.run(t.shortcut, input: trial, returnsText: t.returnsText)
-                failed = false
+                got = try await ShortcutRunner.run(t.shortcut, input: trial, returnsText: t.returnsText)
+                bad = false
             } catch {
-                result = "\(t.shortcut) failed: \(error.localizedDescription)"
-                failed = true
+                got = "\(t.shortcut) failed: \(error.localizedDescription)"
+                bad = true
             }
             running = false
+            // Another tool picked meanwhile: this result isn't its.
+            guard trying == t.id else { return }
+            result = got
+            failed = bad
         }
     }
 }
