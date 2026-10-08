@@ -85,7 +85,13 @@ final class AppModel: ObservableObject {
         timers.start()
         boards.start()
         groups.restore()
-        toolDock.sync()
+        // The tools docked in the menu bar go up once the app has started, as the boards' icons
+        // do: a menu bar item made this early (inside the app's own setting up) stops the launch
+        // with a crash.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            self?.toolDock.sync()
+        }
         // Talk to type listens for its key from launch on, when it's on.
         TalkToType.shared.start()
         // Just installed or updated: the permissions, one at a time, where macOS's questions show.
