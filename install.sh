@@ -13,7 +13,7 @@ set -euo pipefail
 REPO="ainigh/tool-mac-tool" 
 BRANCH="${TMT_BRANCH:-main}"
 APPS="$HOME/Applications" 
-NAME="ToolMacTool" 
+NAME="ToolMacTool"  
  
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
