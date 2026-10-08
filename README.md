@@ -162,7 +162,10 @@ too.
 
 ## The tools
 
-Each tile opens that tool's window.
+Each tile opens that tool's window. **Any tool can sit in the menu bar** beside the wrench, as
+boards can: hover over its tile and click the small menu-bar icon in its corner (or right-click
+the tile, **Dock in the menu bar**). A click on its icon in the menu bar opens the tool straight
+away, without the panel; right-click the icon to take it out.
 
 ### Unzip to Desktop (Files)
 
@@ -194,7 +197,7 @@ replaced. If Downloads or the Desktop can't be read, the list says so and links 
 setting. The zip stays in Downloads. A card also comes up in the middle of the screen with a
 **Show in Finder** button, and stays until you click **OK**.
 
-### Read aloud, Dictate, Transcribe (Voice)
+### Read aloud, Dictate, Talk to type, Transcribe (Voice)
 
 These speak and listen with open-source models that run on this Mac, through
 [FluidAudio](https://github.com/FluidInference/FluidAudio) on Apple's Neural Engine: the
@@ -221,6 +224,17 @@ was refused, the tool says so and **Open Settings** goes to the right page.
   note** (⌘S), which adds it to that day's `glass-dictation-<date>.md` in the Glass folder (where
   Glass keeps its own dictations, so its transcript view lists them) and empties the box for the
   next one. What you're writing is kept if you close the window.
+- **Talk to type.** Dictate into any text field on the Mac, a browser's especially. Turn it on in
+  its window, then anywhere: **hold right ⌥** (or right ⌘, or Fn: pick in the window), talk, and
+  **let go**. What you said is written down here (Parakeet, as Dictate does) and typed where the
+  cursor is. **Tap** the key instead to keep listening hands-free until you tap it again; **Esc**
+  drops it; pressing the key with another (⌥E for é) is left as the shortcut it is. A pill near
+  the bottom of the screen shows it listening and what it's heard, without taking the keyboard
+  from the app you're in. It types by putting the words on the clipboard and pressing ⌘V, then
+  puts the clipboard back as it was. Hearing the key in other apps and typing there needs
+  **Accessibility** (System Settings → Privacy & Security → Accessibility): the window asks for it
+  and says whether it's on. The app is ad-hoc signed, so after an update macOS may want it turned
+  off and on again there. The window also lists what it typed lately, to copy again.
 - **Transcribe.** Drop an audio file on the window (mp3, m4a, wav, aiff, or a video's sound), or
   **Choose file…**. Its lines come in as they're done, each with its time, and the line under the
   status fills up as it goes. **Copy** it, or save it as `.txt`, `.srt` or `.vtt` subtitles. Long
@@ -877,7 +891,7 @@ Sources/ToolCore/             the tools' logic: redaction (the map, the model's 
                               (a page's title and icons, YouTube addresses), zips, memory, chat context, Ollama's replies, reply Markdown,
                               settings, prompts and personas, the date and time for the model, diagrams,
                               shortcuts as tools and tool calls,
-                              spoken text and sentences, captions, phrases, voices, dictation files,
+                              spoken text and sentences, captions, phrases, voices, dictation files, the Talk to type key (hold, tap, Esc),
                               recordings (names, transcripts, the box on screen), schedules (when jobs run,
                               their placeholders, events, web calls, built-in chimes, history), actions (steps, arguments, running
                               them in turn and one another, separating old jobs into actions), timers (what's due when,
@@ -885,7 +899,7 @@ Sources/ToolCore/             the tools' logic: redaction (the map, the model's 
                               and its steps), boards (notes, their colors, timers, pins, icons, tags and dock, Daily/Weekly/Monthly
                               and To do/Pending/Completed, the grid), the board catalog (names, icons,
                               descriptions; when the Daily plan opens), updates
-                              (testable anywhere)
+                              (testable anywhere); where a window may sit (its top on a screen)
 Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzip, the battery, the menu bar's
                               countdown), PanelRows (the boards row, the chimes' tiles, the Timers column, the tags'
                               boards, the docked notes), Tools (the registry), Windows,
@@ -894,6 +908,8 @@ Sources/ToolMacTool/          App (menu bar), MenuView (the panel), TopRow (Unzi
                               tools, the alarm, this Mac), BuildTools,
                               Preferences + SettingsView (settings, prompts, personas), Neural (the speech
                               models), Voice (speak, listen, transcribe) + VoiceTools (their windows),
+                              TalkToType (dictating into any app: the key, the pill, typing it), ToolDock
+                              (tools in the menu bar),
                               ScreenRecorder (the box, the bar, recording the screen), RecordingsView
                               (Record audio, the Recordings gallery), Scheduler + SchedulerView (jobs at set
                               times or on events running actions, the built-in chimes, the result card, the

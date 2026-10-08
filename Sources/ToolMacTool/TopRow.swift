@@ -15,7 +15,7 @@ struct TopRow: View {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 0) {
                     SectionHeader(title: files.title, color: files.color, groups: model.groups, pinID: files.id)
-                    ToolTile(tool: Tools.unzip, color: files.color) { model.open(Tools.unzip) }
+                    DockableToolTile(tool: Tools.unzip, color: files.color, dock: model.toolDock) { model.open(Tools.unzip) }
                 }
                 .frame(width: MenuView.tile)
                 BatteryPanel(board: model.timers, activity: model.activity, color: Tools.batteryColor, groups: model.groups)
