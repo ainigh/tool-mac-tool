@@ -9,7 +9,7 @@
 # TMT_FROM_SOURCE=1), it downloads the source of main (TMT_BRANCH=name for another branch) and
 # builds it here with Apple's command line tools. The app then follows that branch for updates.
 set -euo pipefail
-
+ 
 REPO="ainigh/tool-mac-tool" 
 BRANCH="${TMT_BRANCH:-main}"
 APPS="$HOME/Applications" 
