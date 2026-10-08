@@ -459,6 +459,7 @@ final class BoardStore: ObservableObject {
             }
             panel.setFrameOrigin(origin)
         }
+        Windows.keepOnScreen(panel)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
@@ -860,11 +861,12 @@ final class BoardStore: ObservableObject {
         panel.contentView = host
         panel.commands = ["w": { [weak self] in self?.setPinned(false, board, i) }]
         let name = "ToolMacTool.\(id)"
-        if !panel.setFrameUsingName(name), let v = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+        if !panel.setFrameUsingName(name) {
             // Down the right of the screen, each new one a little in from the last.
-            let n = CGFloat(pins.count % 8)
+            let v = Windows.visibleFrame, n = CGFloat(pins.count % 8)
             panel.setFrameOrigin(NSPoint(x: v.maxX - 360 - n * 26, y: v.maxY - 300 - n * 26))
         }
+        Windows.keepOnScreen(panel)
         panel.setFrameAutosaveName(name)
         pins[id] = panel
         panel.orderFrontRegardless()

@@ -354,7 +354,7 @@ enum YouTubeWindow {
     static func show(id: String, start: Int?, title: String) {
         let key = "youtube-\(id)"
         Windows.show(key) {
-            let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let screen = Windows.visibleFrame
             let size = NSSize(width: 800, height: 500)
             let panel = GlassPanel(size: size, resizable: true)
             panel.level = .floating

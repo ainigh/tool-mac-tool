@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import ToolCore
 
 /// The tools' windows: one of each, made on first use and brought back after that.
 @MainActor
@@ -21,7 +22,7 @@ enum Windows {
         w.titlebarAppearsTransparent = true
         w.isReleasedWhenClosed = false
         w.contentView = FirstClickHostingView(rootView: content())
-        w.center()
+        center(w)
         w.setFrameAutosaveName("ToolMacTool.\(id)")
         windows[id] = w
         bringForward(w)
@@ -37,11 +38,58 @@ enum Windows {
     static func window(_ id: String) -> NSWindow? { windows[id] }
 
     static func bringForward(_ w: NSWindow) {
+        watchScreens()
         // A menu bar app isn't frontmost by itself: come forward, or the window opens behind others.
         NSApp.activate(ignoringOtherApps: true)
         // Minimized to the Dock: back out of it, rather than staying there while "brought forward".
         if w.isMiniaturized { w.deminiaturize(nil) }
+        keepOnScreen(w)
         w.makeKeyAndOrderFront(nil)
+        // Its content can size it once it's up: look again then.
+        Task { @MainActor in keepOnScreen(w) }
+    }
+
+    /// The screen with the pointer: where you're looking (the menu bar you just clicked).
+    static var screen: NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    /// The visible part of the pointer's screen (without the menu bar and the Dock).
+    static var visibleFrame: NSRect {
+        screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+    }
+
+    /// In the middle of the pointer's screen (AppKit's `center()` uses the main one, which may be
+    /// another display), and no bigger than it.
+    static func center(_ w: NSWindow) {
+        let v = visibleFrame
+        let size = NSSize(width: min(w.frame.width, v.width), height: min(w.frame.height, v.height))
+        w.setFrame(NSRect(x: (v.midX - size.width / 2).rounded(), y: (v.midY - size.height / 2).rounded(),
+                          width: size.width, height: size.height), display: false)
+    }
+
+    /// Its top on a screen, so it can be dragged: moved (and shrunk if it's bigger than the
+    /// screen) when it opened, was restored or grew with its top out of reach, or its display went.
+    static func keepOnScreen(_ w: NSWindow) {
+        let screens = NSScreen.screens
+        let fallback = screen.flatMap { s in screens.firstIndex { $0 == s } }
+        guard let f = ScreenFit.corrected(w.frame, screens: screens.map(\.visibleFrame), fallback: fallback) else { return }
+        w.setFrame(f, display: true)
+    }
+
+    /// A display plugged in, unplugged or rearranged (or the Dock moved): every window that's up
+    /// is kept where it can be reached.
+    private static var watching = false
+    private static func watchScreens() {
+        guard !watching else { return }
+        watching = true
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                for w in NSApp.windows where w.isVisible && (w is ToolWindow || w is GlassPanel) { keepOnScreen(w) }
+            }
+        }
     }
 }
 
@@ -102,9 +150,9 @@ class GlassPanel: NSPanel {
     var dragsAnywhere = false
     /// A double-click on the glass (not on text you edit, a scroll bar or a control).
     var onDoubleClick: (() -> Void)?
-    /// Where a press started (the pointer on screen, the window's origin), and whether it's
+    /// Where a press started (the pointer on screen, and the press itself), and whether it's
     /// become a drag.
-    private var press: (mouse: NSPoint, origin: NSPoint)?
+    private var press: (mouse: NSPoint, down: NSEvent)?
     private var dragging = false
     /// Esc: return true if it was used (e.g. to stop a reply), else it goes on as usual.
     var onEscape: (() -> Bool)?
@@ -170,18 +218,19 @@ extension GlassPanel {
         switch event.type {
         case .leftMouseDown:
             dragging = false
-            press = canDrag(at: event.locationInWindow) ? (NSEvent.mouseLocation, frame.origin) : nil
+            press = canDrag(at: event.locationInWindow) ? (NSEvent.mouseLocation, event) : nil
             return false
         case .leftMouseDragged:
-            guard let press else { return false }
+            guard let press else { return dragging }
             let now = NSEvent.mouseLocation
-            let dx = now.x - press.mouse.x, dy = now.y - press.mouse.y
-            if !dragging {
-                guard hypot(dx, dy) > 4 else { return false }
-                dragging = true
-                cancelClick(event)
-            }
-            setFrameOrigin(NSPoint(x: press.origin.x + dx, y: press.origin.y + dy))
+            guard hypot(now.x - press.mouse.x, now.y - press.mouse.y) > 4 else { return false }
+            dragging = true
+            self.press = nil
+            cancelClick(event)
+            // macOS moves it from here, as it does a window by its title bar: onto another display
+            // too (moved by hand, a window stops at the edge of its display when each display has
+            // its own Spaces), and never with its top under the menu bar.
+            performDrag(with: press.down)
             return true
         case .leftMouseUp:
             let was = dragging

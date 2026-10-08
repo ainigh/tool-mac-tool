@@ -18,7 +18,7 @@ enum MemoryWindow {
             host.sizingOptions = []
             panel.contentView = host
             panel.commands = ["w": { panel.orderOut(nil) }]
-            panel.center()
+            Windows.center(panel)
             panel.setFrameAutosaveName("ToolMacTool.memory")
             return panel
         }

@@ -19,7 +19,7 @@ enum BoardWindow {
         }
         let id = Self.id(board.id)
         Windows.show(id) {
-            let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let screen = Windows.visibleFrame
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
             let panel = GlassPanel(size: size, resizable: true)
             panel.minSize = NSSize(width: 640, height: 440)
@@ -1417,7 +1417,7 @@ struct BoxEditor: NSViewRepresentable {
 
         override func mouseDown(with event: NSEvent) {
             let plain = event.clickCount == 1 && !event.modifierFlags.contains(.option)
-            if dragsWindow, plain, let window, moveWindow(window) { return }
+            if dragsWindow, plain, let window, moveWindow(window, from: event) { return }
             if arrange != nil, plain, let window, startsNoteDrag(window) { return }
             super.mouseDown(with: event)
             if event.clickCount == 2 { onDoubleClick?() }
@@ -1461,27 +1461,22 @@ struct BoxEditor: NSViewRepresentable {
             return CGPoint(x: p.x, y: (window.contentView?.bounds.height ?? 0) - p.y)
         }
 
-        /// Waits to see whether the press is a drag (it moves the window: true) or a click (the
-        /// release is put back for the text to take as usual: false).
-        private func moveWindow(_ window: NSWindow) -> Bool {
+        /// Waits to see whether the press is a drag (macOS moves the window, onto another display
+        /// too: true) or a click (the release is put back for the text to take as usual: false).
+        private func moveWindow(_ window: NSWindow, from down: NSEvent) -> Bool {
             let start = NSEvent.mouseLocation
-            let origin = window.frame.origin
-            var dragging = false
-            defer { if dragging { NSCursor.pop() } }
             while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
                 if next.type == .leftMouseUp {
-                    if !dragging { window.postEvent(next, atStart: true) }
-                    return dragging
+                    window.postEvent(next, atStart: true)
+                    return false
                 }
                 let now = NSEvent.mouseLocation
-                let dx = now.x - start.x, dy = now.y - start.y
-                if !dragging, hypot(dx, dy) > 4 {
-                    dragging = true
-                    NSCursor.closedHand.push()
+                if hypot(now.x - start.x, now.y - start.y) > 4 {
+                    window.performDrag(with: down)
+                    return true
                 }
-                if dragging { window.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y + dy)) }
             }
-            return dragging
+            return false
         }
 
         // Only plain text comes in: the look is the note's own. A web address pasted has its

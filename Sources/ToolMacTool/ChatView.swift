@@ -56,8 +56,8 @@ enum ChatWindow {
                 }
                 return false
             }
-            if !panel.setFrameUsingName("ToolMacTool.\(id)"), let screen = NSScreen.main {
-                let v = screen.visibleFrame
+            if !panel.setFrameUsingName("ToolMacTool.\(id)") {
+                let v = Windows.visibleFrame
                 panel.setFrameOrigin(NSPoint(x: v.maxX - panel.frame.width - 8, y: v.maxY - panel.frame.height))
             }
             resize(panel, to: card, animate: false)
@@ -80,6 +80,7 @@ enum ChatWindow {
         f.origin.y += f.height - size.height
         f.size = size
         panel.setFrame(f, display: true, animate: animate)
+        if !animate { Windows.keepOnScreen(panel) }
     }
 }
 

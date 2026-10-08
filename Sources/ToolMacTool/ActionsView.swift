@@ -25,7 +25,7 @@ enum ActionsWindow {
             focus.selected = scheduler.actions.actions.first { !$0.isBuiltin }?.id ?? scheduler.actions.actions.first?.id
         }
         Windows.show("actions") {
-            let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let screen = Windows.visibleFrame
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
             let panel = GlassPanel(size: size)
             panel.level = .floating
