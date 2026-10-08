@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Keeps a window where it can be grabbed: its top strip (where you drag it from) on a screen.
 ///
