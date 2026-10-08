@@ -283,7 +283,7 @@ public struct Signal: Codable, Equatable, Sendable {
     public var detail: String
     public var value: Double?
     public var threshold: Threshold?
-    /// Which Mac sent it.
+    /// Which Mac sent it: always `anonymousDevice`, never the Mac's own name.
     public var device: String
     public var app = "ToolMacTool"
 
@@ -313,6 +313,9 @@ public struct Signal: Codable, Equatable, Sendable {
         }
         self.device = device
     }
+
+    /// What every signal and report says for the Mac that sent it.
+    public static let anonymousDevice = "SYSTEM"
 
     public func json() throws -> Data {
         let encoder = JSONEncoder()

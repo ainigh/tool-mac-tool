@@ -360,6 +360,9 @@ logged since the last one that went through, so a burst that comes while one is 
 the address doesn't answer, still arrives. Schedule it at times too (every 15 minutes, say) for a
 regular snapshot.
 
+Nothing sent says which Mac it came from: wherever a signal or report names the Mac, it says
+`"device": "SYSTEM"`, never the Mac's name or model.
+
 A report is one JSON object, `"type": "report"`, with `trigger` (the schedule, when it runs, the
 action, the note), `event` (what set it off), `entries` (the log since the last report, as
 signals, at most 100), `today` and `week` (the counts per day), `battery` (level, draining, when it

@@ -32,7 +32,8 @@ final class ActivityStore: ObservableObject {
     /// Signals kept at most (the oldest go first).
     static let outboxLimit = 500
 
-    static let device = Host.current().localizedName ?? "Mac"
+    /// What's sent for "which Mac": never its name or its model, only this.
+    static let device = Signal.anonymousDevice
 
     init() {
         log = ActivityLog.load(from: ActivityLog.defaultURL()) ?? ActivityLog()
@@ -120,7 +121,10 @@ final class ActivityStore: ObservableObject {
         let token = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         if !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         do {
-            request.httpBody = try signal.json()
+            // One queued by an older version may still carry the Mac's name.
+            var sent = signal
+            sent.device = Signal.anonymousDevice
+            request.httpBody = try sent.json()
             let (_, response) = try await URLSession.shared.data(for: request)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             if (200..<300).contains(code) { return .sent }
