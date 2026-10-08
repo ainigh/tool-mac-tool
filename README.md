@@ -630,6 +630,14 @@ time, with a preview of exactly what the model is told. Changes are saved as you
 `~/Library/Application Support/ToolMacTool/settings.json`. The first time, the address and model
 come from Glass's settings.
 
+### A note's buttons: hidden until you want them
+
+A note shows little but its text: its icon at the top left, its status (To do, Pending,
+Completed), the tags that are on, open to fill the board, and the resize corner on a board's grid;
+its repeat and its links show too once it has them. **The ⋯ at its top right** shows all its
+buttons (its timers, the repeats, copy, the menu bar, dock, pin, speaking into it, links, every
+tag); click it again to hide them. Each note remembers which it was; new ones start hidden.
+
 ### Components (Glass): blocks a note can hold
 
 **Type `/` in any note** (at the start of a line, or after a space) and a menu of components opens
@@ -670,7 +678,9 @@ The components, by group:
   its value below it, `total` adds up the lines above it).
 - **Text & layout**: **Callout** (info, tip, idea, success, warning, danger), **Quote**, **Code**
   (with its language, and copy), **Toggle** (a heading that opens to show what's under it),
-  **Divider**.
+  **Divider** (plain, dashed, dotted, thick or double, or with a heading in the middle: hover it
+  for its look), **Columns** (text side by side with a line down between: write on the left and
+  the right; two to four columns, each written in as the note is).
 - **Links & media**: **Bookmark** (a web page's icon, title and site), **Image** (a file on this
   Mac or a web address, with a caption), **Snippet** (text to copy again and again).
 - **Runs things**: **Action button** (runs one of your Actions, with values for its arguments, and

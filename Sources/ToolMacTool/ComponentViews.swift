@@ -54,7 +54,8 @@ struct ComponentView: View {
     var body: some View {
         let type = component.type
         let accent = ComponentLook.color(type)
-        let bare = type == .divider
+        // A divider and columns sit in the note as its text does, with no card round them.
+        let bare = type == .divider || type == .columns
         VStack(alignment: .leading, spacing: 0) {
             if let raw {
                 rawEditor(raw)
@@ -161,7 +162,8 @@ private struct ComponentContent: View {
         case .quote: QuoteContent(c: $c, s: s, accent: accent)
         case .code: CodeContent(c: $c, s: s)
         case .toggle: ToggleContent(c: $c, s: s)
-        case .divider: Rectangle().fill(s.ink.opacity(0.18)).frame(height: 1).padding(.vertical, 6)
+        case .divider: DividerContent(c: $c, s: s)
+        case .columns: ColumnsContent(c: $c, s: s)
         case .bookmark: BookmarkContent(c: $c, s: s)
         case .image: ImageContent(c: $c, s: s)
         case .snippet: SnippetContent(c: $c, s: s, accent: accent)
@@ -1194,6 +1196,134 @@ private struct ToggleContent: View {
                     .transition(.opacity)
             }
         }
+    }
+}
+
+private struct DividerContent: View {
+    @Binding var c: NoteComponent
+    let s: ComponentStyle
+    @State private var hover = false
+
+    var body: some View {
+        let style = c.args.lowercased()
+        let known = NoteComponents.dividerStyles.contains(style)
+        HStack(spacing: 8) {
+            line(style)
+            if !known, !c.args.isEmpty {
+                Text(c.args)
+                    .font(s.font(0.8, .semibold))
+                    .foregroundStyle(s.faint)
+                    .textCase(.uppercase)
+                    .fixedSize()
+                line(style)
+            }
+            if hover {
+                Menu {
+                    Button("Plain") { c.args = "" }
+                    ForEach(NoteComponents.dividerStyles, id: \.self) { st in Button(st.capitalized) { c.args = st } }
+                    Divider()
+                    Button("With a heading…") { c.args = "Section" }
+                } label: {
+                    Image(systemName: "paintbrush").font(.system(size: 9, weight: .semibold)).foregroundStyle(s.faint)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Its look: plain, dashed, dotted, thick, double, or a heading in the middle (edit it as text to change the words)")
+                .padding(.trailing, 24)
+            }
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+    }
+
+    @ViewBuilder private func line(_ style: String) -> some View {
+        switch style {
+        case "dashed", "dotted":
+            Line()
+                .stroke(s.ink.opacity(0.3), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: style == "dashed" ? [6, 4] : [0.5, 4]))
+                .frame(height: 2)
+        case "thick":
+            Capsule().fill(s.ink.opacity(0.25)).frame(height: 3)
+        case "double":
+            VStack(spacing: 2) {
+                Rectangle().fill(s.ink.opacity(0.22)).frame(height: 1)
+                Rectangle().fill(s.ink.opacity(0.22)).frame(height: 1)
+            }
+        default:
+            Rectangle().fill(s.ink.opacity(0.18)).frame(height: 1)
+        }
+    }
+
+    private struct Line: Shape {
+        func path(in rect: CGRect) -> Path {
+            var p = Path()
+            p.move(to: CGPoint(x: rect.minX, y: rect.midY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            return p
+        }
+    }
+}
+
+/// Text side by side, a line down between: each column written in as the note is (Return makes a
+/// new line, links are links), as tall as the tallest.
+private struct ColumnsContent: View {
+    @Binding var c: NoteComponent
+    let s: ComponentStyle
+    @State private var hover = false
+
+    private var columns: [String] { NoteComponents.columns(c.body) }
+
+    var body: some View {
+        let cols = columns
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(cols.indices, id: \.self) { i in
+                    if i > 0 {
+                        Rectangle().fill(s.ink.opacity(0.2)).frame(width: 1).padding(.horizontal, 8)
+                    }
+                    BoxEditor(text: Binding(get: { self.columns[safe: i] ?? "" }, set: { new in
+                        var all = self.columns
+                        guard all.indices.contains(i) else { return }
+                        all[i] = new
+                        c.body = NoteComponents.columnsBody(all)
+                    }), fontSize: s.size, ink: NSColor(s.ink), titleScale: 1, autoHeight: true, continuation: true, slashMenu: false)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .overlay(alignment: .topLeading) {
+                        if (cols[safe: i] ?? "").isEmpty {
+                            Text(i == 0 ? "Left" : i == cols.count - 1 ? "Right" : "Middle")
+                                .font(s.font(0.9))
+                                .foregroundStyle(s.ink.opacity(0.28))
+                                .padding(.leading, 6)
+                                .padding(.top, 2)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            if hover {
+                HStack(spacing: 6) {
+                    if cols.count < NoteComponents.maxColumns {
+                        MiniButton(title: "Column", symbol: "plus", s: s) { c.body = NoteComponents.columnsBody(self.columns + [""]) }
+                    }
+                    if cols.count > 2 {
+                        MiniButton(title: "Last column", symbol: "minus", s: s) {
+                            var all = self.columns
+                            let gone = all.removeLast()
+                            // What was in it goes on the end of the column before, not away.
+                            if !gone.isEmpty { all[all.count - 1] += (all[all.count - 1].isEmpty ? "" : "\n") + gone }
+                            c.body = NoteComponents.columnsBody(all)
+                        }
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
     }
 }
 

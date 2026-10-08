@@ -19,7 +19,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
     case checklist, table, kanban, proscons
     case contact, properties
     case progress, counter, rating, countdown, habit, calc
-    case callout, quote, code, toggle, divider
+    case callout, quote, code, toggle, divider, columns
     case bookmark, image, snippet
     case action, shortcut
 
@@ -37,7 +37,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .checklist, .table, .kanban, .proscons: return .lists
         case .contact, .properties: return .records
         case .progress, .counter, .rating, .countdown, .habit, .calc: return .tracking
-        case .callout, .quote, .code, .toggle, .divider: return .text
+        case .callout, .quote, .code, .toggle, .divider, .columns: return .text
         case .bookmark, .image, .snippet: return .media
         case .action, .shortcut: return .run
         }
@@ -62,6 +62,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .code: return "Code"
         case .toggle: return "Toggle"
         case .divider: return "Divider"
+        case .columns: return "Columns"
         case .bookmark: return "Bookmark"
         case .image: return "Image"
         case .snippet: return "Snippet"
@@ -90,6 +91,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .code: return "chevron.left.forwardslash.chevron.right"
         case .toggle: return "chevron.right.circle"
         case .divider: return "minus"
+        case .columns: return "rectangle.split.2x1"
         case .bookmark: return "bookmark"
         case .image: return "photo"
         case .snippet: return "doc.on.clipboard"
@@ -117,7 +119,8 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .quote: return "Something someone said, and who said it."
         case .code: return "Code or any fixed-width text, with its language, and a button to copy it."
         case .toggle: return "A heading that opens to show the text under it, and closes it away again."
-        case .divider: return "A line across, to split the note into parts."
+        case .divider: return "A line across, to split the note into parts: plain, dashed, dotted, thick or double, or with a heading in the middle."
+        case .columns: return "Text side by side, a line down between: write on the left and on the right (two to four columns)."
         case .bookmark: return "A web page as a card: its icon, title and site. A click opens it."
         case .image: return "A picture from a file on this Mac or a web address, with a caption."
         case .snippet: return "Text kept to paste again and again: a click copies it."
@@ -145,7 +148,8 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .quote: return ["citation", "said"]
         case .code: return ["snippet", "monospace", "program"]
         case .toggle: return ["collapse", "details", "fold", "hide"]
-        case .divider: return ["line", "rule", "separator", "hr"]
+        case .divider: return ["line", "rule", "separator", "hr", "section"]
+        case .columns: return ["split", "side by side", "vertical", "divider", "layout", "two", "left", "right"]
         case .bookmark: return ["link", "url", "web", "page"]
         case .image: return ["picture", "photo", "screenshot"]
         case .snippet: return ["copy", "clipboard", "template", "paste"]
@@ -158,7 +162,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
     public var defaultArgs: String {
         switch self {
         case .checklist: return "To do"
-        case .table, .kanban, .proscons, .properties, .contact, .habit, .calc, .divider, .bookmark, .image, .rating: return ""
+        case .table, .kanban, .proscons, .properties, .contact, .habit, .calc, .divider, .columns, .bookmark, .image, .rating: return ""
         case .progress: return "Progress"
         case .counter: return "Count"
         case .countdown: return "Launch"
@@ -194,6 +198,7 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .code: return [""]
         case .toggle: return [""]
         case .divider: return []
+        case .columns: return ["", NoteComponents.columnBreak, ""]
         case .bookmark: return ["https://"]
         case .image: return [""]
         case .snippet: return [""]
@@ -227,7 +232,9 @@ public enum NoteComponentType: String, CaseIterable, Sendable {
         case .quote: return make("", ["Simplicity is prerequisite for reliability.", "— Edsger Dijkstra"])
         case .code: return make("swift", ["let total = items.map(\\.cost).reduce(0, +)"])
         case .toggle: return make("Meeting notes", ["Agreed the plan; Sam sends the deck."])
-        case .divider: return make("", [])
+        case .divider: return make("Next week", [])
+        case .columns: return make("", ["Before", "- Slow builds", "- Manual releases", NoteComponents.columnBreak,
+                                         "After", "- Builds in 2 minutes", "- A release on every merge"])
         case .bookmark: return make("", ["https://www.apple.com"])
         case .image: return make("The view", ["https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=640"])
         case .snippet: return make("Address", ["1 Infinite Loop, Cupertino, CA 95014"])
@@ -642,6 +649,38 @@ public enum NoteComponents {
     public static func prosConsBody(pros: [String], cons: [String]) -> [String] {
         pros.map { "+ " + $0 } + cons.map { "- " + $0 }
     }
+
+    // MARK: Columns
+
+    /// The line between two columns.
+    public static let columnBreak = "|||"
+    public static let maxColumns = 4
+
+    /// Each column's text (lines between "|||" lines); at least two.
+    public static func columns(_ body: [String]) -> [String] {
+        var out: [[String]] = [[]]
+        for line in body {
+            if line.trimmingCharacters(in: .whitespaces) == columnBreak { out.append([]) } else { out[out.count - 1].append(line) }
+        }
+        while out.count < 2 { out.append([]) }
+        return out.map { $0.joined(separator: "\n") }
+    }
+
+    /// A column's text can't hold a line that would end it, or end the component.
+    public static func columnsBody(_ columns: [String]) -> [String] {
+        columns.enumerated().flatMap { i, text -> [String] in
+            let lines = text.components(separatedBy: "\n").map { line -> String in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t == columnBreak || t == NoteDocument.close ? line + " " : line
+            }
+            return (i == 0 ? [] : [columnBreak]) + lines
+        }
+    }
+
+    // MARK: Divider
+
+    /// The divider's looks; anything else it's given is a heading in the middle of it.
+    public static let dividerStyles = ["dashed", "dotted", "thick", "double"]
 
     // MARK: Quote
 
