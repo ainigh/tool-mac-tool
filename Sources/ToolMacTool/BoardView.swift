@@ -522,12 +522,13 @@ struct BoardBox: View {
                 .frame(height: 20)
                 .padding(.horizontal, 3)
                 .padding(.top, 2)
-                BoxEditor(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, arrange: arrange,
-                          onDoubleClick: cycle, onDropSounds: dropped, onDragOver: { dropping = $0 })
+                NoteBody(text: $model.board.boxes[index].text, fontSize: fontSize, dragsWindow: floating, arrange: arrange,
+                         onDoubleClick: cycle, onDropSounds: dropped, onDragOver: { dropping = $0 })
                     .padding([.horizontal], 4)
                 // Speaking into it, or a sound file being written down into it.
                 NoteVoiceStrip(board: board, index: index)
-                LinkStrip(text: box.text, roomy: roomy, width: width - 40)
+                // The web addresses in its text (a bookmark component shows its own).
+                LinkStrip(text: box.text.contains(":::") ? NoteDocument(box.text).plainText : box.text, roomy: roomy, width: width - 40)
                     .padding(.horizontal, 4)
                 // The row above the bottom: its board (a click opens it), the notes it links to,
                 // and + to link another.
@@ -1403,6 +1404,20 @@ struct BoxEditor: NSViewRepresentable {
     var onDropSounds: (([URL]) -> Void)?
     /// A sound file is being dragged over it (true), or not any more.
     var onDragOver: ((Bool) -> Void)?
+    /// As tall as its text (no scrolling of its own: a run of text between a note's components).
+    var autoHeight = false
+    /// A run after a component: no title, no second line's size, no rule.
+    var continuation = false
+    /// "/" at the start of a word opens the components' menu.
+    var slashMenu = true
+
+    /// Hands the scroll wheel on to what it's in, while it's as tall as its text.
+    final class Scroll: NSScrollView {
+        var passesScroll = false
+        override func scrollWheel(with event: NSEvent) {
+            if passesScroll { nextResponder?.scrollWheel(with: event) } else { super.scrollWheel(with: event) }
+        }
+    }
 
     final class TextView: NSTextView {
         var onDoubleClick: (() -> Void)?
@@ -1412,6 +1427,13 @@ struct BoxEditor: NSViewRepresentable {
         var onDragOver: ((Bool) -> Void)?
         /// The rule under the second line.
         var ruleColor = NSColor(white: 0, alpha: 0.18)
+        /// No rule (a run after a component).
+        var continuation = false
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil { SlashMenu.shared.close(for: self) }
+            super.viewWillMove(toWindow: newWindow)
+        }
         /// The press became a drag of the note: what follows goes to the board, not the text.
         private var movingNote = false
 
@@ -1499,7 +1521,7 @@ struct BoxEditor: NSViewRepresentable {
         /// Halfway between the bottom of the second line and the top of the third (nil when
         /// there's no third line).
         private func ruleY() -> CGFloat? {
-            guard let lm = layoutManager, let storage = textStorage else { return nil }
+            guard !continuation, let lm = layoutManager, let storage = textStorage else { return nil }
             let s = string as NSString
             let lines = BoxEditor.lineRanges(s)
             guard lines.count >= 3 else { return nil }
@@ -1566,12 +1588,27 @@ struct BoxEditor: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             parent.text = tv.string
             // Not while a word is being composed (an input method's marked text keeps its look).
-            if !tv.hasMarkedText() { BoxEditor.style(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink) }
+            if !tv.hasMarkedText() {
+                BoxEditor.style(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink, continuation: parent.continuation)
+            }
+            if parent.autoHeight { tv.enclosingScrollView?.invalidateIntrinsicContentSize() }
+            if parent.slashMenu { SlashMenu.shared.update(tv) }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            BoxEditor.matchTyping(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink)
+            BoxEditor.matchTyping(tv, size: fontSize, titleScale: parent.titleScale, ink: parent.ink, continuation: parent.continuation)
+            if parent.slashMenu { SlashMenu.shared.update(tv) }
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            SlashMenu.shared.close(for: tv)
+        }
+
+        /// While the components' menu is up: ↑ ↓ pick, ↩ or ⇥ puts it in, esc closes the menu.
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            SlashMenu.shared.handle(selector, in: textView)
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
@@ -1601,26 +1638,27 @@ struct BoxEditor: NSViewRepresentable {
 
     /// Each line's range and font: the title semibold, the second line medium, the rest regular,
     /// each its size (`NoteText.scales`: a "- " line a little smaller than the line it's under).
-    static func lineFonts(_ string: NSString, size: CGFloat, titleScale: CGFloat) -> [(range: NSRange, font: NSFont)] {
+    static func lineFonts(_ string: NSString, size: CGFloat, titleScale: CGFloat,
+                          continuation: Bool = false) -> [(range: NSRange, font: NSFont)] {
         let ranges = lineRanges(string)
-        let scales = NoteText.scales(ranges.map { string.substring(with: $0) }, titleScale: Double(titleScale))
+        let scales = NoteText.scales(ranges.map { string.substring(with: $0) }, titleScale: continuation ? 1 : Double(titleScale))
         return ranges.indices.map { i in
             (ranges[i], .systemFont(ofSize: max(8, (size * CGFloat(scales[i])).rounded()),
-                                    weight: i == 0 ? .semibold : i == 1 ? .medium : .regular))
+                                    weight: continuation ? .regular : i == 0 ? .semibold : i == 1 ? .medium : .regular))
         }
     }
 
     /// The whole text in its look: the first line big, the second a little smaller (and a rule
     /// under it once there's a third), the rest the size of the box ("- " lines a little smaller),
     /// every web address a link (and nothing else, whatever was pasted or dropped in).
-    static func style(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
+    static func style(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor, continuation: Bool = false) {
         guard let storage = tv.textStorage else { return }
         let all = NSRange(location: 0, length: storage.length)
-        let lines = lineFonts(storage.string as NSString, size: size, titleScale: titleScale)
+        let lines = lineFonts(storage.string as NSString, size: size, titleScale: titleScale, continuation: continuation)
         storage.beginEditing()
         storage.setAttributes([.font: NSFont.systemFont(ofSize: size), .foregroundColor: ink], range: all)
         for line in lines where line.range.length > 0 { storage.addAttribute(.font, value: line.font, range: line.range) }
-        if lines.count >= 3 {
+        if lines.count >= 3, !continuation {
             // Room under the second line for its rule.
             let room = NSMutableParagraphStyle()
             room.paragraphSpacing = (size * 0.7).rounded()
@@ -1634,13 +1672,13 @@ struct BoxEditor: NSViewRepresentable {
         }
         storage.endEditing()
         tv.needsDisplay = true
-        matchTyping(tv, size: size, titleScale: titleScale, ink: ink)
+        matchTyping(tv, size: size, titleScale: titleScale, ink: ink, continuation: continuation)
     }
 
     /// What's typed next takes the size of the line the caret is on.
-    static func matchTyping(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor) {
+    static func matchTyping(_ tv: NSTextView, size: CGFloat, titleScale: CGFloat, ink: NSColor, continuation: Bool = false) {
         let at = tv.selectedRange().location
-        let lines = lineFonts(tv.string as NSString, size: size, titleScale: titleScale)
+        let lines = lineFonts(tv.string as NSString, size: size, titleScale: titleScale, continuation: continuation)
         let line = lines.last { $0.range.location <= at } ?? lines[0]
         var attributes = tv.typingAttributes
         attributes[.font] = line.font
@@ -1652,8 +1690,9 @@ struct BoxEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
+        let scroll = Scroll()
+        scroll.passesScroll = autoHeight
+        scroll.hasVerticalScroller = !autoHeight
         scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -1689,10 +1728,24 @@ struct BoxEditor: NSViewRepresentable {
         tv.onDropSounds = onDropSounds
         tv.onDragOver = onDragOver
         tv.ruleColor = ink.withAlphaComponent(0.2)
+        tv.continuation = continuation
         scroll.documentView = tv
         context.coordinator.fontSize = fontSize
-        Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink)
+        Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink, continuation: continuation)
         return scroll
+    }
+
+    /// As tall as its text at the width it's given, when it's `autoHeight`.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard autoHeight, let tv = nsView.documentView as? TextView, let lm = tv.layoutManager, let tc = tv.textContainer else { return nil }
+        let width = proposal.width ?? nsView.frame.width
+        guard width.isFinite, width > 0 else { return nil }
+        let inset = tv.textContainerInset
+        tc.containerSize = NSSize(width: max(1, width - 2 * inset.width), height: .greatestFiniteMagnitude)
+        lm.ensureLayout(for: tc)
+        let used = lm.usedRect(for: tc).height
+        let line = lm.defaultLineHeight(for: tv.font ?? .systemFont(ofSize: fontSize))
+        return CGSize(width: width, height: ceil(max(used, line) + 2 * inset.height))
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
@@ -1712,6 +1765,11 @@ struct BoxEditor: NSViewRepresentable {
             context.coordinator.fontSize = fontSize
             restyle = true
         }
-        if restyle { Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink) }
+        if tv.continuation != continuation {
+            tv.continuation = continuation
+            restyle = true
+        }
+        (scroll as? Scroll)?.passesScroll = autoHeight
+        if restyle { Self.style(tv, size: fontSize, titleScale: titleScale, ink: ink, continuation: continuation) }
     }
 }

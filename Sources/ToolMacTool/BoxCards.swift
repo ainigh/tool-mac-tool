@@ -171,8 +171,8 @@ struct BoxNote: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            BoxEditor(text: $text, fontSize: fontSize, ink: NSColor(white: 1, alpha: 0.92),
-                      linkInk: NSColor(red: 0.55, green: 0.8, blue: 1, alpha: 1))
+            NoteBody(text: $text, fontSize: fontSize, ink: NSColor(white: 1, alpha: 0.92),
+                     linkInk: NSColor(red: 0.55, green: 0.8, blue: 1, alpha: 1))
                 .padding(8)
                 .frame(maxWidth: .infinity)
                 .frame(height: height)
