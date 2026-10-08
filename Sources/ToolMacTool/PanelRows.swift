@@ -5,7 +5,8 @@ import ToolCore
 // The panel's rows and columns of notes and boards: across the very top the Daily plan, the
 // Boards button (every board, on a grid of its own) and the boards with notes (each in its own
 // darker color, the one opened most lately first), the chimes' switches (built-in schedules) beside the Scheduler, the notes
-// running a timer (docked in their column by themselves while it runs), the tags' boards, and the
+// running a timer (docked in their column by themselves while it runs), the schedules that are on
+// (the next to run first), the tags' boards, and the
 // notes docked along the bottom.
 
 // MARK: - The boards, across the top
@@ -274,6 +275,180 @@ private struct TimedNoteTile: View {
         .buttonStyle(PressStyle())
         .onHover { hover = $0 }
         .help("\(u.place) · \(u.spec.name)\(u.title.map { " · \($0)" } ?? "")\n\(u.at.map { "Rings \(AlarmTime.short($0, now: now))" } ?? "Ringing now")\n\nClick to open the note.")
+    }
+}
+
+// MARK: - The schedules that are on
+
+/// The schedules that are on, the next to run first (then the ones waiting for something to
+/// happen), as the notes running a timer are listed beside them. A click opens one in the
+/// Scheduler; right-click to run it now, skip its next run or turn it off.
+struct ScheduledJobsColumn: View {
+    @ObservedObject var scheduler: Scheduler
+    let color: Color
+    static let most = 4
+
+    var body: some View {
+        let jobs = scheduler.book.upcoming()
+        VStack(spacing: MenuView.gap) {
+            if jobs.isEmpty {
+                VStack(spacing: 7) {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(color.opacity(0.55))
+                    Text("Turn on a schedule and it shows here, with when it runs next")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(width: MenuView.bigTile)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    MenuPanel.close()
+                    SchedulerWindow.show(scheduler)
+                }
+                .help("Click to open the Scheduler")
+            } else {
+                // Ticks every second, for the countdowns (on the app's clock, so test mode shows too).
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    let now = AppClock.now()
+                    VStack(spacing: MenuView.gap) {
+                        ForEach(jobs.prefix(Self.most)) { job in
+                            ScheduledJobTile(job: job, scheduler: scheduler, now: now)
+                        }
+                    }
+                }
+                if jobs.count > Self.most {
+                    Button {
+                        MenuPanel.close()
+                        SchedulerWindow.show(scheduler)
+                    } label: {
+                        Text("+\(jobs.count - Self.most) more")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Every schedule, in the Scheduler")
+                }
+            }
+        }
+    }
+}
+
+/// A schedule that's on: its action's icon on its color, its name, and when it runs next (a
+/// countdown under a day away; what it waits for when it waits for something to happen).
+private struct ScheduledJobTile: View {
+    let job: ScheduledJob
+    @ObservedObject var scheduler: Scheduler
+    let now: Date
+    @State private var hover = false
+
+    var body: some View {
+        let action = scheduler.action(job.actionID)
+        let accent = action?.live.first.map { JobRow.color($0.kind) } ?? Color.gray
+        let running = scheduler.running.contains(job.id)
+        let failed = job.lastOK == false
+        Button(action: open) {
+            VStack(spacing: 3) {
+                ZStack {
+                    // Every so many minutes: a ring round it fills as its next run comes.
+                    Circle().fill(accent.gradient).padding(fraction == nil ? 0 : 5)
+                    Image(systemName: scheduler.symbol(for: job))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .symbolEffect(.pulse, isActive: running)
+                    if let fraction {
+                        Circle().stroke(accent.opacity(0.25), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: max(0.001, min(1, fraction)))
+                            .stroke(accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .overlay(alignment: .bottomTrailing) {
+                    if failed {
+                        Image(systemName: "exclamationmark")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .frame(width: 15, height: 15)
+                            .background(Circle().fill(Color.orange))
+                            .offset(x: 4, y: 3)
+                            .help(job.lastResult ?? "It went wrong last time")
+                    } else if job.when.kind == .event {
+                        Image(systemName: job.when.event.symbol)
+                            .font(.system(size: 7.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 15, height: 15)
+                            .background(Circle().fill(accent.opacity(0.85)))
+                            .offset(x: 4, y: 3)
+                    }
+                }
+                Text(job.name.isEmpty ? "Untitled" : job.name)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .lineLimit(1)
+                Text(running ? "Running…" : when)
+                    .font(.system(size: 10.5, weight: job.next == nil ? .medium : .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(running ? AnyShapeStyle(accent) : job.next == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 4)
+            .frame(width: MenuView.bigTile)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(hover ? 0.24 : 0.13)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(accent.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: job.next == nil ? [4, 3] : [])))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .onHover { hover = $0 }
+        .help(help(action))
+        .contextMenu {
+            Button("Open in the Scheduler", action: open)
+            Button("Run now") { scheduler.run(job.id, byHand: true) }
+                .disabled(running)
+            if job.next != nil {
+                Button("Skip the next run") { scheduler.skipNext(job.id) }
+            }
+            Divider()
+            Button("Turn off…") {
+                guard Confirm.schedule(job, doing: scheduler.doing(job), on: false, clock24: scheduler.prefs.settings.clock24) else { return }
+                scheduler.setEnabled(job.id, false)
+            }
+        }
+    }
+
+    private func open() {
+        MenuPanel.close()
+        SchedulerWindow.show(scheduler, select: job.id)
+    }
+
+    /// "in 12:30" under a day away, else the day and time; what it waits for when it has no time.
+    private var when: String {
+        guard let next = job.next else { return job.when.event.title }
+        let left = next.timeIntervalSince(now)
+        if left <= 0 { return "Due now" }
+        return left < 86_400 ? TimerText.countdown(left) : AlarmTime.short(next, now: now)
+    }
+
+    /// How far through its wait it is, for a schedule that repeats every so many minutes.
+    private var fraction: Double? {
+        guard job.when.kind == .every, let next = job.next else { return nil }
+        let step = TimeInterval(max(1, job.when.minutes) * 60)
+        return 1 - max(0, next.timeIntervalSince(now)) / step
+    }
+
+    private func help(_ action: SavedAction?) -> String {
+        let clock24 = scheduler.prefs.settings.clock24
+        var lines = ["\(job.name) · \(job.when.describe(clock24: clock24))", "Runs \(action.map { "\u{201C}\($0.name)\u{201D}" } ?? "no action yet")"]
+        if let next = job.next { lines.append("Next: \(AlarmTime.short(next, now: now))") }
+        if let last = job.lastRun {
+            lines.append("Last ran \(AlarmTime.short(last, now: now))" + (job.lastOK == false ? ": it went wrong" : ""))
+        }
+        return lines.joined(separator: "\n") + "\n\nClick to open it in the Scheduler. Right-click to run it now, skip its next run or turn it off."
     }
 }
 

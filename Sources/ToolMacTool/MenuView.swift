@@ -3,8 +3,8 @@ import SwiftUI
 import ToolCore
 
 /// The panel that drops down from the menu bar icon: the boards across the top, a row under them
-/// (Unzip, the battery), columns of titled tile grids under that (the last two: the notes running
-/// a timer, and the tags' boards), the notes docked along the bottom, and a bar at the bottom for
+/// (Unzip, the battery), columns of titled tile grids under that (the last three: the notes running
+/// a timer, the schedules that are on, and the tags' boards), the notes docked along the bottom, and a bar at the bottom for
 /// updates, open at login and quit.
 struct MenuView: View {
     @ObservedObject var model: AppModel
@@ -187,6 +187,8 @@ struct SectionGrid: View {
             SectionHeader(title: section.title, color: section.color, groups: groups, pinID: section.id)
             if section.extra == .timedNotes {
                 TimedNotesColumn(store: model.boards, color: section.color)
+            } else if section.extra == .scheduledJobs {
+                ScheduledJobsColumn(scheduler: model.scheduler, color: section.color)
             } else if section.extra == .tagBoards {
                 TagBoardsColumn(store: model.boards)
             } else if section.style == .stack {
@@ -201,7 +203,7 @@ struct SectionGrid: View {
                         DockableToolTile(tool: tool, color: section.color, dock: model.toolDock) { model.open(tool) }
                     }
                     if section.extra == .chimes {
-                        ForEach(ScheduledJob.Builtin.allCases, id: \.self) { b in
+                        ForEach(ScheduledJob.Builtin.chimes, id: \.self) { b in
                             ChimeTile(builtin: b, scheduler: model.scheduler, color: section.color)
                         }
                     }

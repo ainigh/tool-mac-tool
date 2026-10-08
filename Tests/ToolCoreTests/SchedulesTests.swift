@@ -201,13 +201,91 @@ final class SchedulesTests: XCTestCase {
     func testBuiltinsAreAddedOnceAndFirst() {
         var book = ScheduleBook(jobs: [ScheduledJob(name: "Mine")])
         book.ensureBuiltins()
-        XCTAssertEqual(book.jobs.map(\.name), ["Day chime", "Night watch", "Mine"])
+        XCTAssertEqual(book.jobs.map(\.name), ["Day chime", "Night watch", "Dashboard", "Mine"])
         book.ensureBuiltins()
-        XCTAssertEqual(book.jobs.count, 3)
+        XCTAssertEqual(book.jobs.count, 4)
         XCTAssertTrue(book.jobs[0].isBuiltin)
         XCTAssertTrue(book.jobs[0].enabled)
+        // The dashboard's is off until it's turned on, and sends on anything in the log.
+        XCTAssertFalse(book.jobs[2].enabled)
+        XCTAssertEqual(book.jobs[2].actionID, SavedAction.Builtin.dashboard.id)
+        XCTAssertEqual(book.jobs[2].when.event, .anyLogged)
         XCTAssertEqual(book.jobs[0].when.next(after: at(9, 15), calendar: calendar), at(10))
         XCTAssertEqual(book.jobs[1].when.next(after: at(9, 15), calendar: calendar), at(23))
+    }
+
+    func testABookFromBeforeGetsTheDashboardAfterTheChimes() {
+        var book = ScheduleBook(jobs: [ScheduledJob(name: "Mine"), ScheduledJob.Builtin.dayChime.job, ScheduledJob.Builtin.nightWatch.job])
+        book.jobs[1].enabled = false
+        book.ensureBuiltins()
+        XCTAssertEqual(book.jobs.map(\.name), ["Day chime", "Night watch", "Dashboard", "Mine"])
+        XCTAssertFalse(book.jobs[0].enabled)   // kept as it was
+    }
+
+    func testAnythingInTheLogSetsOffAnyLogged() {
+        let s = Schedule(kind: .event, event: .anyLogged)
+        for kind in LogEntry.Kind.allCases {
+            XCTAssertTrue(s.matches(LogEntry(at: at(9), source: "x", name: "X", kind: kind), log: ActivityLog(), calendar: calendar))
+        }
+        XCTAssertTrue(ScheduleEvent.anyLogged.isLogged)
+        XCTAssertNil(s.next(after: at(9), calendar: calendar))
+    }
+
+    func testTheListShowsWhatsOnSoonestFirstWithoutTheChimes() {
+        var a = ScheduledJob(name: "Later", when: Schedule(kind: .daily, hour: 18))
+        a.next = at(18)
+        var b = ScheduledJob(name: "Sooner", when: Schedule(kind: .every, minutes: 15))
+        b.next = at(9, 15)
+        var off = ScheduledJob(name: "Off", enabled: false)
+        off.next = at(9, 5)
+        let event = ScheduledJob(name: "On alarm", when: Schedule(kind: .event, event: .alarmRang))
+        var done = ScheduledJob(name: "Done", when: Schedule(kind: .once, at: at(8)))
+        done.next = nil
+        var chime = ScheduledJob.Builtin.dayChime.job
+        chime.next = at(9, 1)
+        let book = ScheduleBook(jobs: [chime, event, a, off, done, b])
+        XCTAssertEqual(book.upcoming().map(\.name), ["Sooner", "Later", "On alarm"])
+    }
+
+    func testADashboardReportCarriesTheLogSinceTheLastAndASnapshot() throws {
+        var log = ActivityLog()
+        log.add(LogEntry(id: "old", at: at(7), source: "box-goals-1", name: "Goals 1", kind: .set, value: 300))
+        log.add(LogEntry(id: "a", at: at(8, 30), source: "box-goals-1", name: "Goals 1", kind: .alarm))
+        log.add(LogEntry(id: "s", at: at(8, 31), source: "box-goals-1", name: "Goals 1", kind: .snoozed))
+        log.add(LogEntry(id: "c", at: at(9), source: "chime", name: "Day chime", kind: .chime))
+        log.add(LogEntry(at: at(8, day: 2), source: "box-goals-1", name: "Goals 1", kind: .snoozed))
+        var threshold = ScheduledJob(name: "Snoozes", when: Schedule(kind: .event, event: .countOver, metric: .snoozes, limit: 0))
+        threshold.enabled = true
+        var daily = ScheduledJob(name: "Briefing", when: Schedule(kind: .daily, hour: 18))
+        daily.next = at(18)
+        let battery = BatteryState(choice: 0, level: 100, start: at(8))
+        let timer = DashboardReport.TimerNow(name: "Plan", place: "Goals · box 1", timer: "Timer 1", kind: "countdown", at: at(9, 30))
+        let report = DashboardReport(id: "r1", now: at(9, 0), calendar: calendar, device: "Mac", version: "0.1.9",
+                                     trigger: .init(job: "Dashboard", when: "Whenever anything goes in the timer log", action: "Send to dashboard"),
+                                     event: log.entries[3], log: log, since: at(8), battery: battery, timers: [timer],
+                                     jobs: [threshold, daily], actionName: { _ in "Remind" })
+        XCTAssertEqual(report.entries.map(\.id), ["a", "s", "c"])
+        XCTAssertEqual(report.entries.map(\.type), ["alarm", "snooze", "chime"])
+        XCTAssertEqual(report.event?.id, "c")
+        XCTAssertEqual(report.today.day, "2026-10-03")
+        XCTAssertEqual(report.today.snoozes, 1)
+        XCTAssertEqual(report.today.sets, 1)
+        XCTAssertEqual(report.week.count, 7)
+        XCTAssertEqual(report.week.map(\.snoozes).reduce(0, +), 2)
+        XCTAssertEqual(report.battery?.level, 80)
+        XCTAssertEqual(report.battery?.draining, true)
+        XCTAssertEqual(report.thresholds.first?.count, 1)
+        XCTAssertEqual(report.thresholds.first?.limit, 0)
+        XCTAssertEqual(report.schedules.map(\.name), ["Briefing", "Snoozes"])
+        XCTAssertEqual(report.timeZone, "Europe/London")
+        // Never sent before: the last day's log goes.
+        let first = DashboardReport.entries(log, since: nil, now: at(9), calendar: calendar, device: "Mac")
+        XCTAssertEqual(first.map(\.id).prefix(1), ["old"])
+        // As JSON: dates in ISO 8601, and the type the dashboard looks for.
+        let object = try JSONSerialization.jsonObject(with: report.json()) as? [String: Any]
+        XCTAssertEqual(object?["type"] as? String, "report")
+        XCTAssertEqual((object?["timers"] as? [[String: Any]])?.first?["at"] as? String, "2026-10-03T08:30:00Z")
+        XCTAssertEqual((object?["trigger"] as? [String: Any])?["action"] as? String, "Send to dashboard")
     }
 
     func testPlaceholdersFillFromTheTimeTheLogAndTheEvent() {

@@ -4,7 +4,7 @@ A wrench icon in the macOS menu bar (with the next alarm's countdown beside it, 
 and beside that any boards you've docked there). Clicking it opens a panel: across the top the Daily
 plan, the **Boards** button and the boards with notes, each in its own color; a row under them (Unzip to Desktop, the battery in detail); tool
 tiles grouped into sections in two columns (Automate, Voice and Record; Glass, Model tools and Privacy),
-plus two narrow columns (the notes running a timer, and the tags' boards), with dividers between
+plus three narrow columns (the notes running a timer, the schedules that are on, and the tags' boards), with dividers between
 them; and the notes you've docked, in a row along the bottom. Each section has its own color, worn
 by its tiles and its title, with a pin at the right of the title to float the group on your screen
 (below). The bar at the bottom holds updates (with the version you're on), the **mode** (normal,
@@ -312,6 +312,11 @@ action** (⌘N) adds one. Each action has:
     as plain text. **Leave the text empty** and what happened goes as JSON, in the shape the timer
     log's signals had (below), so a worker written for those keeps working. What the address
     answers is the result (a 2xx is a success).
+  - **Send to dashboard**: a report goes to the dashboard (the built-in **Send to dashboard**'s
+    address, unless the step has one of its own): what set it off, everything that went in the
+    timer log since the report before, today's and the week's counts, the battery, the timers
+    running, the thresholds with today's counts, and the schedules coming up. The text, if any,
+    goes with it as a note. See [The dashboard](#the-dashboard).
   - **Chime**: a ding and a card, the day chime's or the night watch's.
   - **Add to a note**: the text goes at the end of a note you pick (any note with a title, on any
     board), on a line of its own: a log, a journal, the model's answers kept. **Open it** opens
@@ -339,7 +344,28 @@ action** (⌘N) adds one. Each action has:
 the action picked. The status at the top counts the actions nothing runs.
 
 **Built in**: the **Day chime** and **Night watch** actions, what the built-in schedules run, with
-a lock: other schedules can run them too, but they can't be changed or deleted.
+a lock: other schedules can run them too, but they can't be changed or deleted. And **Send to
+dashboard**: its address, secret and note are the one thing about it you set (below); it can't be
+deleted.
+
+#### The dashboard
+
+Set the dashboard's **address** (and **secret**, sent as `Authorization: Bearer …`) once, on the
+built-in **Send to dashboard** action, instead of on every schedule that sends to it. Any schedule
+running Send to dashboard, and any **Send to dashboard** step left without an address of its own,
+sends there. Its built-in schedule, **Dashboard**, sends a report **whenever anything goes in the
+timer log** (an alarm, a snooze, a timer set or stopped, a chime, the battery, a threshold); it's
+**off until you turn it on** (on the action, or in the Scheduler). Each report carries everything
+logged since the last one that went through, so a burst that comes while one is sending, or while
+the address doesn't answer, still arrives. Schedule it at times too (every 15 minutes, say) for a
+regular snapshot.
+
+A report is one JSON object, `"type": "report"`, with `trigger` (the schedule, when it runs, the
+action, the note), `event` (what set it off), `entries` (the log since the last report, as
+signals, at most 100), `today` and `week` (the counts per day), `battery` (level, draining, when it
+runs out), `timers` (the notes running a timer, and when each rings), `thresholds` (each rule, and
+today's count against it), `schedules` (the ones on, soonest first), and `device`, `version`,
+`timeZone`. [mactoolmac](https://github.com/ainigh/mactoolmac) draws it.
 
 Two examples come with it: **Remind and say** (an argument, `message`: it reminds you, then says
 it) and **Drink some water** (one step: it runs Remind and say, giving it the message "Drink some
@@ -680,6 +706,13 @@ it runs, soonest (and ringing) first: its icon in a ring that empties as the tim
 badge, its title and the countdown, on a dashed card in the timer's color (red while it rings).
 Click one to open the note.
 
+**The panel's Scheduled column**, beside it: the schedules that are on, the next to run first (the
+chimes have their own switches, so they're left out), then the ones waiting for something to
+happen. Each shows its action's icon on its color (a ring that fills as its next run comes, for one
+that runs every so many minutes), its name and a countdown to its next run (the day and time when
+it's more than a day away; what it waits for, on a dashed card, for an event). Click one to open it
+in the Scheduler; right-click to run it now, skip its next run or turn it off.
+
 ### Timer log (Automate)
 
 A big glass report of everything the timers did, kept in
@@ -710,8 +743,8 @@ schedules, the default "Snoozes in a day over 4" among them):
    "value":5,"type":"threshold"}
   ```
 
-  `type` is `threshold`, `battery`, `alarm` or `snooze` (`schedule` for a job run at a time rather
-  than by an event); a schedule waiting for a count over a limit adds `threshold` (its count,
+  `type` is `threshold`, `battery`, `alarm`, `snooze`, `set`, `stop`, `dismiss` or `chime`
+  (`schedule` for a job run at a time rather than by an event); a schedule waiting for a count over a limit adds `threshold` (its count,
   limit and metric). Signals from before that hadn't gone through are still sent on.
 
 Each line has its switch and **Open in Scheduler**.

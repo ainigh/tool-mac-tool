@@ -52,6 +52,11 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         case addToNote
         /// Waits a while (`target`: how many seconds) before the next step; {{last}} goes on through it.
         case wait
+        /// POSTs a report to the dashboard (`target`: its address; empty, the built-in Send to
+        /// dashboard's): what happened, the timer log since the last report, and a snapshot of the
+        /// day (counts, the battery, timers running, schedules coming up). The text, if any, goes
+        /// with it as a note.
+        case dashboard
 
         public var title: String {
             switch self {
@@ -65,6 +70,7 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
             case .runAction: return "Run an action"
             case .addToNote: return "Add to a note"
             case .wait: return "Wait"
+            case .dashboard: return "Send to dashboard"
             }
         }
 
@@ -80,12 +86,13 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
             case .runAction: return "arrow.turn.down.right"
             case .addToNote: return "note.text.badge.plus"
             case .wait: return "hourglass"
+            case .dashboard: return "chart.bar.xaxis"
             }
         }
 
         /// It gives back text worth showing or saying (a reminder is already shown, a spoken line
         /// said; another action's depends on its last step).
-        public var hasResult: Bool { self == .askModel || self == .shortcut || self == .webhook }
+        public var hasResult: Bool { self == .askModel || self == .shortcut || self == .webhook || self == .dashboard }
 
         /// It has text of its own (a chime doesn't; another action is given arguments instead).
         public var hasText: Bool { self != .chime && self != .runAction && self != .wait }
@@ -97,13 +104,14 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var kind: Kind
     /// The model (Ask the model: "" is the chat's), the tool's or shortcut's name, the web
-    /// address, the chime ("day" or "night"), or the action it runs (its id).
+    /// address (the dashboard's: "" is the built-in Send to dashboard's), the chime ("day" or
+    /// "night"), or the action it runs (its id).
     public var target: String
     /// The prompt, the reminder, what to say, or what the tool, shortcut or address is given.
     public var text: String
     /// Ask the model: it may call the model tools and your shortcuts.
     public var useTools: Bool
-    /// Call a web address: sent as "Authorization: Bearer <secret>" when it isn't empty.
+    /// Call a web address, Send to dashboard: sent as "Authorization: Bearer <secret>" when it isn't empty.
     public var secret: String
     /// Run an action: the values it gives that action's arguments (they can hold {{…}} too).
     public var arguments: [ActionArgument]
@@ -162,6 +170,9 @@ public struct ActionStep: Codable, Equatable, Identifiable, Sendable {
         case .runAction: return "run \(actionName(target).map { "\u{201C}\($0)\u{201D}" } ?? "another action")"
         case .addToNote: return "add its text to a note"
         case .wait: return "wait \(Self.span(seconds))"
+        case .dashboard:
+            let host = URL(string: target.trimmingCharacters(in: .whitespacesAndNewlines))?.host
+            return "send what happened, and a snapshot of the day, to \(host ?? "the dashboard")"
         }
     }
 
@@ -180,6 +191,9 @@ public struct SavedAction: Codable, Equatable, Identifiable, Sendable {
     public enum Builtin: String, CaseIterable, Sendable {
         case dayChime = "day-chime"
         case nightWatch = "night-chime"
+        /// Sends a report to the dashboard: its address (and secret) are set here once, and every
+        /// schedule (and step) sending to the dashboard uses them.
+        case dashboard = "dashboard"
 
         public var id: String { "action-\(rawValue)" }
 
@@ -190,6 +204,9 @@ public struct SavedAction: Codable, Equatable, Identifiable, Sendable {
                                    builtin: rawValue)
             case .nightWatch:
                 return SavedAction(id: id, name: "Night watch", steps: [ActionStep(id: "\(id)-step", kind: .chime, target: "night")],
+                                   builtin: rawValue)
+            case .dashboard:
+                return SavedAction(id: id, name: "Send to dashboard", steps: [ActionStep(id: "\(id)-step", kind: .dashboard)],
                                    builtin: rawValue)
             }
         }
@@ -274,9 +291,49 @@ public struct ActionBook: Codable, Equatable, Sendable {
     public func action(_ id: String?) -> SavedAction? { actions.first { $0.id == id } }
 
     /// The built-in actions are all there (one that's missing comes back, as it was); they go first.
+    /// Send to dashboard keeps the address, secret and note set on it.
     public mutating func ensureBuiltins() {
+        let kept = dashboard
         actions.removeAll { $0.isBuiltin || SavedAction.Builtin.allCases.map(\.id).contains($0.id) }
-        actions.insert(contentsOf: SavedAction.Builtin.allCases.map(\.action), at: 0)
+        var fresh = SavedAction.Builtin.allCases.map(\.action)
+        if let kept, let i = fresh.firstIndex(where: { $0.builtin == SavedAction.Builtin.dashboard.rawValue }) {
+            fresh[i].steps[0].target = kept.target
+            fresh[i].steps[0].secret = kept.secret
+            fresh[i].steps[0].text = kept.text
+        }
+        actions.insert(contentsOf: fresh, at: 0)
+    }
+
+    /// The built-in Send to dashboard's step: the dashboard's address and secret.
+    public var dashboard: ActionStep? {
+        actions.first { $0.builtin == SavedAction.Builtin.dashboard.rawValue }?.steps.first { $0.kind == .dashboard }
+    }
+
+    /// Sets the dashboard's address, secret and note (on the built-in Send to dashboard: the one
+    /// place they're kept).
+    public mutating func setDashboard(url: String, secret: String, note: String) {
+        guard let a = actions.firstIndex(where: { $0.builtin == SavedAction.Builtin.dashboard.rawValue }),
+              let s = actions[a].steps.firstIndex(where: { $0.kind == .dashboard }) else { return }
+        actions[a].steps[s].target = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        actions[a].steps[s].secret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        actions[a].steps[s].text = note
+    }
+
+    /// Where a Send to dashboard step sends, and with which secret: its own address when it has
+    /// one (and its own secret), else the built-in's. Nil when neither is a usable http(s) address.
+    public func dashboardAddress(for step: ActionStep) -> (url: URL, secret: String)? {
+        let own = step.target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = own.isEmpty ? (dashboard ?? step) : step
+        guard let url = Self.webURL(source.target) else { return nil }
+        return (url, source.secret)
+    }
+
+    /// The address, if it's a usable http(s) one.
+    public static func webURL(_ text: String) -> URL? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let u = URL(string: t), let scheme = u.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              u.host?.isEmpty == false else { return nil }
+        return u
     }
 
     /// The actions that run this one (in one of their steps), by name.

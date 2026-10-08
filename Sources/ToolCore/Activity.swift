@@ -272,7 +272,7 @@ public struct Signal: Codable, Equatable, Sendable {
 
     /// The log entry's id, so a worker can drop one it has already seen (a retried send).
     public var id: String
-    /// "threshold", "battery", "alarm", "snooze" or "test".
+    /// "threshold", "battery", "alarm", "snooze", "set", "stop", "dismiss", "chime" or "test".
     public var type: String
     public var kind: String
     public var at: Date
@@ -294,6 +294,10 @@ public struct Signal: Codable, Equatable, Sendable {
         case .threshold: type = "threshold"
         case .batterySet, .batteryLevel, .batteryEmpty: type = "battery"
         case .snoozed: type = "snooze"
+        case .set: type = "set"
+        case .stopped: type = "stop"
+        case .dismissed: type = "dismiss"
+        case .chime: type = "chime"
         default: type = e.source == "test" ? "test" : "alarm"
         }
         kind = e.kind.rawValue

@@ -313,7 +313,9 @@ struct ActionEditor: View {
                             .padding(.horizontal, 9)
                             .frame(height: 22)
                             .background(Capsule().fill(.white.opacity(0.1)))
-                            .help("Built in: the built-in chimes run it. It can't be changed or deleted.")
+                            .help(action.builtin == SavedAction.Builtin.dashboard.rawValue
+                                  ? "Built in: set its address here once, and every schedule sending to the dashboard uses it. It can't be deleted."
+                                  : "Built in: the built-in chimes run it. It can't be changed or deleted.")
                     }
                 }
                 if let loop = scheduler.actions.loop(from: action.id) {
@@ -322,7 +324,9 @@ struct ActionEditor: View {
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.orange)
                 }
-                if action.isBuiltin {
+                if action.builtin == SavedAction.Builtin.dashboard.rawValue {
+                    EditorSection(title: "Where it sends") { DashboardSetup(scheduler: scheduler) }
+                } else if action.isBuiltin {
                     EditorSection(title: "What it does") {
                         Text("The \(action.steps.first?.target == "night" ? "night watch's" : "day chime's") sound and card. Schedules can run it too.")
                             .font(.system(size: 12.5, weight: .medium, design: .rounded))
@@ -524,6 +528,76 @@ struct EditorSection<Content: View>: View {
     }
 }
 
+/// The built-in Send to dashboard's address, secret and note: set here once, used by every
+/// schedule (and step) sending to the dashboard. Its built-in schedule, off until it's turned on,
+/// sends a report each time anything goes in the timer log.
+struct DashboardSetup: View {
+    @ObservedObject var scheduler: Scheduler
+
+    private var step: ActionStep { scheduler.actions.dashboard ?? ActionStep(kind: .dashboard) }
+
+    private func set(url: String? = nil, secret: String? = nil, note: String? = nil) {
+        let s = step
+        scheduler.setDashboard(url: url ?? s.target, secret: secret ?? s.secret, note: note ?? s.text)
+    }
+
+    var body: some View {
+        let job = scheduler.builtin(.dashboard)
+        let address = step.target.trimmingCharacters(in: .whitespaces)
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Every schedule that runs this sends a report here: what set it off, everything in the timer log since the last report, today's and the week's counts, the battery, the timers running, the thresholds and the schedules coming up. Set the address once; a Send to dashboard step in any action uses it too (unless it has one of its own).")
+                .foregroundStyle(.white.opacity(0.6))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Text("Address").frame(width: 56, alignment: .trailing)
+                TextField("https://mactoolmac.your-name.workers.dev/api/signals", text: Binding(get: { step.target }, set: { set(url: $0) }))
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack(spacing: 8) {
+                Text("Secret").frame(width: 56, alignment: .trailing)
+                SecureField("Optional: sent as Authorization: Bearer …", text: Binding(get: { step.secret }, set: { set(secret: $0) }))
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack(spacing: 8) {
+                Text("Note").frame(width: 56, alignment: .trailing)
+                TextField("Optional: goes with each report, e.g. {{event}}", text: Binding(get: { step.text }, set: { set(note: $0) }))
+                    .textFieldStyle(.roundedBorder)
+            }
+            if !address.isEmpty, !JobEditor.isWebAddress(address) {
+                Label("That isn't an http(s) address", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            if let job {
+                HStack(spacing: 10) {
+                    Toggle("Send a report whenever anything goes in the timer log", isOn: Binding(get: { job.enabled }, set: { on in
+                        scheduler.setEnabled(job.id, on)
+                    }))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(!JobEditor.isWebAddress(address) && !job.enabled)
+                    .help(JobEditor.isWebAddress(address)
+                          ? "The built-in Dashboard schedule (off until you turn it on)"
+                          : "Set the address first")
+                    PillButton(title: "Open in the Scheduler") { SchedulerWindow.show(scheduler, select: job.id) }
+                }
+                if let last = job.lastRun {
+                    HStack(spacing: 6) {
+                        Image(systemName: job.lastOK == true ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(job.lastOK == true ? Color.green.opacity(0.8) : Color.orange)
+                        (Text("Last report ") + Text(last, style: .relative) + Text(" ago: ") + Text(job.lastResult ?? ""))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+            }
+        }
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        .foregroundStyle(.white.opacity(0.8))
+        .frame(maxWidth: 600, alignment: .leading)
+    }
+}
+
 /// The values given to an action's arguments: a field for each (empty: its own value).
 struct ArgumentFields: View {
     let parameters: [ActionArgument]
@@ -654,6 +728,29 @@ struct StepCard: View {
                          items: shortcutNames.map { n -> (String, Bool, () -> Void) in (n, step.target == n, { step.target = n }) })
                 if shortcutNames.isEmpty { Text("No shortcuts found yet").foregroundStyle(.white.opacity(0.5)) }
             }
+        case .dashboard:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("Address").frame(width: 56, alignment: .trailing)
+                    TextField(dashboardPrompt, text: $step.target)
+                        .textFieldStyle(.roundedBorder)
+                }
+                if !step.target.trimmingCharacters(in: .whitespaces).isEmpty {
+                    HStack(spacing: 8) {
+                        Text("Secret").frame(width: 56, alignment: .trailing)
+                        SecureField("Optional: sent as Authorization: Bearer …", text: $step.secret)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    if !JobEditor.isWebAddress(step.target) {
+                        Label("That isn't an http(s) address", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                } else if scheduler.actions.dashboard.map({ JobEditor.isWebAddress($0.target) }) != true {
+                    Label("Set the dashboard's address on the built-in Send to dashboard first", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(maxWidth: 560)
         case .webhook:
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -688,6 +785,12 @@ struct StepCard: View {
         case .remind, .speak:
             EmptyView()
         }
+    }
+
+    /// What an empty address means: the built-in Send to dashboard's.
+    var dashboardPrompt: String {
+        let host = scheduler.actions.dashboard.flatMap { URL(string: $0.target.trimmingCharacters(in: .whitespaces))?.host }
+        return "Empty: Send to dashboard's address" + (host.map { " (\($0))" } ?? "")
     }
 
     /// The note it adds to: picked from the notes with a title, by board.
@@ -821,6 +924,7 @@ struct StepCard: View {
         case .shortcut: return "The shortcut's input (it can be empty)"
         case .webhook: return "Empty: what happened, as JSON. Or write your own, e.g. {\"text\": \"{{event}}\", \"battery\": \"{{battery}}\"}"
         case .addToNote: return "What goes in the note, e.g. {{date}} {{time}}: {{last}}"
+        case .dashboard: return "Optional: a note that goes with the report, e.g. {{event}} · {{battery}}"
         case .chime, .runAction, .wait: return ""
         }
     }
@@ -837,6 +941,7 @@ struct StepCard: View {
         case .runAction: return "Another action runs, given values for its arguments; what it gives back is this step's."
         case .addToNote: return "The text is added at the end of a note you pick, on a line of its own (a log, a journal, answers kept)."
         case .wait: return "Waits a while before the next step; what the step before gave back goes on through it."
+        case .dashboard: return "A report goes to the dashboard: what set it off, the timer log since the last report, today's and the week's counts, the battery, the timers running, the thresholds and the schedules coming up."
         }
     }
 
