@@ -162,7 +162,7 @@ final class ActionsTests: XCTestCase {
         XCTAssertNil(water.inline)
         XCTAssertEqual(book.jobs.first { $0.builtin == "day-chime" }?.actionID, SavedAction.Builtin.dayChime.id)
         XCTAssertEqual(book.jobs.first { $0.builtin == "night-chime" }?.actionID, SavedAction.Builtin.nightWatch.id)
-        XCTAssertEqual(actions.actions.count, 3)   // the two built in, and Water's
+        XCTAssertEqual(actions.actions.count, 4)   // the three built in, and Water's
         XCTAssertFalse(book.separate(into: &actions))
         // Saved and read back: the job keeps its action, and nothing of its own.
         let back = try JSONDecoder().decode(ScheduleBook.self, from: JSONEncoder().encode(book))
@@ -174,8 +174,33 @@ final class ActionsTests: XCTestCase {
     func testBuiltinActionsComeBackAsTheyWere() {
         var book = ActionBook(actions: [SavedAction(id: SavedAction.Builtin.dayChime.id, name: "Changed", steps: [], builtin: "day-chime")])
         book.ensureBuiltins()
-        XCTAssertEqual(book.actions.map(\.name), ["Day chime", "Night watch"])
-        XCTAssertTrue(book.actions.allSatisfy(\.isChime))
+        XCTAssertEqual(book.actions.map(\.name), ["Day chime", "Night watch", "Send to dashboard"])
+        XCTAssertEqual(book.actions.filter(\.isChime).count, 2)
+        XCTAssertEqual(book.actions.last?.steps.map(\.kind), [.dashboard])
+    }
+
+    func testTheDashboardKeepsItsAddressAndStepsUseIt() throws {
+        var book = ActionBook()
+        book.ensureBuiltins()
+        let mine = ActionStep(kind: .dashboard)
+        XCTAssertNil(book.dashboardAddress(for: mine))
+        book.setDashboard(url: " https://dash.example.dev/api/signals ", secret: "shh", note: "{{event}}")
+        // Read back and made sure of again (as on every start): the address stays.
+        book = try JSONDecoder().decode(ActionBook.self, from: JSONEncoder().encode(book))
+        book.ensureBuiltins()
+        XCTAssertEqual(book.dashboard?.target, "https://dash.example.dev/api/signals")
+        XCTAssertEqual(book.dashboard?.text, "{{event}}")
+        // A step with no address of its own sends to the built-in's, with its secret.
+        let shared = try XCTUnwrap(book.dashboardAddress(for: mine))
+        XCTAssertEqual(shared.url.host, "dash.example.dev")
+        XCTAssertEqual(shared.secret, "shh")
+        // One with its own uses that (and its own secret).
+        let own = try XCTUnwrap(book.dashboardAddress(for: ActionStep(kind: .dashboard, target: "http://other.test/x", secret: "")))
+        XCTAssertEqual(own.url.host, "other.test")
+        XCTAssertEqual(own.secret, "")
+        XCTAssertNil(book.dashboardAddress(for: ActionStep(kind: .dashboard, target: "not an address")))
+        XCTAssertTrue(ActionStep.Kind.dashboard.hasResult)
+        XCTAssertTrue(ActionStep(kind: .dashboard).doing { _ in nil }.contains("the dashboard"))
     }
 
     func testArgumentNamesAreCleanedAndKeptForTheForm() {

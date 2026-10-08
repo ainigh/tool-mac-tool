@@ -20,8 +20,8 @@ struct Tool: Identifiable {
 
 struct ToolSection: Identifiable {
     /// Something shown with (or instead of) the tiles: the zips downloaded lately, the chimes'
-    /// switches (after the tiles), the notes running a timer, the tags' boards.
-    enum Extra { case recentZips, chimes, timedNotes, tagBoards }
+    /// switches (after the tiles), the notes running a timer, the schedules that are on, the tags' boards.
+    enum Extra { case recentZips, chimes, timedNotes, scheduledJobs, tagBoards }
     /// How its tiles are laid out: four across, or bigger ones stacked in a column of their own.
     enum Style { case grid, stack }
 
@@ -37,6 +37,7 @@ struct ToolSection: Identifiable {
 
 enum Tools {
     static let timersColor = Color(red: 0.90, green: 0.30, blue: 0.62)
+    static let scheduledColor = Color(red: 0.20, green: 0.70, blue: 0.36)
     static let batteryColor = Color(red: 0.20, green: 0.66, blue: 0.42)
     static let boardsColor = Color(red: 0.36, green: 0.40, blue: 0.92)
     static let tagsColor = Color(red: 0.85, green: 0.45, blue: 0.10)
@@ -50,8 +51,9 @@ enum Tools {
                                    extra: .recentZips)
 
     /// The panel's columns under the top rows, each top to bottom: a titled grid of tiles per
-    /// section. The last two are narrow: the notes running a timer (docked there by themselves
-    /// while it runs), and the tags' boards, each gathering the notes with that tag.
+    /// section. The last three are narrow: the notes running a timer (docked there by themselves
+    /// while it runs), the schedules that are on, and the tags' boards, each gathering the notes
+    /// with that tag.
     static let columns: [[ToolSection]] = [
         [
             // Things done for you at the times you set, or when something happens; what they do;
@@ -74,6 +76,10 @@ enum Tools {
         [
             // The notes running a timer or a due date, soonest first: a click opens one.
             ToolSection(title: "Timers", color: timersColor, tools: [], extra: .timedNotes, style: .stack),
+        ],
+        [
+            // The schedules that are on, the next to run first: a click opens one in the Scheduler.
+            ToolSection(title: "Scheduled", color: scheduledColor, tools: [], extra: .scheduledJobs, style: .stack),
         ],
         [
             // A board per tag, each gathering every note with that tag.

@@ -521,7 +521,7 @@ private struct SignalsPane: View {
     /// limit, or call a web address.
     private var thresholds: [ScheduledJob] { scheduler.book.jobs.filter { $0.when.kind == .event && $0.when.event == .countOver } }
     private var signals: [ScheduledJob] {
-        scheduler.book.jobs.filter { job in scheduler.action(job.actionID)?.steps.contains { $0.kind == .webhook } ?? false }
+        scheduler.book.jobs.filter { job in scheduler.action(job.actionID)?.steps.contains { $0.kind == .webhook || $0.kind == .dashboard } ?? false }
     }
 
     var body: some View {
@@ -614,6 +614,9 @@ private struct JobLine: View {
         let action = scheduler.action(job.actionID)
         var parts = [job.when.describe(clock24: scheduler.prefs.settings.clock24), action?.name ?? "No action picked"]
         if let hook = action?.steps.first(where: { $0.kind == .webhook }) { parts.append(URL(string: hook.target)?.host ?? "no address yet") }
+        if let step = action?.steps.first(where: { $0.kind == .dashboard }) {
+            parts.append(scheduler.actions.dashboardAddress(for: step)?.url.host ?? "no address yet")
+        }
         return parts.joined(separator: " · ")
     }
 }

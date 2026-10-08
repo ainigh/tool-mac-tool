@@ -369,6 +369,7 @@ struct JobRow: View {
         case .runAction: return Color(red: 0.45, green: 0.5, blue: 0.95)
         case .addToNote: return Color(red: 0.85, green: 0.62, blue: 0.12)
         case .wait: return Color(red: 0.5, green: 0.52, blue: 0.6)
+        case .dashboard: return Color(red: 0.16, green: 0.48, blue: 0.96)
         }
     }
 }
@@ -496,8 +497,10 @@ struct JobEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 if job.isBuiltin {
-                    PillButton(title: action?.name ?? "Chime", prominent: true) {}
-                        .help("Built in: it always runs this (change its hours, or turn it off)")
+                    PillButton(title: action?.name ?? "Chime", prominent: true) {
+                        if let action { ActionsWindow.show(scheduler, select: action.id) }
+                    }
+                    .help("Built in: it always runs this (change when it runs, or turn it off). Click to open it in Actions\(job.builtin == ScheduledJob.Builtin.dashboard.rawValue ? ", where the dashboard's address is set" : "").")
                 } else {
                     MenuPill(title: action?.name ?? (job.actionID.isEmpty ? "Pick an action" : "Its action is gone: pick another"),
                              help: "The action it runs (make and change them in Actions)",
@@ -573,7 +576,7 @@ struct JobEditor: View {
             PillButton(title: "Duplicate") { select(scheduler.duplicate(job.id)) }
             if job.isBuiltin {
                 PillButton(title: "Reset") { scheduler.reset(job.id) }
-                    .help("Back to how it came: on, at its hours")
+                    .help(job.builtin == ScheduledJob.Builtin.dashboard.rawValue ? "Back to how it came: off, on anything going in the timer log" : "Back to how it came: on, at its hours")
             } else {
                 PillButton(title: "Delete") {
                     let id = job.id
@@ -878,6 +881,7 @@ struct WhenEditor: View {
         case .chime: return "Each time the day chime or the night watch (or a chime of your own) sounds."
         case .countOver: return "The moment the day's count goes over the limit: once a day at most. With Remind me it comes up big in the middle of the screen, as the timer log's thresholds did."
         case .thresholdCrossed: return "Each time any schedule's count goes over its limit."
+        case .anyLogged: return "Each time anything goes in the timer log: an alarm, a snooze, a timer set or stopped, a chime, the battery, a threshold. Made for Send to dashboard (a report carries everything since the one before, so none is missed)."
         case .startOfWeek: return "Every Monday at this time."
         case .endOfWeek: return "Every Sunday at this time."
         case .startOfMonth: return "On the 1st of each month at this time."

@@ -3,21 +3,28 @@ import Foundation
 /// The scheduler's jobs: at the times you set (or when something happens: an alarm goes off, the
 /// battery gets low, a day's count goes over a limit), each runs an action (`SavedAction`, made in
 /// Actions) with the arguments it gives. The day chime and the night watch are built-in jobs: on
-/// from the start, and they can't be deleted.
+/// from the start, and they can't be deleted. So is the dashboard's, which sends a report each time
+/// something goes in the timer log: off until it's turned on (once its address is set).
 public struct ScheduledJob: Codable, Equatable, Identifiable {
     /// What a step does (what a job did, before actions were their own).
     public typealias Action = ActionStep.Kind
 
-    /// The built-in jobs' ids: on from the start, kept (they can be turned off, not deleted).
+    /// The built-in jobs' ids: kept (they can be turned off, not deleted). The chimes are on from
+    /// the start; the dashboard's is off.
     public enum Builtin: String, CaseIterable, Sendable {
         case dayChime = "day-chime"
         case nightWatch = "night-chime"
+        case dashboard = "dashboard"
+
+        /// The chimes (the panel's switches).
+        public static let chimes: [Builtin] = [.dayChime, .nightWatch]
 
         /// The built-in action it runs.
         public var action: SavedAction.Builtin {
             switch self {
             case .dayChime: return .dayChime
             case .nightWatch: return .nightWatch
+            case .dashboard: return .dashboard
             }
         }
 
@@ -31,6 +38,10 @@ public struct ScheduledJob: Codable, Equatable, Identifiable {
             case .nightWatch:
                 return ScheduledJob(id: "builtin-\(rawValue)", name: "Night watch", enabled: true,
                                     when: Schedule(kind: .hourly, minute: 0, hours: Schedule.nightHours), showResult: false,
+                                    builtin: rawValue, actionID: action.id)
+            case .dashboard:
+                return ScheduledJob(id: "builtin-\(rawValue)", name: "Dashboard", enabled: false,
+                                    when: Schedule(kind: .event, event: .anyLogged), showResult: false,
                                     builtin: rawValue, actionID: action.id)
             }
         }
@@ -402,6 +413,7 @@ public struct Schedule: Codable, Equatable {
             }
         case .batteryChange: return entry.kind == .batterySet || entry.kind == .batteryLevel || entry.kind == .batteryEmpty
         case .chime: return entry.kind == .chime
+        case .anyLogged: return true
         case .countOver: return crossing(entry, log: log, calendar: calendar) != nil
         case .thresholdCrossed: return entry.kind == .threshold
         case .startOfWeek, .endOfWeek, .startOfMonth, .endOfMonth, .appLaunch, .macWake: return false
@@ -424,7 +436,7 @@ public struct Schedule: Codable, Equatable {
 public enum ScheduleEvent: String, Codable, CaseIterable, Sendable {
     case alarmSet, alarmRang, alarmSnoozed, alarmStopped, alarmDismissed
     case batteryAt, batteryChange
-    case chime
+    case chime, anyLogged
     case countOver, thresholdCrossed
     case startOfWeek, endOfWeek, startOfMonth, endOfMonth
     case appLaunch, macWake
@@ -439,6 +451,7 @@ public enum ScheduleEvent: String, Codable, CaseIterable, Sendable {
         case .batteryAt: return "The battery is at…"
         case .batteryChange: return "The battery changes"
         case .chime: return "A chime sounds"
+        case .anyLogged: return "Anything goes in the log"
         case .countOver: return "A day's count goes over…"
         case .thresholdCrossed: return "Any threshold is crossed"
         case .startOfWeek: return "Start of the week"
@@ -461,6 +474,7 @@ public enum ScheduleEvent: String, Codable, CaseIterable, Sendable {
         case .batteryAt: return "When the battery reaches a level"
         case .batteryChange: return "When the battery is set, passes 10%, or runs out"
         case .chime: return "When a chime sounds"
+        case .anyLogged: return "Whenever anything goes in the timer log"
         case .countOver: return "When a day's count goes over a limit"
         case .thresholdCrossed: return "When any threshold is crossed"
         case .startOfWeek: return "Every Monday"
@@ -482,6 +496,7 @@ public enum ScheduleEvent: String, Codable, CaseIterable, Sendable {
         case .batteryAt: return "battery.25"
         case .batteryChange: return "battery.100"
         case .chime: return "bell"
+        case .anyLogged: return "list.bullet.rectangle"
         case .countOver: return "exclamationmark.octagon"
         case .thresholdCrossed: return "chart.line.uptrend.xyaxis"
         case .startOfWeek, .endOfWeek: return "calendar"
@@ -495,7 +510,7 @@ public enum ScheduleEvent: String, Codable, CaseIterable, Sendable {
     public static let groups: [(title: String, events: [ScheduleEvent])] = [
         ("Alarms", [.alarmSet, .alarmRang, .alarmSnoozed, .alarmStopped, .alarmDismissed]),
         ("Battery", [.batteryAt, .batteryChange]),
-        ("Timer log", [.chime, .countOver, .thresholdCrossed]),
+        ("Timer log", [.chime, .countOver, .thresholdCrossed, .anyLogged]),
         ("Calendar", [.startOfWeek, .endOfWeek, .startOfMonth, .endOfMonth]),
         ("This Mac", [.appLaunch, .macWake]),
     ]
@@ -748,12 +763,17 @@ public struct ScheduleBook: Codable, Equatable {
         try encoder.encode(self).write(to: url, options: .atomic)
     }
 
-    /// The built-in jobs are all there (one that's missing is added, on); they go first, each
-    /// running its built-in action.
+    /// The built-in jobs are all there (one that's missing is added, as it comes: the chimes on,
+    /// the dashboard's off); they go first, in order, each running its built-in action.
     public mutating func ensureBuiltins() {
-        for b in ScheduledJob.Builtin.allCases.reversed() where !jobs.contains(where: { $0.builtin == b.rawValue }) {
-            jobs.insert(b.job, at: 0)
+        for b in ScheduledJob.Builtin.allCases where !jobs.contains(where: { $0.builtin == b.rawValue }) {
+            jobs.append(b.job)
         }
+        let order = ScheduledJob.Builtin.allCases.map(\.rawValue)
+        let builtins = jobs.filter(\.isBuiltin).sorted {
+            (order.firstIndex(of: $0.builtin ?? "") ?? order.count) < (order.firstIndex(of: $1.builtin ?? "") ?? order.count)
+        }
+        jobs = builtins + jobs.filter { !$0.isBuiltin }
         for i in jobs.indices {
             if let b = jobs[i].builtin.flatMap(ScheduledJob.Builtin.init(rawValue:)) {
                 jobs[i].actionID = b.action.id
@@ -780,6 +800,15 @@ public struct ScheduleBook: Codable, Equatable {
             changed = true
         }
         return changed
+    }
+
+    /// The jobs that are on, for the panel's list: the soonest first, then the ones waiting for
+    /// something to happen. The chimes (they have switches of their own) are left out.
+    public func upcoming() -> [ScheduledJob] {
+        let chimes = Set(ScheduledJob.Builtin.chimes.map(\.rawValue))
+        let on = jobs.filter { $0.enabled && !chimes.contains($0.builtin ?? "") }
+        let timed = on.filter { $0.next != nil }.sorted { ($0.next ?? .distantFuture) < ($1.next ?? .distantFuture) }
+        return timed + on.filter { $0.next == nil && $0.when.kind == .event }
     }
 
     /// The jobs that run an action (by its id).

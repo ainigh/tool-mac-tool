@@ -52,6 +52,9 @@ final class Scheduler: ObservableObject {
     private weak var boards: BoardStore?
     /// When each job last ran for an event, so one whose own run sets its event off can't loop.
     private var lastEvent: [String: Date] = [:]
+    /// The jobs that only send to the dashboard whose event came while they were busy: each runs
+    /// again once it's done, so what came in goes out (a report carries everything since the last).
+    private var rerun: Set<String> = []
     static let eventGap: TimeInterval = 1
     private static let migratedKey = "schedulesFromSignals"
 
@@ -186,8 +189,14 @@ final class Scheduler: ObservableObject {
     }
 
     private func fire(_ job: ScheduledJob, context: Context, now: Date) {
-        if let last = lastEvent[job.id], now.timeIntervalSince(last) < Self.eventGap { return }
-        guard !running.contains(job.id) else { return }
+        let busy = running.contains(job.id) || lastEvent[job.id].map { now.timeIntervalSince($0) < Self.eventGap } ?? false
+        if busy {
+            if onlyReports(job) {
+                rerun.insert(job.id)
+                if !running.contains(job.id) { runAgainSoon(job.id) }
+            }
+            return
+        }
         lastEvent[job.id] = now
         // A count over its limit is a threshold crossed: the log (and the report) keep it.
         if let crossing = context.crossing {
@@ -316,6 +325,7 @@ final class Scheduler: ObservableObject {
 
     private func finished(_ job: ScheduledJob, at now: Date, outcome: Outcome, byHand: Bool, context: Context) {
         running.remove(job.id)
+        if rerun.contains(job.id) { runAgainSoon(job.id) }
         // A chime goes into the timer log, not the history (every hour, it would crowd out the rest).
         if !isChime(job) {
             book.record(JobRun(job: job.id, name: job.name, at: now, ok: outcome.ok, output: outcome.output, tools: outcome.tools))
@@ -401,6 +411,8 @@ final class Scheduler: ObservableObject {
             var outcome = await Self.call(url, body: body.data, contentType: body.contentType, secret: step.secret)
             outcome.fresh = true
             return outcome
+        case .dashboard:
+            return await report(step, note: text, caller: caller, now: now)
         case .remind:
             let shown = text.isEmpty ? job.name : text
             // A count gone over its limit comes up big, in the middle of the screen.
@@ -451,6 +463,70 @@ final class Scheduler: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             return Outcome(ok: true, output: "Waited \(ActionStep.span(step.seconds))")
         }
+    }
+
+    // MARK: The dashboard
+
+    /// Sends a report to the dashboard: what set it off, the log since the last report to that
+    /// address, and a snapshot of the moment. The answer is the result.
+    private func report(_ step: ActionStep, note: String, caller: Caller, now: Date) async -> Outcome {
+        guard let address = actions.dashboardAddress(for: step) else {
+            return .failed("Set the dashboard's address first: Actions → Send to dashboard (built in).")
+        }
+        let url = address.url
+        let s = prefs.settings
+        let cal = Self.calendar(s)
+        let job = caller.job
+        let key = Self.sentKey(url)
+        let since = UserDefaults.standard.object(forKey: key) as? Date
+        let timers = (boards?.upcoming ?? []).map {
+            DashboardReport.TimerNow(name: $0.title ?? $0.place, place: $0.place, timer: $0.spec.name, kind: $0.spec.kind.rawValue, at: $0.at)
+        }
+        let trigger = DashboardReport.Trigger(job: job.id.hasPrefix("action-") ? "By hand" : job.name,
+                                              when: job.id.hasPrefix("action-") ? "" : job.when.describe(clock24: s.clock24, calendar: cal),
+                                              action: actions.action(job.actionID)?.name ?? job.name,
+                                              note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+        let report = DashboardReport(now: now, calendar: cal, device: ActivityStore.device, version: Self.version, trigger: trigger,
+                                     event: caller.context.entry, crossing: caller.context.crossing.map { (rule: job.when.rule, count: $0) },
+                                     log: activity?.log ?? ActivityLog(), since: since, battery: batteryNow(), timers: timers,
+                                     jobs: book.jobs, actionName: { [actions] in actions.action($0)?.name }, clock24: s.clock24)
+        guard let body = try? report.json() else { return .failed("Couldn't put the report together.") }
+        let outcome = await Self.call(url, body: body, contentType: "application/json", secret: address.secret)
+        // Sent: the next report starts from here (one that didn't go carries these again).
+        if outcome.ok { UserDefaults.standard.set(now, forKey: key) }
+        return Outcome(ok: outcome.ok, output: outcome.output, tools: outcome.tools, fresh: true)
+    }
+
+    private func batteryNow() -> BatteryState { timers?.battery ?? BatteryState() }
+
+    /// Where the last report to an address got up to.
+    private static func sentKey(_ url: URL) -> String { "dashboardSent.\(url.host ?? url.absoluteString)\(url.path)" }
+
+    static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+    }
+
+    /// What came in while a dashboard job was busy goes in another report, a moment later.
+    private func runAgainSoon(_ id: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.eventGap * 1_000_000_000))
+            guard let self, self.rerun.contains(id), !self.running.contains(id) else { return }
+            self.rerun.remove(id)
+            guard let job = self.job(id), job.enabled else { return }
+            self.lastEvent[id] = AppClock.now()
+            self.run(id, now: AppClock.now(), context: Context(entry: self.activity?.log.entries.last))
+        }
+    }
+
+    /// The job does nothing but send to the dashboard (so running it again can't set itself off).
+    private func onlyReports(_ job: ScheduledJob) -> Bool {
+        guard let live = actions.action(job.actionID)?.live, !live.isEmpty else { return false }
+        return live.allSatisfy { $0.kind == .dashboard }
+    }
+
+    /// The dashboard's address, secret and note: set on the built-in Send to dashboard.
+    func setDashboard(url: String, secret: String, note: String) {
+        actions.setDashboard(url: url, secret: secret, note: note)
     }
 
     // MARK: Notes, for the steps that add to one
