@@ -526,7 +526,7 @@ enum RecordingsWindow {
     static func show(_ app: AppModel) {
         let model = app.recordings
         Windows.show("recordings") {
-            let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let screen = Windows.visibleFrame
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
             let panel = GlassPanel(size: size)
             panel.level = .floating

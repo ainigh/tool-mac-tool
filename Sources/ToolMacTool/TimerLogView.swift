@@ -16,7 +16,7 @@ enum TimerLogWindow {
         let board = app.timers
         let scheduler = app.scheduler
         Windows.show("timer-log") {
-            let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            let screen = Windows.visibleFrame
             let size = NSSize(width: (screen.width * 0.9).rounded(), height: (screen.height * 0.9).rounded())
             let panel = GlassPanel(size: size)
             panel.level = .floating

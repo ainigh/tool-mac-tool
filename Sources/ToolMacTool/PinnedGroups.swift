@@ -60,11 +60,12 @@ final class PinnedGroups: ObservableObject {
         panel.setContentSize(host.fittingSize)
         panel.commands = ["w": { [weak self] in self?.set(false, id) }]
         let name = "ToolMacTool.group.\(id)"
-        if !panel.setFrameUsingName(name), let v = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+        if !panel.setFrameUsingName(name) {
             // Down the left of the screen, each new one a little in from the last.
-            let n = CGFloat(panels.count % 8)
+            let v = Windows.visibleFrame, n = CGFloat(panels.count % 8)
             panel.setFrameOrigin(NSPoint(x: v.minX + 24 + n * 26, y: v.maxY - panel.frame.height - 24 - n * 26))
         }
+        Windows.keepOnScreen(panel)
         panel.setFrameAutosaveName(name)
         panels[id] = panel
         panel.orderFrontRegardless()

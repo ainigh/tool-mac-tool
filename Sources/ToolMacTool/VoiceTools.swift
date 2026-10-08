@@ -25,7 +25,7 @@ enum GlassWindow {
             host.sizingOptions = []
             panel.contentView = host
             panel.commands = ["w": close]
-            panel.center()
+            Windows.center(panel)
             panel.setFrameAutosaveName("ToolMacTool.\(id)")
             return panel
         }
