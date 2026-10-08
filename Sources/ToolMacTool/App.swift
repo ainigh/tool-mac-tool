@@ -64,6 +64,8 @@ final class AppModel: ObservableObject {
         // The scheduler hears of what goes into the timer log (its event jobs), runs the chimes
         // (its built-in jobs), and reads the battery and the boards' alarms for its placeholders.
         scheduler.attach(activity: activity, timers: timers, boards: boards)
+        // Notes' action buttons run actions through it.
+        NoteComponentServices.shared.scheduler = scheduler
         // Test mode's fast clock coming or going: the schedules are planned again from the new
         // time; leaving it, what was set on the fast clock is cleared up.
         ModeCenter.shared.onClockChange = { [weak self] leftTest in

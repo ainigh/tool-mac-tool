@@ -66,7 +66,7 @@ enum Tools {
                         tools: [recordScreen, recordScreenOnly, recordAudio, recordings, screenshot]),
         ],
         [
-            ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings]),
+            ToolSection(title: "Glass", color: Color(red: 0.05, green: 0.66, blue: 0.70), tools: [chat, memory, prompts, settings, components]),
             // What the chat's model can do for you (it calls them as tools); each also works by itself.
             ToolSection(title: "Model tools", color: Color(red: 0.96, green: 0.56, blue: 0.10),
                         tools: [diagram, alarm, openLink, clipboard, shortcutTools]),
@@ -119,6 +119,14 @@ enum Tools {
         subtitle: "Say or type what you want drawn: the model writes it in Mermaid and the app draws it as a network on a big glass canvas, every node an icon picked from its name. Ask for changes and it redraws from the current diagram. The chat's model can open it too (draw_diagram), describing what to draw.",
         symbol: "point.3.connected.trianglepath.dotted",
         open: { model in DiagramWindow.show(model.diagram) })
+
+    static let components = Tool(
+        id: "components",
+        name: "Components",
+        title: "Note components: blocks a note can hold",
+        subtitle: "Checklists, tables, kanban boards, contacts, progress bars, countdowns, habit trackers, a calculator, callouts, code, bookmarks, pictures, and buttons that run your actions and shortcuts. Type / in any note to put one in; here, see each, try it, and add it to a note.",
+        symbol: "square.stack.3d.up",
+        open: { model in ComponentsWindow.show(boards: model.boards) })
 
     static let prompts = Tool(
         id: "prompts",

@@ -136,9 +136,11 @@ public struct Board: Codable, Equatable, Sendable {
             if has(tag) { tags.removeAll { $0 == tag } } else { tags = NoteTag.allCases.filter { $0 == tag || has($0) } }
         }
 
-        /// Its first line of text, trimmed (nil when it has none): what it's called in lists.
+        /// Its first line of text, trimmed (nil when it has none): what it's called in lists. One
+        /// that starts with a component is called by the component's name.
         public var title: String? {
-            text.split(whereSeparator: \.isNewline).lazy
+            if text.contains(":::") { return NoteDocument(text).title }
+            return text.split(whereSeparator: \.isNewline).lazy
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .first { !$0.isEmpty }
         }
