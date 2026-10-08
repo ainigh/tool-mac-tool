@@ -60,11 +60,42 @@ if [[ -z "$app" ]]; then
 fi
 
 # install and open -----------------------------------------------------------------------------
+# The app that was here is kept until the new one is seen running: if the new one quits straight
+# away, the old one goes back and opens again, so an install never leaves you without it.
 say "Installing into $APPS"
+[[ -d "$app" ]] || die "The download didn't hold $NAME.app."
 pkill -x "$NAME" 2>/dev/null && sleep 1 || true
 mkdir -p "$APPS"
-rm -rf "$APPS/$NAME.app"
+previous="$APPS/.$NAME-previous.app"
+rm -rf "$previous"
+[[ -d "$APPS/$NAME.app" ]] && mv "$APPS/$NAME.app" "$previous"
 ditto "$app" "$APPS/$NAME.app"
 xattr -dr com.apple.quarantine "$APPS/$NAME.app" 2>/dev/null || true
+version="$(defaults read "$APPS/$NAME.app/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "?")"
 open "$APPS/$NAME.app"
-say "Done: look for the wrench icon in the menu bar."
+
+# Still running a few seconds on: it started.
+started=0
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 1
+  if pgrep -x "$NAME" >/dev/null; then started=1; else started=0; fi
+done
+if [[ "$started" == 1 ]]; then
+  rm -rf "$previous"
+  say "Done ($version): look for the wrench icon in the menu bar."
+  echo "  Not there? The menu bar may be full (behind the camera notch): quit an icon or two, or hold ⌘ and drag some away."
+  exit 0
+fi
+
+crash="$(ls -t "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null | grep -i "$NAME" | head -1 || true)"
+if [[ -d "$previous" ]]; then
+  rm -rf "$APPS/$NAME.app"
+  mv "$previous" "$APPS/$NAME.app"
+  open "$APPS/$NAME.app"
+  printf '\n\033[31m%s\033[0m\n' "$NAME $version quit as soon as it opened, so the one you had is back and open again." >&2
+else
+  printf '\n\033[31m%s\033[0m\n' "$NAME $version quit as soon as it opened." >&2
+fi
+[[ -n "$crash" ]] && echo "  What went wrong is in ~/Library/Logs/DiagnosticReports/$crash" >&2
+echo "  To see it happen: $APPS/$NAME.app/Contents/MacOS/$NAME" >&2
+exit 1
