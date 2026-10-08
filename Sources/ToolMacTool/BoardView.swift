@@ -506,18 +506,25 @@ struct BoardBox: View {
         let t = Board.tints[box.tint]
         let fill = Color(red: t.red, green: t.green, blue: t.blue)
         let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        // Its buttons shown, or only the few it always has (the rest a click away, top right).
+        let full = box.controls
         return HStack(alignment: .top, spacing: 0) {
-            NoteSideColumn(store: store, board: board, index: index, box: box)
+            NoteSideColumn(store: store, board: board, index: index, box: box, iconOnly: !full)
                 .padding(.leading, 3)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
                     // Next to the note's icon: Daily, Mornings, Afternoons, Evenings, Weekly, Monthly (one at a time).
-                    RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
-                        .padding(.leading, 2)
+                    if full || box.repeats != nil {
+                        RepeatButtons(store: store, board: board, index: index, on: box.repeats, short: !wide)
+                            .padding(.leading, 2)
+                    }
                     // The strip above the text: a double-click here steps the color too.
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2, perform: cycle)
+                    ControlsToggle(on: full, tint: board.color) {
+                        withAnimation(.easeInOut(duration: 0.18)) { model.board.boxes[index].controls.toggle() }
+                    }
                 }
                 .frame(height: 20)
                 .padding(.horizontal, 3)
@@ -532,15 +539,23 @@ struct BoardBox: View {
                     .padding(.horizontal, 4)
                 // The row above the bottom: its board (a click opens it), the notes it links to,
                 // and + to link another.
-                NoteLinksRow(store: store, board: board, index: index, links: box.links, onOwnBoard: onOwnBoard,
-                             openBoard: openBoard ?? { store.show(board.id, focus: index) })
-                    .padding(.top, 4)
+                if full || !box.links.isEmpty {
+                    NoteLinksRow(store: store, board: board, index: index, links: box.links, onOwnBoard: onOwnBoard,
+                                 openBoard: openBoard ?? { store.show(board.id, focus: index) })
+                        .padding(.top, 4)
+                }
                 // Bottom left: To do, Pending, Completed (one at a time); bottom right: the tags.
                 HStack(spacing: 4) {
                     StatusButtons(store: store, board: board, index: index, on: box.status, short: !wide)
                     Spacer(minLength: 4)
-                    ForEach(NoteTag.allCases, id: \.self) { tag in
+                    ForEach(NoteTag.allCases.filter { full || box.has($0) }, id: \.self) { tag in
                         TagButton(tag: tag, on: box.has(tag), height: 18) { store.toggle(tag, board, index) }
+                    }
+                    // With its buttons hidden, opening it to fill the board stays a click away.
+                    if !full, let toggleExpand {
+                        BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                  help: expanded ? "Open to fill the board: on. Click to go back to the grid (Esc)" : "Open to fill the board",
+                                  tint: expanded ? board.color : nil, lit: expanded, action: toggleExpand)
                     }
                     if let arrange { ResizeGrip(arrange: arrange, across: box.across, down: box.down) }
                 }
@@ -549,41 +564,44 @@ struct BoardBox: View {
                 .padding(.vertical, 3)
             }
             // Down its right, from the top: copy, open to fill the board, the menu bar, dock, pin.
-            VStack(spacing: 2) {
-                BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: copied ? "Copied" : "Copy the text") {
-                    Clipboard.copy(box.text)
-                    copied = true
-                    copiedReset?.cancel()
-                    copiedReset = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 1_200_000_000)
-                        guard !Task.isCancelled else { return }
-                        copied = false
+            if full {
+                VStack(spacing: 2) {
+                    BoxButton(symbol: copied ? "checkmark" : "doc.on.doc", help: copied ? "Copied" : "Copy the text") {
+                        Clipboard.copy(box.text)
+                        copied = true
+                        copiedReset?.cancel()
+                        copiedReset = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 1_200_000_000)
+                            guard !Task.isCancelled else { return }
+                            copied = false
+                        }
                     }
+                    if let toggleExpand {
+                        BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                                  help: expanded ? "Open to fill the board: on. Click to go back to the grid (Esc)" : "Open to fill the board",
+                                  tint: expanded ? board.color : nil, lit: expanded, action: toggleExpand)
+                    }
+                    NoteMenuBarButton(store: store, board: board, index: index)
+                    BoxButton(symbol: "dock.arrow.down.rectangle",
+                              help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
+                                  : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
+                              tint: box.docked ? board.color : nil) {
+                        store.setDocked(!box.docked, board, index)
+                    }
+                    BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
+                              help: focus.isFocus(board, index) ? "Focus keeps this note pinned while it's the one in focus"
+                                  : box.pinned ? "Unpin: put the floating box away (it stays here)"
+                                  : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
+                              tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
+                        store.setPinned(!box.pinned, board, index)
+                    }
+                    // Under the pin: speak into the note, or write down sound files into it.
+                    NoteVoiceButtons(store: store, board: board, index: index, both: tall)
                 }
-                if let toggleExpand {
-                    BoxButton(symbol: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                              help: expanded ? "Open to fill the board: on. Click to go back to the grid (Esc)" : "Open to fill the board",
-                              tint: expanded ? board.color : nil, lit: expanded, action: toggleExpand)
-                }
-                NoteMenuBarButton(store: store, board: board, index: index)
-                BoxButton(symbol: "dock.arrow.down.rectangle",
-                          help: box.docked ? "Undock: take it out of the row along the bottom of the menu bar panel"
-                              : "Dock: keep it in the row along the bottom of the menu bar panel, a click away",
-                          tint: box.docked ? board.color : nil) {
-                    store.setDocked(!box.docked, board, index)
-                }
-                BoxButton(symbol: box.pinned ? "pin.fill" : "pin",
-                          help: focus.isFocus(board, index) ? "Focus keeps this note pinned while it's the one in focus"
-                              : box.pinned ? "Unpin: put the floating box away (it stays here)"
-                              : "Pin: float this box on your screen, above other windows (drag it anywhere to move it)",
-                          tint: box.pinned ? Color(red: 0.86, green: 0.22, blue: 0.28) : nil) {
-                    store.setPinned(!box.pinned, board, index)
-                }
-                // Under the pin: speak into the note, or write down sound files into it.
-                NoteVoiceButtons(store: store, board: board, index: index, both: tall)
+                .padding(.top, 2)
+                .padding(.trailing, 3)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            .padding(.top, 2)
-            .padding(.trailing, 3)
         }
         .overlay(alignment: .top) {
             VStack(spacing: 2) {
@@ -943,6 +961,8 @@ private struct NoteSideColumn: View {
     let board: BoardStore.Kind
     let index: Int
     let box: Board.Box
+    /// Only the note's icon (its buttons are hidden).
+    var iconOnly = false
 
     var body: some View {
         GeometryReader { g in
@@ -951,8 +971,10 @@ private struct NoteSideColumn: View {
             VStack(spacing: 2) {
                 NoteIconButton(store: store, board: board, index: index, symbol: box.icon ?? board.symbol, height: h)
                     .padding(.bottom, 2)
-                ForEach(TimerSpec.forBoxes) { spec in
-                    AlarmButton(spec: spec, store: store, board: board, index: index, alarm: box.alarm, height: h)
+                if !iconOnly {
+                    ForEach(TimerSpec.forBoxes) { spec in
+                        AlarmButton(spec: spec, store: store, board: board, index: index, alarm: box.alarm, height: h)
+                    }
                 }
             }
             .padding(.vertical, 3)
@@ -1355,6 +1377,33 @@ private struct BoxCountdown: View {
 }
 
 /// A small dark icon button, for the light boxes. `lit`: on, filled in its tint.
+/// At a note's top right: all its buttons shown, or only the few it always has (its icon, its
+/// status, the tags that are on, and what holds something), so it's mostly its text.
+struct ControlsToggle: View {
+    let on: Bool
+    let tint: Color
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: on ? "slider.horizontal.3" : "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(on ? Color.white : Color.black.opacity(hover ? 0.7 : 0.38))
+                .frame(width: 22, height: 18)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(on ? AnyShapeStyle(tint) : AnyShapeStyle(Color.black.opacity(hover ? 0.08 : 0))))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .padding(.trailing, 1)
+        .help(on ? "Hide the note's buttons: keep it to its text (its icon, status and tags stay)"
+                 : "Show all the note's buttons: timers, repeats, copy, open, menu bar, dock, pin, voice, links, tags")
+        .accessibilityLabel(on ? "Hide the note's buttons" : "Show the note's buttons")
+    }
+}
+
 struct BoxButton: View {
     let symbol: String
     let help: String

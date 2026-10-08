@@ -190,3 +190,18 @@ final class NoteSlashTests: XCTestCase {
         XCTAssertTrue(doc.components.isEmpty)
     }
 }
+
+final class NoteColumnsTests: XCTestCase {
+    func testColumnsSplitAtTheirBreakAndReadBack() {
+        XCTAssertEqual(NoteComponents.columns(["Left", "more", "|||", "Right"]), ["Left\nmore", "Right"])
+        XCTAssertEqual(NoteComponents.columns(["Only one"]), ["Only one", ""])
+        XCTAssertEqual(NoteComponents.columns([]), ["", ""])
+        let cols = ["a\nb", "c", "d"]
+        XCTAssertEqual(NoteComponents.columns(NoteComponents.columnsBody(cols)), cols)
+        // A line that would end a column or the component is kept as text.
+        let tricky = NoteComponents.columnsBody(["x\n|||\n:::", "y"])
+        let doc = NoteDocument(NoteComponent(kind: "columns", body: tricky).text)
+        XCTAssertEqual(doc.components.count, 1)
+        XCTAssertEqual(NoteComponents.columns(doc.components[0].body).count, 2)
+    }
+}

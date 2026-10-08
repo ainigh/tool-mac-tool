@@ -39,10 +39,14 @@ public struct Board: Codable, Equatable, Sendable {
         public var down: Int
         /// The notes it links to (on any board), in the order they were added.
         public var links: [NoteLink]
+        /// All its buttons shown (off: only its icon, its status, the tags that are on and what
+        /// holds something; the rest a click away, at its top right).
+        public var controls: Bool
 
         public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
                     tags: [NoteTag] = [], docked: Bool = false, repeats: NoteRepeat? = nil, status: NoteStatus? = nil,
-                    statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1, links: [NoteLink] = []) {
+                    statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1, links: [NoteLink] = [],
+                    controls: Bool = false) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
@@ -57,10 +61,11 @@ public struct Board: Codable, Equatable, Sendable {
             self.across = across
             self.down = down
             self.links = links
+            self.controls = controls
         }
 
         private enum CodingKeys: String, CodingKey {
-            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down, links
+            case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down, links, controls
         }
 
         // A file from before timers, pins, icons, tags, the dock, repeats, statuses and sizes has none of them.
@@ -82,6 +87,7 @@ public struct Board: Codable, Equatable, Sendable {
             links = (try? c.decodeIfPresent([NoteLink].self, forKey: .links)) ?? []
             across = (try? c.decodeIfPresent(Int.self, forKey: .across)) ?? 1
             down = (try? c.decodeIfPresent(Int.self, forKey: .down)) ?? 1
+            controls = (try? c.decodeIfPresent(Bool.self, forKey: .controls)) ?? false
         }
 
         /// The status set (or, when it's the one already on, taken off: at most one is on).
