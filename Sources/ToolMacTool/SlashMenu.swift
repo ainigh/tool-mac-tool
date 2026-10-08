@@ -34,7 +34,7 @@ final class SlashMenu: ObservableObject {
     /// The text or the caret moved: open, narrow or close the menu.
     func update(_ tv: NSTextView) {
         let sel = tv.selectedRange()
-        guard tv.window != nil, sel.length == 0, !tv.hasMarkedText(),
+        guard let window = tv.window, window.firstResponder === tv, sel.length == 0, !tv.hasMarkedText(),
               let found = NoteSlash.query(in: tv.string, caret: sel.location) else {
             close(for: tv)
             return

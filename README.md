@@ -630,6 +630,58 @@ time, with a preview of exactly what the model is told. Changes are saved as you
 `~/Library/Application Support/ToolMacTool/settings.json`. The first time, the address and model
 come from Glass's settings.
 
+### Components (Glass): blocks a note can hold
+
+**Type `/` in any note** (at the start of a line, or after a space) and a menu of components opens
+under the caret: keep typing to narrow it (`/tab`, `/todo`, `/contact`), ↑ ↓ to move, ↩ or ⇥ to put
+one in, esc to close it. A component is drawn in the note to use, inline with the note's text: tick
+a checklist, fill in a table, move a kanban card along, call a contact. Text goes above, between
+and below components as ever (the note's first line is still its title; a note that starts with a
+component is called by it).
+
+**It's all still text.** A component is kept in the note as a block of plain, readable text, so
+copying, searching, the model and anything else that reads the note keep working:
+
+```
+::: checklist Groceries
+[x] Milk
+[ ] Bread
+:::
+```
+
+The first line is `::: ` and its kind, then what it's given (a title, a style, a language); the
+lines under it are its body; `:::` closes it. Write one by hand and it's drawn the same. One of a
+kind this version doesn't know is kept as it is (and shown as its text).
+
+Hover a component for its **⋯** menu (or right-click it): move it up or down, duplicate it, copy it
+as text, **edit it as text**, or delete it.
+
+The components, by group:
+
+- **Lists & tables**: **Checklist** (done count and bar, clear the done ones), **Table** (a header
+  row; a total under each column of numbers; right-click a cell to insert or delete rows and
+  columns), **Kanban board** (cards in columns, moved along with ‹ ›), **Pros & cons**.
+- **Records**: **Contact** (initials, name, phone, email, company, role, address, website,
+  birthday, notes: call, email, map or open in a click; copy it, or add it to Contacts),
+  **Properties** (named values).
+- **Tracking**: **Progress** (a bar and a percentage, stepped on), **Counter**, **Rating** (stars),
+  **Countdown** (to a date and time, or since it), **Habit tracker** (five weeks of days, today's
+  tick and your streak), **Calculator** (sums line by line: `rent = 1200` names a line, a name is
+  its value below it, `total` adds up the lines above it).
+- **Text & layout**: **Callout** (info, tip, idea, success, warning, danger), **Quote**, **Code**
+  (with its language, and copy), **Toggle** (a heading that opens to show what's under it),
+  **Divider**.
+- **Links & media**: **Bookmark** (a web page's icon, title and site), **Image** (a file on this
+  Mac or a web address, with a caption), **Snippet** (text to copy again and again).
+- **Runs things**: **Action button** (runs one of your Actions, with values for its arguments, and
+  shows how it went), **Shortcut button** (runs one of your Apple Shortcuts with the text it's
+  given, and shows what it gave back).
+
+The **Components** tile (Glass) opens a window listing them all: what each is for, a live one to
+try, the text it's kept as, and **Add to the end of a note…** (or copy a blank one).
+
+In a multi-line field in a component (a callout, code, a snippet), ⌥↩ starts a new line.
+
 ### Memory (Glass)
 
 `MEMORY.md` in an editor on the same glass as the chat (drag its edges to resize it). The status
