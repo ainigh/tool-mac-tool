@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     lazy var groups = PinnedGroups(app: self)
     /// The screenshot tool.
     lazy var screenshots = Screenshots()
+    /// The tools docked in the menu bar.
+    lazy var toolDock = ToolDock(app: self)
     lazy var audioRecorder: AudioRecorder = {
         let r = AudioRecorder()
         r.onSaved = { [weak self] _ in self?.recordings.reload() }
@@ -81,6 +83,9 @@ final class AppModel: ObservableObject {
         timers.start()
         boards.start()
         groups.restore()
+        toolDock.sync()
+        // Talk to type listens for its key from launch on, when it's on.
+        TalkToType.shared.start()
         // Just installed or updated: the permissions, one at a time, where macOS's questions show.
         Permissions.shared.afterLaunch()
         // Start at login from the first launch; the panel has a switch to turn it off.

@@ -59,7 +59,7 @@ enum Tools {
             // on or off).
             ToolSection(title: "Automate", color: Color(red: 0.20, green: 0.70, blue: 0.36), tools: [scheduler, actions, timerLog],
                         extra: .chimes),
-            ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, transcribe]),
+            ToolSection(title: "Voice", color: Color(red: 0.62, green: 0.33, blue: 0.95), tools: [readAloud, dictate, talkToType, transcribe]),
             ToolSection(title: "Record", color: Color(red: 0.93, green: 0.27, blue: 0.33),
                         tools: [recordScreen, recordScreenOnly, recordAudio, recordings, screenshot]),
         ],
@@ -177,6 +177,14 @@ enum Tools {
         subtitle: "Talk and it's written down, as long as you like. Edit, copy, or keep it with Glass's dictations (glass-dictation-<date>.md).",
         symbol: "mic",
         open: { model in DictateWindow.show(model.listener) })
+
+    static let talkToType = Tool(
+        id: "talk-to-type",
+        name: "Talk to type",
+        title: "Talk to type: dictate into any text field",
+        subtitle: "Hold right ⌥ (or the key you pick) anywhere, talk, and let go: what you said is typed where the cursor is, in a browser or any app. Tap it to keep listening hands-free; Esc drops it. Written down on this Mac. Needs Accessibility.",
+        symbol: "waveform.and.mic",
+        open: { _ in TalkToTypeWindow.show() })
 
     static let transcribe = Tool(
         id: "transcribe",

@@ -192,13 +192,13 @@ struct SectionGrid: View {
             } else if section.style == .stack {
                 VStack(spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in
-                        BigToolTile(tool: tool, color: section.color) { model.open(tool) }
+                        DockableToolTile(tool: tool, color: section.color, big: true, dock: model.toolDock) { model.open(tool) }
                     }
                 }
             } else {
                 LazyVGrid(columns: MenuView.columns, alignment: .leading, spacing: MenuView.gap) {
                     ForEach(section.tools) { tool in
-                        ToolTile(tool: tool, color: section.color) { model.open(tool) }
+                        DockableToolTile(tool: tool, color: section.color, dock: model.toolDock) { model.open(tool) }
                     }
                     if section.extra == .chimes {
                         ForEach(ScheduledJob.Builtin.allCases, id: \.self) { b in
