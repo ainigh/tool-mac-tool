@@ -1,7 +1,9 @@
 import Foundation
 
 /// The timers' sounds, made from sine waves (so each is its own and nothing needs shipping): two
-/// loud alarms, two soft rounds-done chimes, a bright day ding and a deep, insistent night ding.
+/// loud alarms, two soft rounds-done chimes, a bright day ding and a deep, insistent night ding;
+/// a note's minute countdown rings the day ding again every 3 seconds, and sending to a web address
+/// has a quick tick before, and after it a bright pair (sent) or a low falling buzz (it failed).
 public enum Tone: String, CaseIterable, Sendable {
     /// Timer 1: three quick, bright beeps a second, looped.
     case triple
@@ -15,19 +17,33 @@ public enum Tone: String, CaseIterable, Sendable {
     case ding
     /// Night watch: a low ding-dong, twice.
     case dingDong
+    /// A note's minute countdown at zero: the day chime's ding, again every 3 seconds, looped.
+    case noteChime
+    /// About to send to a web address: one quick, soft tick (then quiet, so it's never cut off).
+    case sendStart
+    /// Sent: two quick notes, rising.
+    case sendDone
+    /// Couldn't send: two low, buzzy notes, falling.
+    case sendFailed
 
     public static let rate = 44_100.0
 
     /// Whether it plays over and over until stopped (the alarms) or once.
-    public var loops: Bool { self == .triple || self == .siren }
+    public var loops: Bool { self == .triple || self == .siren || self == .noteChime }
+
+    /// How far apart a note countdown's dings are.
+    public static let noteChimeEvery = 3.0
 
     /// How loud it plays, from 0 to 1.
     public var volume: Float {
         switch self {
         case .triple, .siren: return 0.9
         case .marimba, .rising: return 0.4
-        case .ding: return 0.65
+        case .ding, .noteChime: return 0.65
         case .dingDong: return 0.85
+        case .sendStart: return 0.35
+        case .sendDone: return 0.45
+        case .sendFailed: return 0.6
         }
     }
 
@@ -68,8 +84,28 @@ public enum Tone: String, CaseIterable, Sendable {
             return s
         case .ding:
             var s = Self.silence(2.2)
-            Self.add(&s, freq: 1318.5, start: 0, length: 2.2, attack: 0.002, decay: 2.2,
-                     partials: [(1, 0.5), (2.0, 0.18), (2.76, 0.12), (5.4, 0.05)])
+            Self.addDing(&s)
+            return s
+        case .noteChime:
+            // The day chime's ding, then quiet up to 3 seconds: looped, a ding every 3 seconds.
+            var s = Self.silence(Self.noteChimeEvery)
+            Self.addDing(&s)
+            return s
+        case .sendStart:
+            var s = Self.silence(0.55)
+            Self.add(&s, freq: 1760, start: 0, length: 0.07, attack: 0.003, decay: 30, partials: [(1, 0.5), (2, 0.1)])
+            return s
+        case .sendDone:
+            var s = Self.silence(0.55)
+            Self.add(&s, freq: 1046.5, start: 0, length: 0.14, attack: 0.003, decay: 14, partials: [(1, 0.5), (2, 0.12)])
+            Self.add(&s, freq: 1568, start: 0.11, length: 0.26, attack: 0.003, decay: 10, partials: [(1, 0.5), (2, 0.12)])
+            return s
+        case .sendFailed:
+            var s = Self.silence(0.7)
+            Self.add(&s, freq: 392, start: 0, length: 0.26, attack: 0.005, decay: 0,
+                     partials: [(1, 0.45), (2, 0.2), (3, 0.14), (5, 0.08)])
+            Self.add(&s, freq: 261.6, start: 0.3, length: 0.36, attack: 0.005, decay: 0,
+                     partials: [(1, 0.45), (2, 0.2), (3, 0.14), (5, 0.08)])
             return s
         case .dingDong:
             var s = Self.silence(3.4)
@@ -84,6 +120,12 @@ public enum Tone: String, CaseIterable, Sendable {
     }
 
     static func silence(_ seconds: Double) -> [Float] { [Float](repeating: 0, count: Int(seconds * rate)) }
+
+    /// The day chime's bell, from the start (2.2 seconds of it).
+    static func addDing(_ s: inout [Float]) {
+        add(&s, freq: 1318.5, start: 0, length: 2.2, attack: 0.002, decay: 2.2,
+            partials: [(1, 0.5), (2.0, 0.18), (2.76, 0.12), (5.4, 0.05)])
+    }
 
     /// Adds a note: its partials (a multiple of `freq` and how loud), a quick fade in, then an
     /// exponential fade out at `decay` per second (0: held, with a short fade at the end).

@@ -42,11 +42,14 @@ public struct Board: Codable, Equatable, Sendable {
         /// All its buttons shown (off: only its icon, its status, the tags that are on and what
         /// holds something; the rest a click away, at its top right).
         public var controls: Bool
+        /// The minute countdowns on (2, 5, 10, 15, 30, 45: any of them at once), each starting over
+        /// once its alarm is stopped by a change of status.
+        public var countdowns: [NoteCountdown]
 
         public init(text: String = "", tint: Int = 0, alarm: BoxAlarm? = nil, pinned: Bool = false, icon: String? = nil,
                     tags: [NoteTag] = [], docked: Bool = false, repeats: NoteRepeat? = nil, status: NoteStatus? = nil,
                     statusAt: Date? = nil, remindedAt: Date? = nil, across: Int = 1, down: Int = 1, links: [NoteLink] = [],
-                    controls: Bool = false) {
+                    controls: Bool = false, countdowns: [NoteCountdown] = []) {
             self.text = text
             self.tint = tint
             self.alarm = alarm
@@ -62,10 +65,12 @@ public struct Board: Codable, Equatable, Sendable {
             self.down = down
             self.links = links
             self.controls = controls
+            self.countdowns = countdowns
         }
 
         private enum CodingKeys: String, CodingKey {
             case text, tint, alarm, pinned, icon, tags, docked, repeats, status, statusAt, remindedAt, across, down, links, controls
+            case countdowns
         }
 
         // A file from before timers, pins, icons, tags, the dock, repeats, statuses and sizes has none of them.
@@ -88,6 +93,8 @@ public struct Board: Codable, Equatable, Sendable {
             across = (try? c.decodeIfPresent(Int.self, forKey: .across)) ?? 1
             down = (try? c.decodeIfPresent(Int.self, forKey: .down)) ?? 1
             controls = (try? c.decodeIfPresent(Bool.self, forKey: .controls)) ?? false
+            countdowns = ((try? c.decodeIfPresent([NoteCountdown].self, forKey: .countdowns)) ?? [])
+                .filter { NoteCountdown.choices.contains($0.minutes) }
         }
 
         /// The status set (or, when it's the one already on, taken off: at most one is on).
@@ -133,6 +140,54 @@ public struct Board: Codable, Equatable, Sendable {
                   repeats.hours.contains(calendar.component(.hour, from: hour)) else { return nil }
             if let remindedAt, remindedAt >= hour { return nil }
             return hour
+        }
+
+        // MARK: Its minute countdowns
+
+        /// The countdown of this many minutes, when it's on.
+        public func countdown(_ minutes: Int) -> NoteCountdown? { countdowns.first { $0.minutes == minutes } }
+
+        /// A countdown on (counting from `now`) or off again; any others keep going.
+        public mutating func toggleCountdown(_ minutes: Int, now: Date) {
+            guard NoteCountdown.choices.contains(minutes) else { return }
+            if let at = countdowns.firstIndex(where: { $0.minutes == minutes }) {
+                countdowns.remove(at: at)
+            } else {
+                countdowns.append(NoteCountdown(minutes: minutes, start: now))
+                countdowns.sort { $0.minutes < $1.minutes }
+            }
+        }
+
+        /// One of its countdowns is at zero, ringing until the status changes.
+        public var isRinging: Bool { countdowns.contains { $0.rang != nil } }
+
+        /// The countdowns that reach zero by `now` start ringing (and wait there): their minutes.
+        public mutating func ringCountdowns(now: Date) -> [Int] {
+            var rung: [Int] = []
+            for k in countdowns.indices where countdowns[k].rang == nil && countdowns[k].end <= now {
+                countdowns[k].rang = now
+                rung.append(countdowns[k].minutes)
+            }
+            return rung
+        }
+
+        /// The status changed after a countdown began ringing: each ringing one is quiet and counts
+        /// down again from then. Returns whether it changed anything.
+        public mutating func settleCountdowns() -> Bool {
+            guard let statusAt else { return false }
+            var changed = false
+            for k in countdowns.indices {
+                guard let rang = countdowns[k].rang, statusAt > rang else { continue }
+                countdowns[k].rang = nil
+                countdowns[k].start = statusAt
+                changed = true
+            }
+            return changed
+        }
+
+        /// The countdown that rings next (none while they're all ringing).
+        public var nextCountdown: NoteCountdown? {
+            countdowns.filter { $0.rang == nil }.min { $0.end < $1.end }
         }
 
         public func has(_ tag: NoteTag) -> Bool { tags.contains(tag) }
@@ -268,6 +323,12 @@ public struct Board: Codable, Equatable, Sendable {
         var seen = Set<Int>()
         b.order = b.order.filter { b.boxes.indices.contains($0) && seen.insert($0).inserted }
         b.order += b.boxes.indices.filter { !seen.contains($0) }
+        for i in b.boxes.indices {
+            var seenMinutes = Set<Int>()
+            b.boxes[i].countdowns = b.boxes[i].countdowns
+                .filter { NoteCountdown.choices.contains($0.minutes) && seenMinutes.insert($0.minutes).inserted }
+                .sorted { $0.minutes < $1.minutes }
+        }
         for i in b.boxes.indices where b.boxes[i].alarm?.timer == nil || b.boxes[i].alarm?.state.isOn != true {
             b.boxes[i].alarm = nil
         }
@@ -520,21 +581,11 @@ public enum NoteRepeat: String, Codable, CaseIterable, Sendable {
     public var title: String {
         switch self {
         case .daily: return "Daily"
-        case .mornings: return "Mornings"
-        case .afternoons: return "Afternoons"
-        case .evenings: return "Evenings"
+        case .mornings: return "AMs"
+        case .afternoons: return "PMs"
+        case .evenings: return "Nightly"
         case .weekly: return "Weekly"
         case .monthly: return "Monthly"
-        }
-    }
-
-    /// An SF Symbol for the daily ones scoped to part of the day (nil: it shows its word).
-    public var symbol: String? {
-        switch self {
-        case .mornings: return "sunrise.fill"
-        case .afternoons: return "sun.max.fill"
-        case .evenings: return "moon.fill"
-        default: return nil
         }
     }
 
@@ -633,26 +684,74 @@ public enum NoteRepeat: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// Where a note's got to: at most one is on.
+/// Where a note's got to: at most one is on. Between Pending (1%) and Completed (100%), how far
+/// along it is: 10%, 30%, 40%, 50%, 70% or 90%.
 public enum NoteStatus: String, Codable, CaseIterable, Sendable {
-    case todo, pending, completed
+    case todo, pending
+    case p10, p30, p40, p50, p70, p90
+    case completed
 
     public var title: String {
         switch self {
         case .todo: return "To do"
         case .pending: return "Pending"
         case .completed: return "Completed"
+        default: return "\(percent)%"
         }
     }
 
-    /// An SF Symbol name.
-    public var symbol: String {
+    /// How far along it is, from 0 (To do) through 1 (Pending) to 100 (Completed).
+    public var percent: Int {
+        switch self {
+        case .todo: return 0
+        case .pending: return 1
+        case .p10: return 10
+        case .p30: return 30
+        case .p40: return 40
+        case .p50: return 50
+        case .p70: return 70
+        case .p90: return 90
+        case .completed: return 100
+        }
+    }
+
+    /// The ones between Pending and Completed.
+    public var isProgress: Bool { percent > 1 && percent < 100 }
+
+    /// An SF Symbol name (nil for the percentages: they show their number).
+    public var symbol: String? {
         switch self {
         case .todo: return "circle"
         case .pending: return "clock"
         case .completed: return "checkmark.circle.fill"
+        default: return nil
         }
     }
+}
+
+/// One of a note's minute countdowns: it counts down from `start`, rings at zero (`rang`) and waits
+/// there, ringing, until the note's status changes; then it counts down again from that moment.
+public struct NoteCountdown: Codable, Equatable, Sendable {
+    /// The minutes a note can count down (its left side, bottom up).
+    public static let choices = [2, 5, 10, 15, 30, 45]
+
+    public var minutes: Int
+    /// When this round began.
+    public var start: Date
+    /// When it reached zero, while it's ringing (nil: counting).
+    public var rang: Date?
+
+    public init(minutes: Int, start: Date, rang: Date? = nil) {
+        self.minutes = minutes
+        self.start = start
+        self.rang = rang
+    }
+
+    public var seconds: TimeInterval { Double(minutes) * 60 }
+    /// When this round reaches zero.
+    public var end: Date { start.addingTimeInterval(seconds) }
+    /// What's left of this round at `now` (0 once it's at zero).
+    public func remaining(now: Date) -> TimeInterval { rang != nil ? 0 : max(0, end.timeIntervalSince(now)) }
 }
 
 /// The timer a box runs: which one (a `TimerSpec.forBoxes` id) and where it's got to.

@@ -124,6 +124,9 @@ final class BoardStore: ObservableObject {
     /// What each box's card is showing, so OK knows what it's putting away.
     private enum Shown { case reminder, ringing, round, roundPassed }
     private var showing: [String: Shown] = [:]
+    /// The notes whose minute countdown is ringing (`countdownID`), and the level their board's
+    /// window had before it came up over everything for them.
+    private var ringingNotes: [String: NSWindow.Level] = [:]
 
     init(sounds: TonePlayer, activity: ActivityStore) {
         self.sounds = sounds
@@ -613,6 +616,7 @@ final class BoardStore: ObservableObject {
             }
         }
         routines(now, calendar: cal)
+        countdowns(now)
         openDailyPlan(now, calendar: cal)
         refresh(now)
     }
@@ -710,18 +714,27 @@ final class BoardStore: ObservableObject {
 
     // MARK: Daily, weekly and monthly notes
 
-    /// A note's status (To do, Pending, Completed): set, or taken off when it's the one on.
+    /// A note's status (To do, Pending, 10% … 90%, Completed): set, or taken off when it's the one
+    /// on. While one of its minute countdowns rings, it takes a status other than the one on (any
+    /// direction) to stop it.
     func toggle(_ status: NoteStatus, _ board: Kind, _ i: Int) {
+        let box = model(board).board.boxes[i]
+        if box.isRinging, box.status == status {
+            NSSound.beep()
+            return
+        }
         // Completed on the note in focus is focus's Completed (it needs text, and moves on).
         let focus = FocusCenter.shared
         if status == .completed, focus.isFocus(board, i), focus.session?.canComplete == true,
-           model(board).board.boxes[i].status != .completed {
+           box.status != .completed {
             focus.complete()
+            countdowns(AppClock.now())
             return
         }
         model(board).board.boxes[i].toggle(status, now: AppClock.now())
         // Completed for this period: its reminder (if one is up) has done its job.
         if model(board).board.boxes[i].status == .completed { hideRoutineCard(board, i) }
+        countdowns(AppClock.now())
     }
 
     /// Daily (or mornings, afternoons, evenings), weekly or monthly on (asking first, saying what
@@ -734,9 +747,9 @@ final class BoardStore: ObservableObject {
         if on {
             message = new.meaning(note: name)
                 + (box.repeats.map { "\n\nIt's \($0.title) now: that goes (one at a time)." } ?? "")
-                + "\n\nThe note's status (bottom left) is set to To do."
+                + "\n\nThe note's status (above its bottom) is set to To do."
         } else {
-            message = "No more Note reminders for \u{201C}\(name)\u{201D}. Its status (bottom left) stays as it is."
+            message = "No more Note reminders for \u{201C}\(name)\u{201D}. Its status (above its bottom) stays as it is."
         }
         guard Confirm.ask(on ? "Turn on \(new.title) for this note?" : "Turn off \(new.title)?", message,
                           ok: on ? "Turn on \(new.title)" : "Turn off") else { return }
@@ -794,6 +807,83 @@ final class BoardStore: ObservableObject {
         hideRoutineCard(board, i)
     }
 
+    // MARK: A note's minute countdowns
+
+    static func countdownID(_ board: Kind, _ i: Int) -> String { "countdown-\(board.id)-\(i)" }
+
+    /// How long a countdown's chime keeps going with nobody there (the note stays open, ringing).
+    static let countdownRingFor: TimeInterval = 15 * 60
+
+    /// A minute countdown on a note (2, 5, 10, 15, 30 or 45), or off again; any others keep going.
+    func toggleCountdown(_ minutes: Int, _ board: Kind, _ i: Int) {
+        let now = AppClock.now()
+        model(board).board.boxes[i].toggleCountdown(minutes, now: now)
+        let on = model(board).board.boxes[i].countdown(minutes) != nil
+        activity.record(on ? .set : .stopped, source: "box-\(board.id)-\(i + 1)",
+                        name: "\(board.name) \(i + 1) · \(minutes) min timer",
+                        detail: on ? "Every \(minutes) min, until a change of status" : "", value: on ? Double(minutes) * 60 : nil)
+        countdowns(now)
+    }
+
+    /// Each note's countdowns: one whose status changed since it began ringing is quiet and starts
+    /// over; one at zero rings, and its note opens to fill its board, over everything.
+    private func countdowns(_ now: Date) {
+        for board in Self.kinds {
+            let m = model(board)
+            for i in m.board.boxes.indices {
+                let key = Self.countdownID(board, i)
+                guard !m.board.boxes[i].countdowns.isEmpty || ringingNotes[key] != nil else { continue }
+                var box = m.board.boxes[i]
+                _ = box.settleCountdowns()
+                let rung = box.ringCountdowns(now: now)
+                if box != m.board.boxes[i] { m.board.boxes[i] = box }
+                if !rung.isEmpty {
+                    ringCountdown(board, i, minutes: rung)
+                } else if !box.isRinging, ringingNotes[key] != nil {
+                    quietCountdown(board, i)
+                }
+            }
+        }
+    }
+
+    /// A countdown at zero: the day chime every 3 seconds, and instead of a card, the note itself,
+    /// opened to fill its board, the board over every other window until a status is picked.
+    private func ringCountdown(_ board: Kind, _ i: Int, minutes: [Int]) {
+        let key = Self.countdownID(board, i)
+        let what = minutes.map { "\($0) min" }.joined(separator: ", ")
+        activity.record(.alarm, source: "box-\(board.id)-\(i + 1)", name: "\(board.name) \(i + 1) · \(what) timer",
+                        detail: NSScreen.screens.isEmpty ? "While the screen was off" : "Time's up · waiting for a change of status",
+                        value: minutes.first.map { Double($0) * 60 })
+        if ringingNotes[key] == nil { ringingNotes[key] = .normal }
+        // No screen (the lid is closed): it waits at zero, still ringing, for a status.
+        guard !NSScreen.screens.isEmpty else { return }
+        let open = { [weak self] in
+            guard let self, self.model(board).board.boxes[i].isRinging else { return }
+            self.show(board.id, focus: i)
+            if let window = Windows.window(BoardWindow.id(board.id)) {
+                if window.level != .floating { self.ringingNotes[key] = window.level }
+                window.level = .floating
+                window.orderFrontRegardless()
+            }
+            self.sounds.play(.noteChime, for: key, maxSeconds: Self.countdownRingFor)
+        }
+        // Quiet mode: it comes up when quiet mode ends.
+        if ModeCenter.shared.hold(key, open) { return }
+        open()
+    }
+
+    /// The status changed (or the countdown was turned off): quiet, the board back among the other
+    /// windows, and the note back in its board's grid.
+    private func quietCountdown(_ board: Kind, _ i: Int) {
+        let key = Self.countdownID(board, i)
+        sounds.stop(key)
+        ModeCenter.shared.drop(key)
+        let level = ringingNotes.removeValue(forKey: key) ?? .normal
+        Windows.window(BoardWindow.id(board.id))?.level = level
+        let m = model(board)
+        if m.expanded == i { withAnimation(.easeInOut(duration: 0.2)) { m.expanded = nil } }
+    }
+
     /// Test mode ended: what was set on the fast clock (still ahead of the real time) is cleared:
     /// timers, and the reminders and statuses of the notes that come round.
     func leftTestClock(now: Date = Date()) {
@@ -809,6 +899,10 @@ final class BoardStore: ObservableObject {
                     box.alarm = nil
                 }
                 if let r = box.remindedAt, r > ahead { box.remindedAt = now }
+                // Minute countdowns set or rung on the fast clock count again from now.
+                for k in box.countdowns.indices where box.countdowns[k].start > ahead || (box.countdowns[k].rang ?? .distantPast) > ahead {
+                    box.countdowns[k] = NoteCountdown(minutes: box.countdowns[k].minutes, start: now)
+                }
                 if let t = box.statusAt, t > ahead {
                     box.statusAt = now
                     if box.repeats != nil { box.status = .todo }
@@ -819,6 +913,7 @@ final class BoardStore: ObservableObject {
         if let last = UserDefaults.standard.object(forKey: Self.dailyPlanKey) as? Double, last > ahead.timeIntervalSince1970 {
             UserDefaults.standard.set(now.timeIntervalSince1970, forKey: Self.dailyPlanKey)
         }
+        countdowns(now)
         refresh(now)
     }
 

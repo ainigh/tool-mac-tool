@@ -20,10 +20,10 @@ extension NoteTag {
 
     var help: String {
         switch self {
-        case .important: return "Every note tagged Important (the star at the bottom right of a note)"
-        case .urgent: return "Every note tagged Urgent (the flame at the bottom right of a note)"
-        case .delegate: return "Every note tagged Delegate (the arrow at the bottom right of a note): for someone else to do"
-        case .think: return "Every note tagged Think (the head at the bottom right of a note): to think over"
+        case .important: return "Every note tagged Important (the star at the top right of a note)"
+        case .urgent: return "Every note tagged Urgent (the flame at the top right of a note)"
+        case .delegate: return "Every note tagged Delegate (the arrow at the top right of a note): for someone else to do"
+        case .think: return "Every note tagged Think (the head at the top right of a note): to think over"
         }
     }
 }
@@ -196,7 +196,7 @@ struct TagBoardView: View {
             Text("No notes tagged \(tag.title) yet")
                 .font(.system(size: 22, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.85))
-            Text("Turn on the \(tag.title) tag at the bottom right of a note on any board, and it shows up here.")
+            Text("Turn on the \(tag.title) tag at the top right of a note on any board, and it shows up here.")
                 .font(.system(size: 12.5, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -207,7 +207,7 @@ struct TagBoardView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Text("The notes themselves: what you type here is typed on their own boards. Take the tag off a note (bottom right) to take it off this board.")
+            Text("The notes themselves: what you type here is typed on their own boards. Take the tag off a note (top right) to take it off this board.")
                 .lineLimit(1)
             Spacer()
             KeyHint(key: "⌘W", does: "close")

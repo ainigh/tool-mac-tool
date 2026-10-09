@@ -661,8 +661,16 @@ final class Scheduler: ObservableObject {
         return v
     }
 
-    /// POSTs the body to the address: what it answers is the result (a 2xx is a success).
+    /// POSTs the body to the address: what it answers is the result (a 2xx is a success). A tick
+    /// before, and the tone of how it went after (`SendTones`).
     nonisolated static func call(_ url: URL, body: Data, contentType: String, secret: String) async -> Outcome {
+        await SendTones.sending()
+        let outcome = await post(url, body: body, contentType: contentType, secret: secret)
+        await SendTones.sent(outcome.ok)
+        return outcome
+    }
+
+    nonisolated private static func post(_ url: URL, body: Data, contentType: String, secret: String) async -> Outcome {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")

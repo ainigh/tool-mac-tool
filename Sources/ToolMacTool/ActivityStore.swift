@@ -113,7 +113,15 @@ final class ActivityStore: ObservableObject {
 
     enum PostResult { case sent, refused(String), failed(String) }
 
+    /// Sends one signal, with a tick before and the tone of how it went after (`SendTones`).
     nonisolated static func post(_ signal: Signal, to url: URL, secret: String) async -> PostResult {
+        await SendTones.sending()
+        let result = await send(signal, to: url, secret: secret)
+        if case .sent = result { await SendTones.sent(true) } else { await SendTones.sent(false) }
+        return result
+    }
+
+    nonisolated private static func send(_ signal: Signal, to url: URL, secret: String) async -> PostResult {
         var request = URLRequest(url: url, timeoutInterval: 20)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
