@@ -145,6 +145,19 @@ final class TimerBoard: ObservableObject {
 
 // MARK: - Sounds
 
+/// The tones around every send to a web address (a signal from the timer log, a schedule's web
+/// address step): a quick tick just before, then a bright pair once it's sent, or a low falling
+/// buzz when it couldn't be.
+@MainActor
+enum SendTones {
+    /// The app's player (the timers' own), set at launch.
+    static weak var player: TonePlayer?
+
+    static func sending() { player?.play(.sendStart, for: "send-start", maxSeconds: nil) }
+
+    static func sent(_ ok: Bool) { player?.play(ok ? .sendDone : .sendFailed, for: "send-end", maxSeconds: nil) }
+}
+
 /// Plays each timer's sound on its own player, so one stopping never cuts another off.
 ///
 /// Careful with the audio hardware, because AVAudioEngine throws Objective-C exceptions (which crash

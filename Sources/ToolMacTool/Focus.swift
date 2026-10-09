@@ -86,7 +86,7 @@ final class FocusCenter: ObservableObject {
         }
         let model = boards.model(board)
         guard let first = model.board.nextNote(after: nil, including: true) else {
-            _ = Confirm.ask("Every note on \(board.name) is completed", "Mark one To do or Pending (bottom left of a note) to focus on it.",
+            _ = Confirm.ask("Every note on \(board.name) is completed", "Mark one To do or Pending (above the bottom of a note) to focus on it.",
                             ok: "OK", cancel: "Close")
             return
         }

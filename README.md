@@ -312,6 +312,11 @@ action** (⌘N) adds one. Each action has:
     as plain text. **Leave the text empty** and what happened goes as JSON, in the shape the timer
     log's signals had (below), so a worker written for those keeps working. What the address
     answers is the result (a 2xx is a success).
+
+    **Every send to a web address has its tones** (this step, **Send to dashboard**, and the signals
+    left from before): a quick soft tick just before it goes, then a bright pair of rising notes
+    once it's sent, or two low, falling buzzy notes when it couldn't be (no answer, or not a 2xx).
+    Quiet mode silences them, as it does the timers.
   - **Send to dashboard**: a report goes to the dashboard (the built-in **Send to dashboard**'s
     address, unless the step has one of its own): what set it off, everything that went in the
     timer log since the report before, today's and the week's counts, the battery, the timers
@@ -883,36 +888,49 @@ player window of its own (✕ or ⌘W closes it and stops it).
 
 - **Down each note's left**, a thin column (its buttons shrink to fit a small note):
   - at the top, **the note's icon** (its board's at first): click it to pick another;
-  - its timers: Timer 1, Timer 2, Repeat 1, Repeat 2 and a due date. Click one to pick how long
-    (or the day and time); the one running is filled in. One timer a note: setting another
-    replaces it. Its **countdown shows at the top middle of the note**, with a ✕ to stop it, and
-    the note docks itself in the panel's **Timers** column while it runs.
-- **At its top left, next to its icon: Daily, Mornings, Afternoons, Evenings, Weekly and
-  Monthly** (Mornings, Afternoons and Evenings are a sun rising, the sun and the moon; the others
-  just D, W and M on a small note). Turn one on (it asks first, saying what it means; one at a
-  time) and the note **comes round**: **every hour on the hour from 8 AM to 10 PM**, a **Note
-  reminder** pops up in the middle of the screen with the note's title big, its text to read and
-  edit, and two buttons. **Pending** puts it away until the next hour. **Completed** puts it away
-  until the next day, week or month begins.
+  - from the bottom up, **2, 5, 10, 15, 30 and 45**: minute timers. Click one to turn it on
+    (counting from now) or off; **any of them can be on at once**, each filled in while it's on.
+    The next one's time left shows at the top middle of the note. **At zero, instead of a card, the
+    note itself comes up**: its board opens over every other window with the note **opened to fill
+    it**, a red edge round it, and **the day chime's ding every 3 seconds**. It rings until you
+    **change the note's status** (any of To do, Pending, 10% … 90%, Completed that isn't the one on:
+    up or down); then it's quiet, the note goes back into its board's grid, and that timer **starts
+    over** from then, round after round, until you turn it off. Turning a ringing timer off stops
+    it too. The others keep counting meanwhile. With nobody there, the chime stops by itself after
+    15 minutes (the note stays open, ringing, until a status is picked). In quiet mode it comes up
+    when quiet mode ends; a timer that reaches zero while the screen is off waits at zero.
+- **Along its top, next to its icon: Daily, AMs, PMs, Nightly, Weekly and Monthly**, in words (just
+  their first letters on a small note), **then the due date** (a calendar). Turn one on (it asks first,
+  saying what it means; one at a time) and the note **comes round**: **every hour on the hour from 8
+  AM to 10 PM**, a **Note reminder** pops up in the middle of the screen with the note's title big,
+  its text to read and edit, and two buttons. **Pending** puts it away until the next hour.
+  **Completed** puts it away until the next day, week or month begins.
   - **Each day, week or month begins at 8 AM the day before**: a day runs from 8 AM to 8 AM the
     next day, a week from **Sunday 8 AM**, a month from **8 AM on the last day of the month
     before**. A weekly or monthly note keeps coming each hour (on the days after, too) until it's
     completed.
-  - **Mornings, Afternoons and Evenings** are Daily, with its reminders only in that part of the
-    day: mornings **8 to 11 AM**, afternoons **12 to 4 PM**, evenings **5 to 10 PM** (the last
-    reminder's hour).
+  - **AMs, PMs and Nightly** are Daily, with its reminders only in that part of the day: AMs **8 to
+    11 AM**, PMs **12 to 4 PM**, Nightly **5 to 10 PM** (the last reminder's hour).
   - It repeats like that until you turn it off. Turned on in the middle of an hour, the first
     reminder comes at the next hour; hours missed while the Mac slept aren't made up (the latest
     one comes).
-- **At its bottom left: To do, Pending and Completed** (icons on a small note). At most one is on;
-  click the one that's on to take it off. A note that comes round uses them: turning Daily (or a
-  part of the day), Weekly or Monthly on sets it to To do, its reminder's Pending and Completed set those, marking it
-  Completed yourself counts too (no more reminders until the next day, week or month), and each
-  new day, week or month sets it back to To do.
-- **At its bottom right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
-  **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off; it's lit in its
-  color when on.
-- **Above its bottom**, always (on its board, pinned, on a tag's board): **its board's button**,
+  - **The due date**: pick a day and time, hours, days, months or years ahead; it counts down to
+    it (shown at the top middle, with a ✕), with reminders on the way, then rings until **OK**. The
+    note docks itself in the panel's **Timers** column while it runs. (A Timer 1, Timer 2, Repeat 1
+    or Repeat 2 set on a note before these minute timers came keeps running until it's stopped.)
+- **At its top right**, its four **tags**: **Important** (a star), **Urgent** (a flame),
+  **Delegate** (an arrow) and **Think** (a head). Click one to turn it on or off. **The note's top
+  row takes the color of the tags that are on** (its icon aside): one tag fills it, two share it
+  half and half, three a third each, and so on; a tag that's on is a white chip with its icon in
+  its color.
+- **Above its bottom, in the middle: To do, Pending, 10%, 30%, 40%, 50%, 70%, 90% and Completed**
+  (how far along it is: Pending counts as 1%, Completed as 100%; icons and bare numbers on a small
+  note). At most one is on; click the one that's on to take it off (while a minute timer rings, pick
+  another one instead: that's what stops it). A note that comes round uses them: turning Daily (or a
+  part of the day), Weekly or Monthly on sets it to To do, its reminder's Pending and Completed set
+  those, marking it Completed yourself counts too (no more reminders until the next day, week or
+  month), and each new day, week or month sets it back to To do.
+- **Along its bottom**, always (on its board, pinned, on a tag's board): **its board's button**,
   the board's icon and name. Pinned or on a tag's board, a click opens the board with the note
   opened; on its own board it shows the board's grid. Then the notes it links to, and the **+**.
   - **Its board's button counts the board's notes** (those with a title), as the boards' tiles at
@@ -953,7 +971,7 @@ player window of its own (✕ or ⌘W closes it and stops it).
 **The tags' boards** have the panel's last column: **Important**, **Urgent**, **Delegate** and
 **Think**, each with how many notes have the tag. Each opens a board of every note with that tag,
 from all the boards: the notes themselves, so what you type there is typed on their own boards,
-and a button at the bottom of each opens its board. Take the tag off a note (bottom right) to take
+and a button at the bottom of each opens its board. Take the tag off a note (top right) to take
 it off.
 
 **Dock a board in the menu bar**: right-click a board's tile (or a tag's) in the panel, or click

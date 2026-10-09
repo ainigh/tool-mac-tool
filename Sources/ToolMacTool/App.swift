@@ -60,6 +60,8 @@ final class AppModel: ObservableObject {
     init() {
         updater.start()
         ModelTools.shared.app = self
+        // Every send to a web address has its tones, on the timers' player.
+        SendTones.player = timers.sounds
         MacFacts.prepare()
         // The scheduler hears of what goes into the timer log (its event jobs), runs the chimes
         // (its built-in jobs), and reads the battery and the boards' alarms for its placeholders.
